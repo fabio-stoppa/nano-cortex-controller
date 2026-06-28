@@ -1,0 +1,10 @@
+menu "Nano Cortex firmware"
+
+config NANO_LOG_TUNER_ONLY
+    bool "Serial: only nano_tuner INFO logs (suppress other INFO)"
+    default n
+    help
+        Lowers the default log level for all tags to WARN, then re-enables
+        INFO for the nano_tuner tag only. Warnings and errors still print.
+
+endmenu
