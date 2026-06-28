@@ -1,6 +1,6 @@
 # Nano Cortex — ESP32 firmware (C / ESP-IDF)
 
-Minimal firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**, ported from [`index.html`](../index.html).
+Minimal firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**, ported from [`this project`](https://github.com/choldy/nano-cortex-web-editor).
 
 **Stack:** plain ESP-IDF C — no Rust toolchain.
 
