@@ -9,6 +9,10 @@
 
 bool nano_read_varint(const uint8_t *data, size_t len, size_t offset, uint32_t *value, size_t *next)
 {
+    if (!data || !next || offset >= len) {
+        return false;
+    }
+
     uint32_t result = 0;
     unsigned shift = 0;
 
@@ -16,7 +20,9 @@ bool nano_read_varint(const uint8_t *data, size_t len, size_t offset, uint32_t *
         uint8_t b = data[i];
         result |= (uint32_t)(b & 0x7F) << shift;
         if ((b & 0x80) == 0) {
-            *value = result;
+            if (value) {
+                *value = result;
+            }
             *next = i + 1;
             return true;
         }
@@ -460,15 +466,24 @@ static bool field_is_known(uint32_t field)
     case 5:
     case 6:
     case 7:
+    case 8:
+    case 9:
     case 11:
     case 12:
+    case 13:
+    case 14:
+    case 15:
     case 31:
     case 32:
     case 33:
     case 44:
     case 45:
     case 46:
+    case 48:
+    case 49:
+    case 50:
     case 51:
+    case 52:
     case 54:
         return true;
     default:

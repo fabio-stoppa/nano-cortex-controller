@@ -27,6 +27,20 @@ size_t nano_amp_knob_payload(nano_knob_t knob, uint8_t raw_value, uint8_t *buf, 
 /** Port of setGateEnabled() toggle pattern: 0A C0 08 01 18 <id> 20 <val> 1F 00 00 00 */
 size_t nano_global_toggle_payload(uint8_t id, uint8_t value, uint8_t *buf, size_t cap);
 
+/** Gate reduction knob (id 0x0B), encoded varint = pct + 108. */
+size_t nano_gate_reduction_payload(uint8_t pct, uint8_t *buf, size_t cap);
+
+/** FX block param refresh: 08 C0 08 03 18 <refreshSlot> 89 00 00 00 */
+size_t nano_fx_param_refresh_payload(uint8_t refresh_slot, uint8_t *buf, size_t cap);
+
+/** FX param write: float32 normalized 0..1 at param index. */
+size_t nano_fx_param_payload(uint8_t model_slot, uint8_t param_index, float normalized,
+                             uint8_t *buf, size_t cap);
+
+/** FX model select: C0 18 <modelSlot> 20 <id...> 88 00 00 00 */
+size_t nano_fx_model_select_payload(uint8_t model_slot, const uint8_t *id, uint8_t id_len,
+                                    uint8_t *buf, size_t cap);
+
 /** Tuner on/off (sniffed): 2D + A440 float + trailer. */
 size_t nano_tuner_enable_payload(uint8_t *buf, size_t cap);
 size_t nano_tuner_enable_footswitch_payload(uint8_t *buf, size_t cap);

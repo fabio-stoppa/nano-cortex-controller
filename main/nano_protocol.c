@@ -111,6 +111,126 @@ size_t nano_global_toggle_payload(uint8_t id, uint8_t value, uint8_t *buf, size_
     return sizeof(pkt);
 }
 
+size_t nano_gate_reduction_payload(uint8_t pct, uint8_t *buf, size_t cap)
+{
+    if (cap < 16) {
+        return 0;
+    }
+
+    uint32_t encoded = (uint32_t)pct + 108U;
+    uint8_t value_bytes[5];
+    size_t vb_len = encode_varint(encoded, value_bytes, sizeof(value_bytes));
+    if (vb_len == 0) {
+        return 0;
+    }
+
+    size_t total = 1 + 3 + vb_len + 6;
+    if (total > cap) {
+        return 0;
+    }
+
+    size_t i = 0;
+    buf[i++] = 0x00;
+    buf[i++] = 0xC0;
+    buf[i++] = 0x18;
+    buf[i++] = 0x0B;
+    buf[i++] = 0x20;
+    for (size_t v = 0; v < vb_len; v++) {
+        buf[i++] = value_bytes[v];
+    }
+    buf[i++] = 0x28;
+    buf[i++] = 0x00;
+    buf[i++] = 0x1A;
+    buf[i++] = 0x00;
+    buf[i++] = 0x00;
+    buf[i++] = 0x00;
+    buf[0] = (uint8_t)(i - 2);
+    return i;
+}
+
+size_t nano_fx_param_refresh_payload(uint8_t refresh_slot, uint8_t *buf, size_t cap)
+{
+    static const uint8_t pkt[] = {
+        0x08, 0xC0, 0x08, 0x03, 0x18, 0x00, 0x89, 0x00, 0x00, 0x00,
+    };
+    if (cap < sizeof(pkt)) {
+        return 0;
+    }
+    for (size_t i = 0; i < sizeof(pkt); i++) {
+        buf[i] = pkt[i];
+    }
+    buf[5] = refresh_slot;
+    return sizeof(pkt);
+}
+
+static size_t append_float32_le(float value, uint8_t *out, size_t cap)
+{
+    if (cap < 4) {
+        return 0;
+    }
+    union {
+        float f;
+        uint8_t b[4];
+    } u;
+    u.f = value;
+    for (size_t i = 0; i < 4; i++) {
+        out[i] = u.b[i];
+    }
+    return 4;
+}
+
+size_t nano_fx_model_select_payload(uint8_t model_slot, const uint8_t *id, uint8_t id_len,
+                                    uint8_t *buf, size_t cap)
+{
+    if (!id || id_len == 0 || id_len > 3 || cap < 9 + id_len) {
+        return 0;
+    }
+
+    size_t i = 0;
+    buf[i++] = 0x00;
+    buf[i++] = 0xC0;
+    buf[i++] = 0x18;
+    buf[i++] = model_slot;
+    buf[i++] = 0x20;
+    for (uint8_t b = 0; b < id_len; b++) {
+        buf[i++] = id[b];
+    }
+    buf[i++] = 0x88;
+    buf[i++] = 0x00;
+    buf[i++] = 0x00;
+    buf[i++] = 0x00;
+    buf[0] = (uint8_t)(i - 2);
+    return i;
+}
+
+size_t nano_fx_param_payload(uint8_t model_slot, uint8_t param_index, float normalized,
+                             uint8_t *buf, size_t cap)
+{
+    if (cap < 20) {
+        return 0;
+    }
+
+    size_t i = 0;
+    buf[i++] = 0x0F;
+    buf[i++] = 0xC0;
+    buf[i++] = 0x08;
+    buf[i++] = 0x01;
+    buf[i++] = 0x18;
+    buf[i++] = model_slot;
+    buf[i++] = 0x20;
+    buf[i++] = param_index;
+    buf[i++] = 0x2D;
+    if (append_float32_le(normalized, buf + i, cap - i) != 4) {
+        return 0;
+    }
+    i += 4;
+    buf[i++] = 0x63;
+    buf[i++] = 0x00;
+    buf[i++] = 0x00;
+    buf[i++] = 0x00;
+    return i;
+}
+
 size_t nano_tuner_enable_payload(uint8_t *buf, size_t cap)
 {
     static const uint8_t pkt[] = {

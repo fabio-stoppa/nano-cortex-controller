@@ -5,8 +5,11 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "nano_ble.h"
+#include "nano_fx.h"
 #include "nano_protocol.h"
 #include "nano_proto.h"
 #include "nano_tuner.h"
@@ -25,6 +28,7 @@ static const char *TAG = "nano_state";
 #define TUNER_WATCH_POLL_US (5000 * 1000)
 #define STATE_RX_TIMEOUT_US (5000 * 1000)
 #define STATE_PROBE_LABEL_MAX 24
+#define PARSE_TASK_STACK 8192
 
 static nano_rx_mode_t s_mode = NANO_RX_IDLE;
 static nano_amp_t s_amp;
@@ -44,6 +48,9 @@ static bool s_tuner_fast_sync_armed;
 static bool s_tuner_watch_running;
 static bool s_pending_tuner_sync;
 static char s_state_probe_label[STATE_PROBE_LABEL_MAX];
+static TaskHandle_t s_parse_task;
+
+static void parse_state_buffer(void);
 
 static void append_state_payload(const uint8_t *data, size_t len)
 {
@@ -151,13 +158,14 @@ static void parse_state_buffer(void)
     }
 
     const char *label = s_state_probe_label[0] ? s_state_probe_label : "ROUTINE";
-    ESP_LOGI(TAG, "Parsing preset state (%u bytes) [%s]", (unsigned)s_state_len, label);
+    size_t buf_len = s_state_len;
+    ESP_LOGI(TAG, "Parsing preset state (%u bytes) [%s]", (unsigned)buf_len, label);
     if (strcmp(label, "INITIAL") == 0) {
-        nano_log_proto_fields(TAG, label, s_state_buf, s_state_len);
+        nano_log_proto_fields(TAG, label, s_state_buf, buf_len);
     }
     s_state_probe_label[0] = '\0';
 
-    if (nano_parse_amp(s_state_buf, s_state_len, &s_amp)) {
+    if (nano_parse_amp(s_state_buf, buf_len, &s_amp)) {
         nano_log_amp(TAG, &s_amp);
         nano_ui_set_amp(&s_amp);
         start_live_poll();
@@ -169,26 +177,54 @@ static void parse_state_buffer(void)
 
     bool tuner_active = false;
     nano_tuner_route_t tuner_route = NANO_TUNER_ROUTE_UNKNOWN;
-    if (nano_parse_tuner_state(s_state_buf, s_state_len, &tuner_active, &tuner_route)) {
+    if (nano_parse_tuner_state(s_state_buf, buf_len, &tuner_active, &tuner_route)) {
         if (strcmp(label, "ROUTE") == 0 || strcmp(label, "TUNER") == 0 || tuner_active ||
             nano_tuner_get()->active) {
-            nano_log_tuner_state_fields(TAG, s_state_buf, s_state_len);
+            nano_log_tuner_state_fields(TAG, s_state_buf, buf_len);
         }
         nano_tuner_sync_from_state(tuner_active, tuner_route);
     } else {
         if (strcmp(label, "ROUTE") == 0 || strcmp(label, "TUNER") == 0 || nano_tuner_get()->active) {
-            nano_log_tuner_state_fields(TAG, s_state_buf, s_state_len);
+            nano_log_tuner_state_fields(TAG, s_state_buf, buf_len);
         }
         nano_state_tuner_watch_update(nano_tuner_get()->active);
     }
 
+    nano_fx_sync_from_preset(s_state_buf, buf_len);
+
     maybe_retry_tuner_sync();
+}
+
+static void parse_worker(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        parse_state_buffer();
+    }
+}
+
+static void ensure_parse_task(void)
+{
+    if (s_parse_task) {
+        return;
+    }
+    BaseType_t ok = xTaskCreate(parse_worker, "nano_parse", PARSE_TASK_STACK, NULL, 5, &s_parse_task);
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create parse worker task");
+        s_parse_task = NULL;
+    }
 }
 
 static void parse_timer_cb(void *arg)
 {
     (void)arg;
-    parse_state_buffer();
+    ensure_parse_task();
+    if (s_parse_task) {
+        xTaskNotifyGive(s_parse_task);
+    } else {
+        parse_state_buffer();
+    }
 }
 
 static void refresh_timer_cb(void *arg)
@@ -414,6 +450,7 @@ void nano_state_reset(void)
 {
     reset_amp_sync();
     nano_tuner_reset();
+    nano_fx_reset();
 }
 
 void nano_rx_mode_set(nano_rx_mode_t mode)
@@ -469,6 +506,10 @@ void nano_state_feed_c305(const uint8_t *data, size_t len)
     }
 
     if (nano_tuner_feed_c305(data, len)) {
+        return;
+    }
+
+    if (nano_fx_feed_c305(data, len)) {
         return;
     }
 
@@ -578,5 +619,13 @@ void nano_state_tuner_watch_update(bool tuner_active)
         } else {
             s_pending_tuner_sync = true;
         }
+    }
+}
+
+void nano_state_request_preset_refresh(const char *label)
+{
+    ensure_timers();
+    if (s_mode == NANO_RX_IDLE && s_amp.valid) {
+        request_current_state_now(label ? label : "Preset refresh");
     }
 }

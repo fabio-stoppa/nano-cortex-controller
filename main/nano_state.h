@@ -37,6 +37,9 @@ void nano_state_request_tuner_sync(void);
 /** Faster preset polling while tuner appears off (catches footswitch without C305). */
 void nano_state_tuner_watch_update(bool tuner_active);
 
+/** Re-read preset state (e.g. after FX block toggle). */
+void nano_state_request_preset_refresh(const char *label);
+
 #ifdef __cplusplus
 }
 #endif

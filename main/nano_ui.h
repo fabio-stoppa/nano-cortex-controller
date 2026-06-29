@@ -4,6 +4,7 @@
 
 #include "nano_proto.h"
 #include "nano_tuner.h"
+#include "nano_fx.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,6 +21,12 @@ void nano_ui_set_ble_connected(bool connected);
 
 /** Refresh tuner tab (note/cents/status). */
 void nano_ui_set_tuner(const nano_tuner_t *tuner);
+
+/** Refresh gate + FX tabs. */
+void nano_ui_set_fx(const nano_fx_state_t *fx);
+
+/** Drain pending UI updates; call from the LVGL task only. */
+void nano_ui_dispatch_if_pending(void);
 
 #ifdef __cplusplus
 }
