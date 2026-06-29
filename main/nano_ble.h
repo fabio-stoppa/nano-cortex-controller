@@ -17,6 +17,8 @@ esp_err_t nano_ble_start(void);
 
 bool nano_ble_connected(void);
 
+bool nano_ble_scanning(void);
+
 /** Write payload to C304 (no-op if not connected). */
 esp_err_t nano_ble_write_c304(const char *label, const uint8_t *data, size_t len);
 

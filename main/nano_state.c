@@ -9,6 +9,7 @@
 #include "freertos/task.h"
 
 #include "nano_ble.h"
+#include "nano_amp.h"
 #include "nano_fx.h"
 #include "nano_protocol.h"
 #include "nano_proto.h"
@@ -33,7 +34,10 @@ static const char *TAG = "nano_state";
 static nano_rx_mode_t s_mode = NANO_RX_IDLE;
 static nano_amp_t s_amp;
 static uint8_t *s_state_buf;
+static uint8_t *s_fe_buf;
 static size_t s_state_len;
+static size_t s_fe_len;
+static nano_preset_catalog_t s_preset_catalog;
 static esp_timer_handle_t s_parse_timer;
 static esp_timer_handle_t s_sync_timer;
 static esp_timer_handle_t s_refresh_timer;
@@ -51,6 +55,64 @@ static char s_state_probe_label[STATE_PROBE_LABEL_MAX];
 static TaskHandle_t s_parse_task;
 
 static void parse_state_buffer(void);
+
+static void append_fe_payload(const uint8_t *data, size_t len)
+{
+    if (len <= 2 || !s_fe_buf) {
+        return;
+    }
+    const uint8_t *payload = data + 2;
+    size_t plen = len - 2;
+    if (s_fe_len + plen > STATE_BUF_MAX) {
+        ESP_LOGW(TAG, "FE metadata buffer full, dropping %u bytes", (unsigned)plen);
+        return;
+    }
+    memcpy(s_fe_buf + s_fe_len, payload, plen);
+    s_fe_len += plen;
+}
+
+static void finish_fe_capture(void)
+{
+    if (s_fe_len > 0) {
+        if (nano_parse_fe_preset_catalog(s_fe_buf, s_fe_len, &s_preset_catalog)) {
+            ESP_LOGI(TAG, "Preset catalog loaded (%u names)", (unsigned)s_preset_catalog.count);
+        } else {
+            ESP_LOGW(TAG, "FE metadata parse found no preset names (%u bytes)", (unsigned)s_fe_len);
+        }
+    }
+    s_fe_len = 0;
+}
+
+static void update_preset_label_locked(const uint8_t *state, size_t state_len)
+{
+    char label[NANO_PRESET_NAME_MAX] = "-";
+    char direct[NANO_PRESET_NAME_MAX];
+
+    if (nano_proto_first_string(state, state_len, 2, direct, sizeof(direct)) && direct[0]) {
+        strncpy(label, direct, sizeof(label) - 1);
+        label[sizeof(label) - 1] = '\0';
+    } else {
+        uint32_t slot = 0;
+        if (nano_proto_field_varint(state, state_len, 1, &slot)) {
+            uint32_t idx = 0;
+            if (slot >= 1 && slot <= NANO_PRESET_COUNT) {
+                idx = slot;
+            } else if (slot < NANO_PRESET_COUNT) {
+                idx = slot + 1;
+            }
+            if (idx > 0) {
+                if (s_preset_catalog.valid && s_preset_catalog.names[idx - 1][0]) {
+                    strncpy(label, s_preset_catalog.names[idx - 1], sizeof(label) - 1);
+                    label[sizeof(label) - 1] = '\0';
+                } else {
+                    snprintf(label, sizeof(label), "Preset %u", (unsigned)idx);
+                }
+            }
+        }
+    }
+
+    nano_ui_set_preset_name(label);
+}
 
 static void append_state_payload(const uint8_t *data, size_t len)
 {
@@ -191,6 +253,15 @@ static void parse_state_buffer(void)
     }
 
     nano_fx_sync_from_preset(s_state_buf, buf_len);
+
+    update_preset_label_locked(s_state_buf, buf_len);
+
+    uint16_t bpm = 0;
+    if (nano_parse_bpm(s_state_buf, buf_len, &bpm)) {
+        nano_ui_set_bpm(bpm, true);
+    } else {
+        nano_ui_set_bpm(0, false);
+    }
 
     maybe_retry_tuner_sync();
 }
@@ -363,6 +434,7 @@ static bool try_inline_amp_update(const uint8_t *data, size_t len)
 static void sync_timer_cb(void *arg)
 {
     (void)arg;
+    finish_fe_capture();
     ESP_LOGI(TAG, "Initial sync timer — requesting preset state");
     send_state_request("Current preset state request", true);
 }
@@ -496,7 +568,8 @@ void nano_state_feed_c305(const uint8_t *data, size_t len)
 
     if (is_fe_stream(data, len, s_mode)) {
         if (s_mode == NANO_RX_METADATA) {
-            ESP_LOGD(TAG, "Metadata chunk (%u bytes)", (unsigned)len);
+            append_fe_payload(data, len);
+            return;
         }
         return;
     }
@@ -552,6 +625,40 @@ bool nano_state_write_amp_knob(nano_knob_t knob, uint8_t raw)
     return nano_ble_write_c304(label, buf, n) == ESP_OK;
 }
 
+bool nano_state_write_capture_slot(uint8_t slot)
+{
+    if (slot < 1 || slot > 25 || !nano_ble_connected()) {
+        return false;
+    }
+
+    s_amp.capture_slot = slot;
+    s_amp.have_capture_slot = true;
+    const nano_amp_capture_t *capture = nano_amp_capture_by_slot(slot);
+    if (capture && capture->name) {
+        strncpy(s_amp.capture_name, capture->name, NANO_AMP_CAPTURE_NAME_MAX - 1);
+        s_amp.capture_name[NANO_AMP_CAPTURE_NAME_MAX - 1] = '\0';
+        s_amp.have_capture_name = true;
+    }
+    s_amp.valid = true;
+    nano_ui_set_amp(&s_amp);
+
+    uint8_t buf[16];
+    size_t n = nano_capture_select_payload(slot, buf, sizeof(buf));
+    if (n == 0) {
+        return false;
+    }
+
+    char label[48];
+    snprintf(label, sizeof(label), "Capture slot %u", (unsigned)slot);
+    ESP_LOGI(TAG, "%s", label);
+    if (nano_ble_write_c304(label, buf, n) != ESP_OK) {
+        return false;
+    }
+
+    nano_state_request_preset_refresh("Capture select");
+    return true;
+}
+
 void nano_state_begin_sync(void)
 {
     uint8_t buf[32];
@@ -565,6 +672,15 @@ void nano_state_begin_sync(void)
             return;
         }
     }
+    if (!s_fe_buf) {
+        s_fe_buf = malloc(STATE_BUF_MAX);
+        if (!s_fe_buf) {
+            ESP_LOGE(TAG, "Failed to allocate FE metadata buffer");
+            return;
+        }
+    }
+    s_fe_len = 0;
+    memset(&s_preset_catalog, 0, sizeof(s_preset_catalog));
 
     ensure_timers();
 

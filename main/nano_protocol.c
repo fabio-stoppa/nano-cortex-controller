@@ -95,6 +95,22 @@ size_t nano_amp_knob_payload(nano_knob_t knob, uint8_t raw_value, uint8_t *buf, 
     return i;
 }
 
+size_t nano_capture_select_payload(uint8_t slot, uint8_t *buf, size_t cap)
+{
+    if (slot < 1 || slot > 25 || cap < 10) {
+        return 0;
+    }
+
+    static const uint8_t pkt[] = {
+        0x08, 0xC0, 0x18, 0x04, 0x20, 0x00, 0x1C, 0x00, 0x00, 0x00,
+    };
+    for (size_t i = 0; i < sizeof(pkt); i++) {
+        buf[i] = pkt[i];
+    }
+    buf[5] = (uint8_t)(slot - 1);
+    return sizeof(pkt);
+}
+
 size_t nano_global_toggle_payload(uint8_t id, uint8_t value, uint8_t *buf, size_t cap)
 {
     static const uint8_t pkt[] = {

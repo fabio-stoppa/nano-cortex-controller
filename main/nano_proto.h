@@ -10,19 +10,46 @@
 extern "C" {
 #endif
 
+#define NANO_AMP_CAPTURE_NAME_MAX 40
+
 typedef struct {
     uint8_t gain;
     uint8_t level;
     uint8_t bass;
     uint8_t mid;
     uint8_t treble;
+    uint8_t capture_slot;
+    char capture_name[NANO_AMP_CAPTURE_NAME_MAX];
+    bool have_capture_slot;
+    bool have_capture_name;
     bool valid;
 } nano_amp_t;
 
+#define NANO_PRESET_COUNT    64
+#define NANO_PRESET_NAME_MAX 48
+
+typedef struct {
+    char names[NANO_PRESET_COUNT][NANO_PRESET_NAME_MAX];
+    uint8_t count;
+    bool valid;
+} nano_preset_catalog_t;
+
 bool nano_read_varint(const uint8_t *data, size_t len, size_t offset, uint32_t *value, size_t *next);
 
-/** Parse protobuf fields 3–7 (amp knobs) from a state blob. */
+/** First printable wire-2 string for a protobuf field inside a blob. */
+bool nano_proto_first_string(const uint8_t *data, size_t len, uint32_t field_num, char *out, size_t cap);
+
+/** First varint for a protobuf field inside a blob. */
+bool nano_proto_field_varint(const uint8_t *data, size_t len, uint32_t field_num, uint32_t *out_val);
+
+/** Parse preset names from FE metadata (top-level field 18 records). */
+bool nano_parse_fe_preset_catalog(const uint8_t *data, size_t len, nano_preset_catalog_t *out);
+
+/** Parse protobuf fields 3–7 (amp knobs) and capture slot/name from a state blob. */
 bool nano_parse_amp(const uint8_t *data, size_t len, nano_amp_t *out);
+
+/** Parse preset tempo (BPM) from likely global varint fields. */
+bool nano_parse_bpm(const uint8_t *data, size_t len, uint16_t *out_bpm);
 
 /**
  * Tuner fields in preset state: f45 present = on, f51 present (no f45) = off.

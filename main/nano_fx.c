@@ -1,5 +1,6 @@
 #include "nano_fx.h"
 
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -275,6 +276,117 @@ const char *nano_fx_block_label(nano_fx_block_id_t block)
     return s_block_labels[block];
 }
 
+static nano_fx_category_t category_from_catalog_index(size_t idx)
+{
+    if (idx <= 10) {
+        return (idx == 3 || idx == 7) ? NANO_FX_CAT_BASS_OD : NANO_FX_CAT_GUITAR_OD;
+    }
+    if (idx == 11 || idx == 15 || idx == 16) {
+        return NANO_FX_CAT_UTILITY;
+    }
+    if ((idx >= 12 && idx <= 14) || (idx >= 21 && idx <= 22)) {
+        return NANO_FX_CAT_FILTER;
+    }
+    if (idx >= 17 && idx <= 20) {
+        return NANO_FX_CAT_WAH;
+    }
+    if ((idx >= 23 && idx <= 26) || (idx >= 29 && idx <= 32)) {
+        return NANO_FX_CAT_COMPRESSOR;
+    }
+    if (idx >= 27 && idx <= 28) {
+        return NANO_FX_CAT_PITCH;
+    }
+    if (idx >= 33 && idx <= 40) {
+        return NANO_FX_CAT_MODULATION;
+    }
+    if (idx >= 41 && idx <= 46) {
+        return NANO_FX_CAT_DELAY;
+    }
+    if (idx >= 47 && idx <= 52) {
+        return NANO_FX_CAT_REVERB;
+    }
+    return NANO_FX_CAT_NONE;
+}
+
+nano_fx_category_t nano_fx_model_category(const nano_fx_model_def_t *model)
+{
+    if (!model) {
+        return NANO_FX_CAT_NONE;
+    }
+
+    for (size_t i = 0; i < nano_fx_catalog_count; i++) {
+        if (&nano_fx_catalog[i] == model) {
+            return category_from_catalog_index(i);
+        }
+    }
+
+    if (model->name) {
+        if (strstr(model->name, "Wah") != NULL) {
+            return NANO_FX_CAT_WAH;
+        }
+        if (strstr(model->name, "Comp") != NULL) {
+            return NANO_FX_CAT_COMPRESSOR;
+        }
+        if (strstr(model->name, "Filter") != NULL || strstr(model->name, "EQ") != NULL ||
+            strstr(model->name, "Graphic") != NULL || strstr(model->name, "Parametric") != NULL) {
+            return NANO_FX_CAT_FILTER;
+        }
+        if (strstr(model->name, "Transpose") != NULL || strstr(model->name, "Doubler") != NULL ||
+            strstr(model->name, "Pitch") != NULL) {
+            return NANO_FX_CAT_PITCH;
+        }
+        if (strstr(model->name, "Bass") != NULL) {
+            return NANO_FX_CAT_BASS_OD;
+        }
+        if (strstr(model->name, "Volume") != NULL || strstr(model->name, "Gate") != NULL) {
+            return NANO_FX_CAT_UTILITY;
+        }
+        if (strstr(model->name, "Delay") != NULL) {
+            return NANO_FX_CAT_DELAY;
+        }
+        if (strstr(model->name, "Reverb") != NULL || strstr(model->name, "Hall") != NULL ||
+            strstr(model->name, "Room") != NULL || strstr(model->name, "Cave") != NULL ||
+            strstr(model->name, "Ambience") != NULL) {
+            return NANO_FX_CAT_REVERB;
+        }
+        if (strstr(model->name, "Chorus") != NULL || strstr(model->name, "Flanger") != NULL ||
+            strstr(model->name, "Phase") != NULL || strstr(model->name, "Tremolo") != NULL ||
+            strstr(model->name, "Vibe") != NULL) {
+            return NANO_FX_CAT_MODULATION;
+        }
+    }
+
+    return NANO_FX_CAT_GUITAR_OD;
+}
+
+const char *nano_fx_category_label(nano_fx_category_t cat)
+{
+    switch (cat) {
+    case NANO_FX_CAT_GUITAR_OD:
+        return "Guitar OD";
+    case NANO_FX_CAT_BASS_OD:
+        return "Bass OD";
+    case NANO_FX_CAT_COMPRESSOR:
+        return "Compressor";
+    case NANO_FX_CAT_PITCH:
+        return "Pitch";
+    case NANO_FX_CAT_FILTER:
+        return "Filter";
+    case NANO_FX_CAT_WAH:
+        return "Wah";
+    case NANO_FX_CAT_UTILITY:
+        return "Utility";
+    case NANO_FX_CAT_MODULATION:
+        return "Modulation";
+    case NANO_FX_CAT_DELAY:
+        return "Delay";
+    case NANO_FX_CAT_REVERB:
+        return "Reverb";
+    default:
+        return "-";
+    }
+}
+
 void nano_fx_block_model_text(const nano_fx_block_t *block, char *buf, size_t cap)
 {
     if (!buf || cap == 0) {
@@ -306,6 +418,258 @@ void nano_fx_block_model_text(const nano_fx_block_t *block, char *buf, size_t ca
     }
 
     snprintf(buf, cap, "Empty slot");
+}
+
+static const struct {
+    const char *name;
+    const char *abbr;
+} s_chain_abbr[] = {
+    { "Chief BD2", "BD2" },
+    { "Chief OD1", "OD1" },
+    { "Exotic", "EXOTIC" },
+    { "Exotic Bass Z Boost", "BASS-Z" },
+    { "Exotic Z Boost", "ZBOOST" },
+    { "Facial Fuzz", "FUZZ" },
+    { "Green 808", "GRN808" },
+    { "Microtubes B3K", "B3K" },
+    { "OD250", "OD250" },
+    { "Obsessive Drive", "OBSESS" },
+    { "Rodent Drive", "RODENT" },
+    { "Adaptive Gate", "A.GATE" },
+    { "Graphic 9", "GRAPH9" },
+    { "Low-High Cut", "LO-HI" },
+    { "Parametric 3", "PARAM3" },
+    { "Utility Gate", "U.GATE" },
+    { "Volume", "VOLUME" },
+    { "Bass Wah", "BASSW" },
+    { "Bubba Wah", "BUBBA" },
+    { "Crying Clyde Wah", "CLYDE" },
+    { "Crying Wah", "C.WAH" },
+    { "Envelope Filter", "ENVELOP" },
+    { "Love Meat", "LOVE" },
+    { "Legendary 87 (M)", "LEG87M" },
+    { "Opto Comp (M)", "OPTO-M" },
+    { "Solid State Comp (M)", "SSD-M" },
+    { "VCA Comp (M)", "VCA-M" },
+    { "Transpose", "TRANS" },
+    { "Doubler", "DOUBLE" },
+    { "Legendary 87 (ST)", "LEG87" },
+    { "Opto Comp (ST)", "OPTO" },
+    { "Solid State Comp (ST)", "SSD" },
+    { "VCA Comp (ST)", "VCA" },
+    { "Chief CE2W (ST)", "CE2W" },
+    { "Chief DC2W (ST)", "DC2W" },
+    { "Chorus 229T", "CHR229" },
+    { "Dream Chorus", "DREAM" },
+    { "MX Flanger", "FLANG" },
+    { "MX Phase 95", "PHASE95" },
+    { "MX Vibe", "VIBE" },
+    { "Tremolo", "TREMO" },
+    { "Analog Delay", "ANALOG" },
+    { "Circular Delay", "CIRC" },
+    { "Digital Delay (ST)", "DIGDLY" },
+    { "Dual Delay", "DUAL" },
+    { "Dual Reverse Delay", "DREV" },
+    { "Tape Delay", "TAPE" },
+    { "Ambience", "AMBIEN" },
+    { "Cave", "CAVE" },
+    { "Hall", "HALL" },
+    { "Mind Hall", "MINDH" },
+    { "Modulated", "MODREV" },
+    { "Room", "ROOM" },
+};
+
+static bool is_skip_chain_word(const char *word)
+{
+    static const char *const skip[] = {
+        "Chief", "MX", "Exotic", "Microtubes", "Solid", "State", "Legendary", "Digital", "Dual",
+        "Utility", "Adaptive", "Crying",
+    };
+    for (size_t i = 0; i < sizeof(skip) / sizeof(skip[0]); i++) {
+        if (strcmp(word, skip[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool token_has_digit(const char *s)
+{
+    if (!s) {
+        return false;
+    }
+    for (; *s; s++) {
+        if (isdigit((unsigned char)*s)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void strip_model_parens(const char *in, char *out, size_t cap)
+{
+    if (!in || !out || cap == 0) {
+        return;
+    }
+
+    size_t n = 0;
+    for (size_t i = 0; in[i] && n + 1 < cap; i++) {
+        if (in[i] == '(') {
+            while (in[i] && in[i] != ')') {
+                i++;
+            }
+            continue;
+        }
+        out[n++] = in[i];
+    }
+    while (n > 0 && out[n - 1] == ' ') {
+        n--;
+    }
+    out[n] = '\0';
+}
+
+static int split_chain_tokens(const char *text, char tokens[][16], int max_tokens)
+{
+    int count = 0;
+    const char *p = text;
+
+    while (*p && count < max_tokens) {
+        while (*p == ' ' || *p == '-') {
+            p++;
+        }
+        if (!*p) {
+            break;
+        }
+
+        size_t n = 0;
+        while (*p && *p != ' ' && n + 1 < sizeof(tokens[0])) {
+            tokens[count][n++] = *p++;
+        }
+        tokens[count][n] = '\0';
+        count++;
+    }
+
+    return count;
+}
+
+static void uppercase_chain_abbr(char *s)
+{
+    if (!s) {
+        return;
+    }
+    for (; *s; s++) {
+        *s = (char)toupper((unsigned char)*s);
+    }
+}
+
+static bool chain_abbr_from_name(const char *name, char *out, size_t cap)
+{
+    if (!name || !out || cap < 2) {
+        return false;
+    }
+
+    for (size_t i = 0; i < sizeof(s_chain_abbr) / sizeof(s_chain_abbr[0]); i++) {
+        if (strcmp(name, s_chain_abbr[i].name) == 0) {
+            snprintf(out, cap, "%s", s_chain_abbr[i].abbr);
+            return true;
+        }
+    }
+
+    char clean[56];
+    strip_model_parens(name, clean, sizeof(clean));
+
+    char tokens[8][16];
+    int nt = split_chain_tokens(clean, tokens, 8);
+    if (nt <= 0) {
+        return false;
+    }
+
+    int start = 0;
+    while (start < nt && is_skip_chain_word(tokens[start])) {
+        start++;
+    }
+    if (start >= nt) {
+        start = 0;
+    }
+
+    if (nt - start == 1) {
+        const char *t = tokens[start];
+        size_t n = 0;
+        for (; t[n] && n + 1 < cap && n < 10; n++) {
+            out[n] = (char)toupper((unsigned char)t[n]);
+        }
+        out[n] = '\0';
+        return n > 0;
+    }
+
+    int digit_idx = -1;
+    for (int i = nt - 1; i >= start; i--) {
+        if (token_has_digit(tokens[i])) {
+            digit_idx = i;
+            break;
+        }
+    }
+
+    if (digit_idx > start) {
+        const char *prev = tokens[digit_idx - 1];
+        const char *num = tokens[digit_idx];
+        if (!token_has_digit(prev)) {
+            out[0] = (char)toupper((unsigned char)prev[0]);
+            snprintf(out + 1, cap - 1, "%s", num);
+            uppercase_chain_abbr(out);
+            return true;
+        }
+    }
+
+    if (digit_idx >= start) {
+        snprintf(out, cap, "%.10s", tokens[digit_idx]);
+        uppercase_chain_abbr(out);
+        return true;
+    }
+
+    if (nt - start == 2) {
+        const char *w1 = tokens[start];
+        const char *w2 = tokens[start + 1];
+        size_t w2len = strlen(w2);
+        out[0] = (char)toupper((unsigned char)w1[0]);
+        out[1] = (char)toupper((unsigned char)w2[0]);
+        out[2] = (char)toupper((unsigned char)w2[w2len > 0 ? w2len - 1 : 0]);
+        out[3] = '\0';
+        return true;
+    }
+
+    size_t n = 0;
+    for (int i = start; i < nt && n + 1 < cap && n < 8; i++) {
+        if (tokens[i][0]) {
+            out[n++] = (char)toupper((unsigned char)tokens[i][0]);
+        }
+    }
+    out[n] = '\0';
+    return n > 0;
+}
+
+void nano_fx_model_chain_acronym(const nano_fx_block_t *block, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) {
+        return;
+    }
+
+    buf[0] = '\0';
+    if (!block || !block->valid) {
+        snprintf(buf, cap, "-");
+        return;
+    }
+
+    char name[56];
+    nano_fx_block_model_text(block, name, sizeof(name));
+    if (strcmp(name, "Empty slot") == 0 || strncmp(name, "ID ", 3) == 0) {
+        snprintf(buf, cap, "-");
+        return;
+    }
+
+    if (!chain_abbr_from_name(name, buf, cap)) {
+        snprintf(buf, cap, "FX");
+    }
 }
 
 static bool name_has_enum_hint(const char *name)
@@ -572,13 +936,13 @@ void nano_fx_format_param(const nano_fx_block_t *block, uint8_t param_index, cha
     }
 
     if (!block || !block->model || param_index >= block->param_count) {
-        snprintf(buf, cap, "—");
+        snprintf(buf, cap, "-");
         return;
     }
 
     const nano_fx_param_t *p = &block->params[param_index];
     if (!p->valid) {
-        snprintf(buf, cap, "—");
+        snprintf(buf, cap, "-");
         return;
     }
 

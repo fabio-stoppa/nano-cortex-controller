@@ -24,6 +24,9 @@ size_t nano_post_save_refresh(uint8_t *buf, size_t cap);
 /** Port of setAmpKnob() in index.html. */
 size_t nano_amp_knob_payload(nano_knob_t knob, uint8_t raw_value, uint8_t *buf, size_t cap);
 
+/** Port of setCapture() in index.html — slot 1..25. */
+size_t nano_capture_select_payload(uint8_t slot, uint8_t *buf, size_t cap);
+
 /** Port of setGateEnabled() toggle pattern: 0A C0 08 01 18 <id> 20 <val> 1F 00 00 00 */
 size_t nano_global_toggle_payload(uint8_t id, uint8_t value, uint8_t *buf, size_t cap);
 

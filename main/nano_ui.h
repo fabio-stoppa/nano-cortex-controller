@@ -19,6 +19,12 @@ void nano_ui_set_amp(const nano_amp_t *amp);
 /** Update BLE status line. */
 void nano_ui_set_ble_connected(bool connected);
 
+/** Update header tempo readout (safe from any task). */
+void nano_ui_set_bpm(uint16_t bpm, bool valid);
+
+/** Update header preset name (safe from any task). */
+void nano_ui_set_preset_name(const char *name);
+
 /** Refresh tuner tab (note/cents/status). */
 void nano_ui_set_tuner(const nano_tuner_t *tuner);
 

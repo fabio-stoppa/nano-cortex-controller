@@ -424,6 +424,11 @@ bool nano_ble_connected(void)
     return s_ble.connected && s_ble.c304_handle != INVALID_HANDLE && s_ble.notify_enabled;
 }
 
+bool nano_ble_scanning(void)
+{
+    return s_ble.scanning;
+}
+
 esp_err_t nano_ble_write_c304(const char *label, const uint8_t *data, size_t len)
 {
     if (!nano_ble_connected()) {

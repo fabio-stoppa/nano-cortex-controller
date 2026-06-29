@@ -28,6 +28,9 @@ const nano_amp_t *nano_state_get_amp(void);
 /** Optimistically update amp state and send C304 knob write (touch UI). */
 bool nano_state_write_amp_knob(nano_knob_t knob, uint8_t raw);
 
+/** Select factory/user capture slot 1..25 and refresh preset state. */
+bool nano_state_write_capture_slot(uint8_t slot);
+
 /** Call after C305 notify enabled: sends metadata, then state request ~2.2s later. */
 void nano_state_begin_sync(void);
 

@@ -39,6 +39,7 @@ if [[ "$MODE" == "monitor" ]]; then
       source "$LOCAL_IDF/export.sh"
     fi
   fi
+  echo "NOTE: monitor-only — not building or flashing. Run './flash.sh $PORT' first to update firmware."
   echo "==> Monitor (full INFO logs)..."
   idf.py -p "$PORT" monitor
   exit 0

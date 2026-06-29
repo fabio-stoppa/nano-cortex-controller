@@ -42,6 +42,10 @@ bool nano_parse_amp(const uint8_t *data, size_t len, nano_amp_t *out)
 
     out->valid = false;
     out->gain = out->level = out->bass = out->mid = out->treble = 0;
+    out->capture_slot = 0;
+    out->capture_name[0] = '\0';
+    out->have_capture_slot = false;
+    out->have_capture_name = false;
 
     bool have[5] = {false, false, false, false, false};
     size_t i = 0;
@@ -98,6 +102,207 @@ bool nano_parse_amp(const uint8_t *data, size_t len, nano_amp_t *out)
                 default:
                     break;
                 }
+            } else if (field == 11 && !out->have_capture_slot) {
+                out->capture_slot = (uint8_t)(val > 255 ? 255 : val);
+                out->have_capture_slot = true;
+            }
+            i = next;
+        } else if (wire == 1) {
+            if (i + 8 > len) {
+                break;
+            }
+            i += 8;
+        } else if (wire == 2) {
+            uint32_t flen = 0;
+            if (!nano_read_varint(data, len, i, &flen, &next)) {
+                break;
+            }
+            i = next;
+            if (i + flen > len) {
+                break;
+            }
+            if (field == 32 && !out->have_capture_name) {
+                char name[NANO_AMP_CAPTURE_NAME_MAX];
+                if (nano_proto_first_string(data + i, flen, 2, name, sizeof(name)) && name[0]) {
+                    strncpy(out->capture_name, name, NANO_AMP_CAPTURE_NAME_MAX - 1);
+                    out->capture_name[NANO_AMP_CAPTURE_NAME_MAX - 1] = '\0';
+                    out->have_capture_name = true;
+                }
+            }
+            i += flen;
+        } else if (wire == 5) {
+            if (i + 4 > len) {
+                break;
+            }
+            i += 4;
+        } else {
+            break;
+        }
+    }
+
+    out->valid = have[0] || have[1] || have[2] || have[3] || have[4];
+    return out->valid;
+}
+
+bool nano_parse_bpm(const uint8_t *data, size_t len, uint16_t *out_bpm)
+{
+    if (!data || !len || !out_bpm) {
+        return false;
+    }
+
+    static const uint32_t fields[] = {46, 55, 56, 57};
+    for (size_t fi = 0; fi < sizeof(fields) / sizeof(fields[0]); fi++) {
+        uint32_t field_want = fields[fi];
+        size_t i = 0;
+
+        while (i < len) {
+            uint32_t tag = 0;
+            size_t next = 0;
+            if (!nano_read_varint(data, len, i, &tag, &next)) {
+                break;
+            }
+            i = next;
+
+            uint32_t field = tag >> 3;
+            uint32_t wire = tag & 0x07;
+
+            if (wire == 0) {
+                uint32_t val = 0;
+                if (!nano_read_varint(data, len, i, &val, &next)) {
+                    break;
+                }
+                if (field == field_want && val >= 20 && val <= 400) {
+                    *out_bpm = (uint16_t)val;
+                    return true;
+                }
+                i = next;
+            } else if (wire == 1) {
+                if (i + 8 > len) {
+                    break;
+                }
+                i += 8;
+            } else if (wire == 2) {
+                uint32_t flen = 0;
+                if (!nano_read_varint(data, len, i, &flen, &next)) {
+                    break;
+                }
+                i = next + flen;
+                if (i > len) {
+                    break;
+                }
+            } else if (wire == 5) {
+                if (i + 4 > len) {
+                    break;
+                }
+                i += 4;
+            } else {
+                break;
+            }
+        }
+    }
+
+    return false;
+}
+
+static bool proto_string_is_printable(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0) {
+        return false;
+    }
+    for (size_t i = 0; i < len; i++) {
+        if (data[i] < 0x20 || data[i] > 0x7E) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool nano_proto_first_string(const uint8_t *data, size_t len, uint32_t field_num, char *out, size_t cap)
+{
+    if (!data || !len || !out || cap == 0) {
+        return false;
+    }
+
+    out[0] = '\0';
+    size_t i = 0;
+
+    while (i < len) {
+        uint32_t tag = 0;
+        size_t next = 0;
+        if (!nano_read_varint(data, len, i, &tag, &next)) {
+            break;
+        }
+        i = next;
+
+        uint32_t field = tag >> 3;
+        uint32_t wire = tag & 0x07;
+
+        if (wire == 0) {
+            uint32_t skip = 0;
+            if (!nano_read_varint(data, len, i, &skip, &next)) {
+                break;
+            }
+            i = next;
+        } else if (wire == 1) {
+            if (i + 8 > len) {
+                break;
+            }
+            i += 8;
+        } else if (wire == 2) {
+            uint32_t flen = 0;
+            if (!nano_read_varint(data, len, i, &flen, &next)) {
+                break;
+            }
+            i = next;
+            if (i + flen > len) {
+                break;
+            }
+            if (field == field_num && flen > 0 && proto_string_is_printable(data + i, flen)) {
+                size_t n = flen < cap - 1 ? flen : cap - 1;
+                memcpy(out, data + i, n);
+                out[n] = '\0';
+                return true;
+            }
+            i += flen;
+        } else if (wire == 5) {
+            if (i + 4 > len) {
+                break;
+            }
+            i += 4;
+        } else {
+            break;
+        }
+    }
+
+    return false;
+}
+
+bool nano_proto_field_varint(const uint8_t *data, size_t len, uint32_t field_num, uint32_t *out_val)
+{
+    if (!data || !len || !out_val) {
+        return false;
+    }
+
+    size_t i = 0;
+    while (i < len) {
+        uint32_t tag = 0;
+        size_t next = 0;
+        if (!nano_read_varint(data, len, i, &tag, &next)) {
+            break;
+        }
+        i = next;
+
+        uint32_t field = tag >> 3;
+        uint32_t wire = tag & 0x07;
+
+        if (wire == 0) {
+            uint32_t val = 0;
+            if (!nano_read_varint(data, len, i, &val, &next)) {
+                break;
+            }
+            if (field == field_num) {
+                *out_val = val;
+                return true;
             }
             i = next;
         } else if (wire == 1) {
@@ -124,7 +329,71 @@ bool nano_parse_amp(const uint8_t *data, size_t len, nano_amp_t *out)
         }
     }
 
-    out->valid = have[0] || have[1] || have[2] || have[3] || have[4];
+    return false;
+}
+
+bool nano_parse_fe_preset_catalog(const uint8_t *data, size_t len, nano_preset_catalog_t *out)
+{
+    if (!data || !len || !out) {
+        return false;
+    }
+
+    memset(out, 0, sizeof(*out));
+    uint8_t idx = 0;
+    size_t i = 0;
+
+    while (i < len && idx < NANO_PRESET_COUNT) {
+        uint32_t tag = 0;
+        size_t next = 0;
+        if (!nano_read_varint(data, len, i, &tag, &next)) {
+            break;
+        }
+        i = next;
+
+        uint32_t field = tag >> 3;
+        uint32_t wire = tag & 0x07;
+
+        if (wire == 0) {
+            uint32_t skip = 0;
+            if (!nano_read_varint(data, len, i, &skip, &next)) {
+                break;
+            }
+            i = next;
+        } else if (wire == 1) {
+            if (i + 8 > len) {
+                break;
+            }
+            i += 8;
+        } else if (wire == 2) {
+            uint32_t flen = 0;
+            if (!nano_read_varint(data, len, i, &flen, &next)) {
+                break;
+            }
+            i = next;
+            if (i + flen > len) {
+                break;
+            }
+            if (field == 18) {
+                char name[NANO_PRESET_NAME_MAX];
+                if (nano_proto_first_string(data + i, flen, 1, name, sizeof(name)) && name[0]) {
+                    strncpy(out->names[idx], name, NANO_PRESET_NAME_MAX - 1);
+                    out->names[idx][NANO_PRESET_NAME_MAX - 1] = '\0';
+                }
+                idx++;
+            }
+            i += flen;
+        } else if (wire == 5) {
+            if (i + 4 > len) {
+                break;
+            }
+            i += 4;
+        } else {
+            break;
+        }
+    }
+
+    out->count = idx;
+    out->valid = idx > 0;
     return out->valid;
 }
 
@@ -473,6 +742,7 @@ static bool field_is_known(uint32_t field)
     case 13:
     case 14:
     case 15:
+    case 18:
     case 31:
     case 32:
     case 33:

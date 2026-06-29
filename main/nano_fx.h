@@ -22,6 +22,20 @@ typedef enum {
     NANO_FX_POST3,
 } nano_fx_block_id_t;
 
+typedef enum {
+    NANO_FX_CAT_NONE = 0,
+    NANO_FX_CAT_GUITAR_OD,
+    NANO_FX_CAT_BASS_OD,
+    NANO_FX_CAT_COMPRESSOR,
+    NANO_FX_CAT_PITCH,
+    NANO_FX_CAT_FILTER,
+    NANO_FX_CAT_WAH,
+    NANO_FX_CAT_UTILITY,
+    NANO_FX_CAT_MODULATION,
+    NANO_FX_CAT_DELAY,
+    NANO_FX_CAT_REVERB,
+} nano_fx_category_t;
+
 typedef struct {
     const char *name;
     uint8_t id_len;
@@ -82,8 +96,16 @@ const nano_fx_state_t *nano_fx_get(void);
 
 const char *nano_fx_block_label(nano_fx_block_id_t block);
 
+/** Effect family for signal-chain icons (PRE/PFX slots). */
+nano_fx_category_t nano_fx_model_category(const nano_fx_model_def_t *model);
+
+const char *nano_fx_category_label(nano_fx_category_t cat);
+
 /** Model name, or "ID xx yy" / "Empty" when unknown. */
 void nano_fx_block_model_text(const nano_fx_block_t *block, char *buf, size_t cap);
+
+/** Short label for signal-chain icon (e.g. "P95", "MHL"). */
+void nano_fx_model_chain_acronym(const nano_fx_block_t *block, char *buf, size_t cap);
 
 bool nano_fx_write_gate_enabled(bool enabled);
 bool nano_fx_write_gate_reduction(uint8_t pct);
