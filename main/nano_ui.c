@@ -159,8 +159,12 @@ typedef struct {
 
 static lv_obj_t *s_ble_icon;
 static lv_obj_t *s_bpm_lbl;
+static lv_obj_t *s_bpm_dot;
 static lv_timer_t *s_ble_icon_timer;
+static lv_timer_t *s_bpm_beat_timer;
 static bool s_ble_blink_on;
+static bool s_bpm_beat_lit;
+static uint16_t s_bpm_beat_bpm;
 static lv_obj_t *s_tuner_note;
 static lv_obj_t *s_tuner_cents;
 static lv_obj_t *s_tuner_state;
@@ -237,6 +241,7 @@ static bool s_async_fx_pending;
 static uint16_t s_async_bpm;
 static bool s_async_bpm_valid;
 static bool s_async_bpm_pending;
+static bool s_async_bpm_rephase;
 static uint16_t s_ui_bpm_cache;
 static bool s_ui_bpm_cache_valid;
 static char s_async_preset[NANO_PRESET_NAME_MAX];
@@ -651,20 +656,106 @@ static void async_apply_fx_cb(void *arg)
     s_async_fx_pending = false;
 }
 
+#define BPM_BEAT_FLASH_MS 100u
+#define BPM_DOT_SIZE 14
+#define BPM_DOT_COLOR 0x00FF66
+#define BPM_DOT_GAP 8
+
+static uint32_t bpm_beat_period_ms(uint16_t bpm)
+{
+    if (bpm < 20) {
+        bpm = 20;
+    } else if (bpm > 400) {
+        bpm = 400;
+    }
+    uint32_t ms = 60000u / (uint32_t)bpm;
+    if (ms < 150u) {
+        ms = 150u;
+    }
+    return ms;
+}
+
+static void bpm_beat_set_lit(bool lit)
+{
+    if (!s_bpm_dot) {
+        return;
+    }
+    s_bpm_beat_lit = lit;
+    lv_obj_set_style_bg_opa(s_bpm_dot, lit ? LV_OPA_COVER : LV_OPA_20, 0);
+}
+
+static void bpm_beat_timer_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    if (!s_bpm_dot || !s_ui_bpm_cache_valid || s_bpm_beat_bpm < 20) {
+        return;
+    }
+
+    if (!s_bpm_beat_lit) {
+        bpm_beat_set_lit(true);
+        lv_timer_set_period(s_bpm_beat_timer, BPM_BEAT_FLASH_MS);
+        return;
+    }
+
+    bpm_beat_set_lit(false);
+    uint32_t beat_ms = bpm_beat_period_ms(s_bpm_beat_bpm);
+    uint32_t rest = (beat_ms > BPM_BEAT_FLASH_MS) ? (beat_ms - BPM_BEAT_FLASH_MS) : beat_ms;
+    lv_timer_set_period(s_bpm_beat_timer, rest);
+}
+
+static void bpm_beat_sync_locked(uint16_t bpm, bool valid)
+{
+    if (!s_bpm_dot) {
+        return;
+    }
+
+    if (!valid || bpm < 20) {
+        s_bpm_beat_bpm = 0;
+        bpm_beat_set_lit(false);
+        lv_obj_add_flag(s_bpm_dot, LV_OBJ_FLAG_HIDDEN);
+        if (s_bpm_beat_timer) {
+            lv_timer_pause(s_bpm_beat_timer);
+        }
+        return;
+    }
+
+    s_bpm_beat_bpm = bpm;
+    lv_obj_clear_flag(s_bpm_dot, LV_OBJ_FLAG_HIDDEN);
+
+    if (!s_bpm_beat_timer) {
+        s_bpm_beat_timer = lv_timer_create(bpm_beat_timer_cb, BPM_BEAT_FLASH_MS, NULL);
+    }
+
+    /* Downbeat now — phase-lock to tap / tempo change. */
+    bpm_beat_set_lit(true);
+    lv_timer_set_period(s_bpm_beat_timer, BPM_BEAT_FLASH_MS);
+    lv_timer_reset(s_bpm_beat_timer);
+    lv_timer_resume(s_bpm_beat_timer);
+}
+
 static void apply_bpm_locked(uint16_t bpm, bool valid)
 {
     if (!s_bpm_lbl) {
+        s_async_bpm_rephase = false;
         return;
     }
+
+    bool rephase = s_async_bpm_rephase;
+    s_async_bpm_rephase = false;
 
     char buf[16];
     if (!valid) {
         ui_set_label_if_changed(s_bpm_lbl, "- BPM");
+        bpm_beat_sync_locked(0, false);
         return;
     }
 
     snprintf(buf, sizeof(buf), "%u BPM", (unsigned)bpm);
     ui_set_label_if_changed(s_bpm_lbl, buf);
+
+    if (rephase || s_bpm_beat_bpm != bpm || !s_bpm_beat_timer) {
+        bpm_beat_sync_locked(bpm, true);
+    }
 }
 
 static void refresh_preset_label_locked(void)
@@ -2833,22 +2924,45 @@ static void build_header_bar(lv_obj_t *screen)
     lv_obj_center(s_fx_model_btn_lbl);
 
     lv_obj_t *right = lv_obj_create(header);
-    lv_obj_set_size(right, 176, HEADER_H);
+    lv_obj_set_size(right, 200, HEADER_H);
     lv_obj_set_style_bg_opa(right, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(right, 0, 0);
     lv_obj_set_style_pad_all(right, 0, 0);
     lv_obj_set_style_pad_right(right, HEADER_RIGHT_PAD, 0);
     lv_obj_set_flex_flow(right, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(right, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(right, 18, 0);
+    lv_obj_set_style_pad_column(right, 14, 0);
     ui_passive_container(right);
 
-    s_bpm_lbl = lv_label_create(right);
+    lv_obj_t *bpm_row = lv_obj_create(right);
+    lv_obj_set_height(bpm_row, HEADER_H);
+    lv_obj_set_width(bpm_row, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(bpm_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(bpm_row, 0, 0);
+    lv_obj_set_style_pad_all(bpm_row, 0, 0);
+    lv_obj_set_flex_flow(bpm_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bpm_row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(bpm_row, BPM_DOT_GAP, 0);
+    ui_passive_container(bpm_row);
+
+    s_bpm_dot = lv_obj_create(bpm_row);
+    lv_obj_set_size(s_bpm_dot, BPM_DOT_SIZE, BPM_DOT_SIZE);
+    lv_obj_set_style_radius(s_bpm_dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s_bpm_dot, lv_color_hex(BPM_DOT_COLOR), 0);
+    lv_obj_set_style_bg_opa(s_bpm_dot, LV_OPA_20, 0);
+    lv_obj_set_style_border_width(s_bpm_dot, 0, 0);
+    lv_obj_set_style_pad_all(s_bpm_dot, 0, 0);
+    lv_obj_clear_flag(s_bpm_dot, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_bpm_dot, LV_OBJ_FLAG_HIDDEN);
+    ui_passive_container(s_bpm_dot);
+
+    s_bpm_lbl = lv_label_create(bpm_row);
     lv_label_set_text(s_bpm_lbl, "- BPM");
     lv_obj_set_style_text_color(s_bpm_lbl, lv_color_hex(0x909090), 0);
     lv_obj_set_style_text_font(s_bpm_lbl, UI_FONT_SM, 0);
-    lv_obj_set_width(s_bpm_lbl, 64);
-    lv_obj_set_style_text_align(s_bpm_lbl, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_width(s_bpm_lbl, LV_SIZE_CONTENT);
+    lv_label_set_long_mode(s_bpm_lbl, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_align(s_bpm_lbl, LV_TEXT_ALIGN_LEFT, 0);
 
     s_ble_icon = lv_label_create(right);
     lv_label_set_text(s_ble_icon, LV_SYMBOL_BLUETOOTH);
@@ -3259,6 +3373,23 @@ void nano_ui_set_bpm(uint16_t bpm, bool valid)
     s_async_bpm = bpm;
     s_async_bpm_valid = valid;
     s_async_bpm_pending = true;
+    s_async_bpm_rephase = false;
+    s_ui_dispatch_mask |= UI_DISP_BPM;
+    ui_request_dispatch();
+}
+
+void nano_ui_bpm_tap(uint16_t bpm)
+{
+    if (bpm < 20 || bpm > 400) {
+        return;
+    }
+
+    s_ui_bpm_cache = bpm;
+    s_ui_bpm_cache_valid = true;
+    s_async_bpm = bpm;
+    s_async_bpm_valid = true;
+    s_async_bpm_pending = true;
+    s_async_bpm_rephase = true;
     s_ui_dispatch_mask |= UI_DISP_BPM;
     ui_request_dispatch();
 }

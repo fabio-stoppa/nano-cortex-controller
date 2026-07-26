@@ -43,6 +43,9 @@ void nano_state_tuner_watch_update(bool tuner_active);
 /** Re-read preset state (e.g. after FX block toggle). */
 void nano_state_request_preset_refresh(const char *label);
 
+/** Apply discovered BPM and stop boot probes. */
+void nano_state_on_bpm_found(uint16_t bpm);
+
 #ifdef __cplusplus
 }
 #endif

@@ -7,6 +7,8 @@
 #include "esp_log.h"
 #include "nano_tuner.h"
 
+static float read_f32_le(const uint8_t *p);
+
 bool nano_read_varint(const uint8_t *data, size_t len, size_t offset, uint32_t *value, size_t *next)
 {
     if (!data || !next || offset >= len) {
@@ -150,58 +152,212 @@ bool nano_parse_bpm(const uint8_t *data, size_t len, uint16_t *out_bpm)
         return false;
     }
 
-    static const uint32_t fields[] = {46, 55, 56, 57};
-    for (size_t fi = 0; fi < sizeof(fields) / sizeof(fields[0]); fi++) {
-        uint32_t field_want = fields[fi];
-        size_t i = 0;
+    /*
+     * Field 56 fixed32 float BPM. Present top-level in some long dumps, and near
+     * the end of FE metadata. Recurse into wire-type-2, then fall back to a raw
+     * C5 03 tag scan — FE blobs are not always clean nested protobuf from offset 0.
+     */
+    const uint32_t field_want = 56;
+    size_t i = 0;
 
-        while (i < len) {
-            uint32_t tag = 0;
-            size_t next = 0;
-            if (!nano_read_varint(data, len, i, &tag, &next)) {
+    while (i < len) {
+        uint32_t tag = 0;
+        size_t next = 0;
+        if (!nano_read_varint(data, len, i, &tag, &next)) {
+            break;
+        }
+        i = next;
+
+        uint32_t field = tag >> 3;
+        uint32_t wire = tag & 0x07;
+
+        if (wire == 0) {
+            if (!nano_read_varint(data, len, i, NULL, &next)) {
                 break;
             }
             i = next;
-
-            uint32_t field = tag >> 3;
-            uint32_t wire = tag & 0x07;
-
-            if (wire == 0) {
-                uint32_t val = 0;
-                if (!nano_read_varint(data, len, i, &val, &next)) {
-                    break;
-                }
-                if (field == field_want && val >= 20 && val <= 400) {
-                    *out_bpm = (uint16_t)val;
-                    return true;
-                }
-                i = next;
-            } else if (wire == 1) {
-                if (i + 8 > len) {
-                    break;
-                }
-                i += 8;
-            } else if (wire == 2) {
-                uint32_t flen = 0;
-                if (!nano_read_varint(data, len, i, &flen, &next)) {
-                    break;
-                }
-                i = next + flen;
-                if (i > len) {
-                    break;
-                }
-            } else if (wire == 5) {
-                if (i + 4 > len) {
-                    break;
-                }
-                i += 4;
-            } else {
+        } else if (wire == 1) {
+            if (i + 8 > len) {
                 break;
             }
+            i += 8;
+        } else if (wire == 2) {
+            uint32_t flen = 0;
+            if (!nano_read_varint(data, len, i, &flen, &next)) {
+                break;
+            }
+            i = next;
+            if (i + flen > len) {
+                break;
+            }
+            if (flen > 0 && nano_parse_bpm(data + i, flen, out_bpm)) {
+                return true;
+            }
+            i += flen;
+        } else if (wire == 5) {
+            if (i + 4 > len) {
+                break;
+            }
+            if (field == field_want) {
+                float f = read_f32_le(data + i);
+                if (isfinite((double)f) && f >= 20.f && f <= 400.f) {
+                    *out_bpm = (uint16_t)lroundf(f);
+                    return true;
+                }
+            }
+            i += 4;
+        } else {
+            break;
+        }
+    }
+
+    /* Raw tag scan: (56<<3)|5 = 453 = C5 03 */
+    for (size_t off = 0; off + 6 <= len; off++) {
+        if (data[off] != 0xC5 || data[off + 1] != 0x03) {
+            continue;
+        }
+        float f = read_f32_le(data + off + 2);
+        if (isfinite((double)f) && f >= 20.f && f <= 400.f) {
+            *out_bpm = (uint16_t)lroundf(f);
+            return true;
         }
     }
 
     return false;
+}
+
+void nano_log_bpm_hunt(const char *tag, const uint8_t *data, size_t len)
+{
+    if (!tag || !data || !len) {
+        return;
+    }
+
+    uint32_t max_field = 0;
+    unsigned entries = 0;
+    unsigned fixed32_n = 0;
+    bool saw_f56 = false;
+    size_t i = 0;
+
+    ESP_LOGI(tag, "BPM hunt: scan %u-byte state blob", (unsigned)len);
+
+    while (i < len && entries < 160) {
+        uint32_t tag_val = 0;
+        size_t next = 0;
+        if (!nano_read_varint(data, len, i, &tag_val, &next)) {
+            break;
+        }
+        i = next;
+
+        uint32_t field = tag_val >> 3;
+        uint32_t wire = tag_val & 0x07;
+        entries++;
+        if (field > max_field) {
+            max_field = field;
+        }
+        if (field == 56) {
+            saw_f56 = true;
+        }
+
+        if (wire == 0) {
+            uint32_t val = 0;
+            if (!nano_read_varint(data, len, i, &val, &next)) {
+                break;
+            }
+            i = next;
+            if (field >= 40 && val >= 20 && val <= 400) {
+                ESP_LOGI(tag, "BPM hunt: f%u varint=%u (tempo-ish?)", (unsigned)field, (unsigned)val);
+            }
+        } else if (wire == 1) {
+            if (i + 8 > len) {
+                break;
+            }
+            i += 8;
+        } else if (wire == 2) {
+            uint32_t flen = 0;
+            if (!nano_read_varint(data, len, i, &flen, &next)) {
+                break;
+            }
+            i = next + flen;
+            if (i > len) {
+                break;
+            }
+        } else if (wire == 5) {
+            if (i + 4 > len) {
+                break;
+            }
+            uint32_t u = (uint32_t)data[i] | ((uint32_t)data[i + 1] << 8) |
+                         ((uint32_t)data[i + 2] << 16) | ((uint32_t)data[i + 3] << 24);
+            float f = 0.f;
+            memcpy(&f, &u, sizeof(f));
+            fixed32_n++;
+            ESP_LOGI(tag,
+                     "BPM hunt: f%u fixed32=%g raw=%08lX%s",
+                     (unsigned)field,
+                     (double)f,
+                     (unsigned long)u,
+                     field == 56 ? " <-- BPM candidate" : (field == 46 ? " (A440?)" : ""));
+            i += 4;
+        } else {
+            break;
+        }
+    }
+
+    ESP_LOGI(tag,
+             "BPM hunt: done entries=%u max_field=%u fixed32_count=%u has_f56=%s",
+             entries,
+             (unsigned)max_field,
+             fixed32_n,
+             saw_f56 ? "yes" : "no");
+}
+
+void nano_log_bpm_raw_scan(const char *tag, const char *label, const uint8_t *data, size_t len)
+{
+    if (!tag || !data || !len) {
+        return;
+    }
+
+    const char *lab = label ? label : "raw";
+    unsigned hit_f56 = 0;
+    unsigned hit_91 = 0;
+    unsigned hit_float = 0;
+
+    ESP_LOGI(tag, "BPM raw scan [%s]: %u bytes", lab, (unsigned)len);
+
+    for (size_t i = 0; i + 6 <= len; i++) {
+        /* Protobuf tag for field 56 wire5 = (56<<3)|5 = 453 = C5 03 */
+        if (data[i] == 0xC5 && data[i + 1] == 0x03 && i + 6 <= len) {
+            float f = read_f32_le(data + i + 2);
+            hit_f56++;
+            ESP_LOGI(tag, "BPM raw [%s]: f56 tag @%u = %g", lab, (unsigned)i, (double)f);
+        }
+
+        if (data[i] == 0x2D && data[i + 5] == 0x91) {
+            float f = read_f32_le(data + i + 1);
+            hit_91++;
+            ESP_LOGI(tag, "BPM raw [%s]: 2D+91 @%u = %g", lab, (unsigned)i, (double)f);
+        }
+    }
+
+    /* Sparse LE float scan (4-byte aligned) — log only tempo-ish values. */
+    for (size_t i = 0; i + 4 <= len; i += 4) {
+        float f = read_f32_le(data + i);
+        if (!isfinite((double)f) || f < 40.f || f > 250.f) {
+            continue;
+        }
+        /* Prefer near-integers (tap tempos are whole BPM). */
+        float nearest = roundf(f);
+        if (fabsf(f - nearest) > 0.05f) {
+            continue;
+        }
+        hit_float++;
+        if (hit_float <= 12) {
+            ESP_LOGI(tag, "BPM raw [%s]: LE float @%u = %g", lab, (unsigned)i, (double)f);
+        }
+    }
+
+    ESP_LOGI(tag,
+             "BPM raw [%s]: done f56_tags=%u trailer91=%u tempo_floats=%u",
+             lab, hit_f56, hit_91, hit_float);
 }
 
 static bool proto_string_is_printable(const uint8_t *data, size_t len)
@@ -686,6 +842,10 @@ bool nano_try_parse_amp_hw_notify(const uint8_t *data, size_t len, uint8_t *knob
             if (!nano_read_varint(data, len, p + 3, &val, &next)) {
                 continue;
             }
+            /* Tap-tempo uses 18 01 20 01 2D <f32> 91 — not an amp varint. */
+            if (next < len && data[next] == 0x2D) {
+                continue;
+            }
             *knob_id = mapped;
             *raw = (uint8_t)(val > 255 ? 255 : val);
             return true;
@@ -704,6 +864,45 @@ bool nano_try_parse_amp_hw_notify(const uint8_t *data, size_t len, uint8_t *knob
             *raw = (uint8_t)(val > 255 ? 255 : val);
             return true;
         }
+    }
+
+    return false;
+}
+
+bool nano_try_parse_bpm_notify(const uint8_t *data, size_t len, uint16_t *out_bpm)
+{
+    if (!data || !out_bpm || len < 12) {
+        return false;
+    }
+
+    for (size_t i = 0; i + 6 <= len; i++) {
+        if (data[i] != 0x2D) {
+            continue;
+        }
+        /* Amp gain float uses trailer 0x63; tap-tempo BPM uses 0x91. */
+        if (data[i + 5] != 0x91) {
+            continue;
+        }
+
+        float value = read_f32_le(data + i + 1);
+        if (!isfinite((double)value) || value < 20.f || value > 400.f) {
+            continue;
+        }
+
+        bool prefix = false;
+        size_t back_start = (i >= 12) ? (i - 12) : 0;
+        for (size_t back = back_start; back + 3 <= i; back++) {
+            if (data[back] == 0xC0 && data[back + 1] == 0x08 && data[back + 2] == 0x01) {
+                prefix = true;
+                break;
+            }
+        }
+        if (!prefix) {
+            continue;
+        }
+
+        *out_bpm = (uint16_t)lroundf(value);
+        return true;
     }
 
     return false;

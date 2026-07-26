@@ -48,8 +48,20 @@ bool nano_parse_fe_preset_catalog(const uint8_t *data, size_t len, nano_preset_c
 /** Parse protobuf fields 3–7 (amp knobs) and capture slot/name from a state blob. */
 bool nano_parse_amp(const uint8_t *data, size_t len, nano_amp_t *out);
 
-/** Parse preset tempo (BPM) from likely global varint fields. */
+/**
+ * Parse preset tempo (BPM) from field 56 (fixed32 float), including nested
+ * length-delimited FE metadata blobs.
+ */
 bool nano_parse_bpm(const uint8_t *data, size_t len, uint16_t *out_bpm);
+
+/** Hunt log: max field, fixed32 floats, BPM-ish varints (fields >= 40). */
+void nano_log_bpm_hunt(const char *tag, const uint8_t *data, size_t len);
+
+/**
+ * Raw byte hunt (FE metadata / GATT reads): f56 tag (C5 03), 2D+f32+91 tempo notifies,
+ * and LE floats in the 40–250 BPM band. Does not mutate state.
+ */
+void nano_log_bpm_raw_scan(const char *tag, const char *label, const uint8_t *data, size_t len);
 
 /**
  * Tuner fields in preset state: f45 present = on, f51 present (no f45) = off.
@@ -75,6 +87,14 @@ bool nano_try_parse_amp_knob_notify(const uint8_t *data, size_t len, uint8_t *kn
  *   Other: C0 08 01 18 <id 0–4 or 0x05–0x09> 20 <varint>
  */
 bool nano_try_parse_amp_hw_notify(const uint8_t *data, size_t len, uint8_t *knob_id, uint8_t *raw);
+
+/**
+ * Live tap-tempo BPM notify (C305):
+ *   Tap:  len C0 08 01 18 01 20 01 2D <f32 BPM> 91 00 00 00
+ *   Exit: len C0 08 01       20 01 2D <f32 BPM> 91 00 00 00
+ * Trailer 0x91 distinguishes from amp gain float (trailer 0x63).
+ */
+bool nano_try_parse_bpm_notify(const uint8_t *data, size_t len, uint16_t *out_bpm);
 
 /** Log amp as raw + percent (0–255 → 0–100%). */
 void nano_log_amp(const char *tag, const nano_amp_t *amp);

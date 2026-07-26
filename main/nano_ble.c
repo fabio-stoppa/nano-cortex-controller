@@ -26,6 +26,7 @@
 #include "nvs_flash.h"
 
 #include "nano_protocol.h"
+#include "nano_proto.h"
 
 static const char *TAG = "nano_ble";
 
@@ -37,6 +38,7 @@ static const char *TAG = "nano_ble";
 #define C305_TASK_PRIO 1
 #define GATT_NOTIFY_MAX 12
 #define GATT_EXTRA_SVC_MAX 6
+#define BPM_READ_HANDLE_MAX 4
 
 typedef struct {
     uint16_t handle;
@@ -57,6 +59,10 @@ static uint32_t s_c305_drop_count;
 static gatt_sub_t s_subs[GATT_NOTIFY_MAX];
 static size_t s_sub_count;
 
+static uint16_t s_bpm_read_handles[BPM_READ_HANDLE_MAX];
+static size_t s_bpm_read_count;
+static size_t s_bpm_read_next;
+
 static struct {
     uint16_t start;
     uint16_t end;
@@ -72,6 +78,9 @@ static size_t s_extra_svc_count;
 #define UUID_CHAR_C304  0xC304
 #define UUID_CHAR_C305  0xC305
 #define UUID_CHAR_C306  0xC306
+#define UUID_CHAR_C300  0xC300
+#define UUID_CHAR_C301  0xC301
+#define UUID_CHAR_C307  0xC307
 
 /* BLE-MIDI service/char — Bluedroid little-endian 128-bit form. */
 static const uint8_t UUID128_BLE_MIDI_SVC[16] = {
@@ -159,6 +168,8 @@ static void reset_handles(void)
     s_ble.notify_enabled = false;
     s_sub_count = 0;
     s_extra_svc_count = 0;
+    s_bpm_read_count = 0;
+    s_bpm_read_next = 0;
 }
 
 static void start_scan(void)
@@ -286,10 +297,18 @@ static void log_and_collect_notify_chars(esp_gatt_if_t gattc_if, uint16_t conn_i
                  can_indicate ? " INDICATE" : "");
 
         if (elems[i].uuid.len == ESP_UUID_LEN_16) {
-            if (elems[i].uuid.uuid.uuid16 == UUID_CHAR_C306) {
+            uint16_t u16 = elems[i].uuid.uuid.uuid16;
+            if (u16 == UUID_CHAR_C306) {
                 s_ble.c306_handle = elems[i].char_handle;
                 /* Skip C306 indicate mirror — confirm traffic doubles pitch load. */
                 continue;
+            }
+            if ((u16 == UUID_CHAR_C300 || u16 == UUID_CHAR_C301 || u16 == UUID_CHAR_C307) &&
+                (elems[i].properties & ESP_GATT_CHAR_PROP_BIT_READ) &&
+                s_bpm_read_count < BPM_READ_HANDLE_MAX) {
+                s_bpm_read_handles[s_bpm_read_count++] = elems[i].char_handle;
+                ESP_LOGI(TAG, "BPM hunt: queued GATT read C%03X handle=%u", (unsigned)u16,
+                         elems[i].char_handle);
             }
         }
         if (uuid128_eq(&elems[i].uuid, UUID128_BLE_MIDI_IO)) {
@@ -314,6 +333,8 @@ static void log_and_collect_notify_chars(esp_gatt_if_t gattc_if, uint16_t conn_i
 static bool discover_nano_chars(esp_gatt_if_t gattc_if, uint16_t conn_id)
 {
     s_sub_count = 0;
+    s_bpm_read_count = 0;
+    s_bpm_read_next = 0;
 
     bool c304 = find_char_in_range(gattc_if, conn_id, s_ble.a002_start, s_ble.a002_end,
                                    UUID_CHAR_C304, &s_ble.c304_handle);
@@ -587,6 +608,8 @@ static void on_gatt_notify(uint16_t handle, const uint8_t *data, uint16_t len)
     }
 }
 
+static void bpm_gatt_read_next(void);
+
 static void gattc_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
                           esp_ble_gattc_cb_param_t *param)
 {
@@ -717,6 +740,27 @@ static void gattc_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
         }
         break;
 
+    case ESP_GATTC_READ_CHAR_EVT: {
+        if (param->read.status != ESP_GATT_OK) {
+            ESP_LOGW(TAG, "BPM hunt: GATT read status=%d handle=%u", param->read.status,
+                     param->read.handle);
+        } else {
+            char lab[32];
+            snprintf(lab, sizeof(lab), "GATT read h=%u", param->read.handle);
+            nano_log_bytes_full(TAG, lab, param->read.value, param->read.value_len);
+            nano_log_bpm_raw_scan(TAG, lab, param->read.value, param->read.value_len);
+            uint16_t bpm = 0;
+            if (nano_try_parse_bpm_notify(param->read.value, param->read.value_len, &bpm) ||
+                nano_parse_bpm(param->read.value, param->read.value_len, &bpm)) {
+                ESP_LOGI(TAG, "BPM %u (GATT read)", (unsigned)bpm);
+                nano_state_on_bpm_found(bpm);
+            }
+        }
+        s_bpm_read_next++;
+        bpm_gatt_read_next();
+        break;
+    }
+
     case ESP_GATTC_DISCONNECT_EVT:
         ESP_LOGW(TAG, "Disconnected reason=0x%02x — will rescan", param->disconnect.reason);
         s_ble.connected = false;
@@ -823,6 +867,37 @@ esp_err_t nano_ble_write_c304(const char *label, const uint8_t *data, size_t len
         ESP_LOGE(TAG, "write_char failed: %s", esp_err_to_name(err));
     }
     return err;
+}
+
+static void bpm_gatt_read_next(void)
+{
+    if (!nano_ble_connected() || s_bpm_read_next >= s_bpm_read_count) {
+        return;
+    }
+    uint16_t handle = s_bpm_read_handles[s_bpm_read_next];
+    ESP_LOGI(TAG, "BPM hunt: GATT read handle=%u (%u/%u)", handle,
+             (unsigned)(s_bpm_read_next + 1), (unsigned)s_bpm_read_count);
+    esp_err_t err = esp_ble_gattc_read_char(s_ble.gattc_if, s_ble.conn_id, handle,
+                                           ESP_GATT_AUTH_REQ_NONE);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "BPM hunt: read_char failed: %s", esp_err_to_name(err));
+        s_bpm_read_next++;
+        bpm_gatt_read_next();
+    }
+}
+
+void nano_ble_read_bpm_probe_chars(void)
+{
+    if (!nano_ble_connected()) {
+        ESP_LOGW(TAG, "BPM hunt: GATT read skipped (not connected)");
+        return;
+    }
+    if (s_bpm_read_count == 0) {
+        ESP_LOGW(TAG, "BPM hunt: no readable C300/C301/C307 handles");
+        return;
+    }
+    s_bpm_read_next = 0;
+    bpm_gatt_read_next();
 }
 
 esp_err_t nano_ble_start(void)

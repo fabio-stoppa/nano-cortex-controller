@@ -24,7 +24,7 @@ static const char *TAG = "nano_state";
 #define REFRESH_DEBOUNCE_US (800 * 1000)
 #define REFRESH_MIN_INTERVAL_US (1500 * 1000)
 #define LIVE_POLL_INTERVAL_US (15000 * 1000)
-#define SNIFF_MIN_INTERVAL_US (500 * 1000)
+#define SNIFF_MIN_INTERVAL_US (100 * 1000)
 #define TUNER_FAST_SYNC_US (400 * 1000)
 #define TUNER_WATCH_POLL_US (5000 * 1000)
 #define STATE_RX_TIMEOUT_US (5000 * 1000)
@@ -37,6 +37,7 @@ static uint8_t *s_state_buf;
 static uint8_t *s_fe_buf;
 static size_t s_state_len;
 static size_t s_fe_len;
+static size_t s_last_bpm_hunt_len;
 static nano_preset_catalog_t s_preset_catalog;
 static esp_timer_handle_t s_parse_timer;
 static esp_timer_handle_t s_sync_timer;
@@ -51,10 +52,20 @@ static bool s_live_poll_active;
 static bool s_tuner_fast_sync_armed;
 static bool s_tuner_watch_running;
 static bool s_pending_tuner_sync;
+static bool s_bpm_known;
 static char s_state_probe_label[STATE_PROBE_LABEL_MAX];
 static TaskHandle_t s_parse_task;
 
 static void parse_state_buffer(void);
+
+void nano_state_on_bpm_found(uint16_t bpm)
+{
+    if (bpm < 20 || bpm > 400) {
+        return;
+    }
+    s_bpm_known = true;
+    nano_ui_set_bpm(bpm, true);
+}
 
 static void append_fe_payload(const uint8_t *data, size_t len)
 {
@@ -78,6 +89,14 @@ static void finish_fe_capture(void)
             ESP_LOGI(TAG, "Preset catalog loaded (%u names)", (unsigned)s_preset_catalog.count);
         } else {
             ESP_LOGW(TAG, "FE metadata parse found no preset names (%u bytes)", (unsigned)s_fe_len);
+        }
+
+        uint16_t fe_bpm = 0;
+        if (nano_parse_bpm(s_fe_buf, s_fe_len, &fe_bpm)) {
+            ESP_LOGI(TAG, "BPM %u (field 56 in FE metadata)", (unsigned)fe_bpm);
+            nano_state_on_bpm_found(fe_bpm);
+        } else {
+            nano_log_bpm_raw_scan(TAG, "FE metadata", s_fe_buf, s_fe_len);
         }
     }
     s_fe_len = 0;
@@ -228,13 +247,21 @@ static void parse_state_buffer(void)
         return;
     }
 
-    const char *label = s_state_probe_label[0] ? s_state_probe_label : "ROUTINE";
+    char label[STATE_PROBE_LABEL_MAX];
+    if (s_state_probe_label[0]) {
+        strncpy(label, s_state_probe_label, sizeof(label) - 1);
+        label[sizeof(label) - 1] = '\0';
+    } else {
+        strncpy(label, "ROUTINE", sizeof(label) - 1);
+        label[sizeof(label) - 1] = '\0';
+    }
+    s_state_probe_label[0] = '\0';
+
     size_t buf_len = s_state_len;
     ESP_LOGI(TAG, "Parsing preset state (%u bytes) [%s]", (unsigned)buf_len, label);
     if (strcmp(label, "INITIAL") == 0) {
         nano_log_proto_fields(TAG, label, s_state_buf, buf_len);
     }
-    s_state_probe_label[0] = '\0';
 
     if (nano_parse_amp(s_state_buf, buf_len, &s_amp)) {
         nano_log_amp(TAG, &s_amp);
@@ -267,9 +294,18 @@ static void parse_state_buffer(void)
 
     uint16_t bpm = 0;
     if (nano_parse_bpm(s_state_buf, buf_len, &bpm)) {
-        nano_ui_set_bpm(bpm, true);
+        ESP_LOGI(TAG, "BPM %u (field 56) [%s]", (unsigned)bpm, label);
+        nano_state_on_bpm_found(bpm);
     } else {
-        nano_ui_set_bpm(0, false);
+        /* Short dumps omit f56 — keep last live tap-tempo BPM instead of clearing. */
+        ESP_LOGI(TAG, "BPM field 56 absent len=%u [%s]", (unsigned)buf_len, label);
+        if (strcmp(label, "INITIAL") == 0 || buf_len != s_last_bpm_hunt_len) {
+            nano_log_bpm_hunt(TAG, s_state_buf, buf_len);
+            s_last_bpm_hunt_len = buf_len;
+        }
+        if (strcmp(label, "INITIAL") == 0 && !s_bpm_known) {
+            ESP_LOGW(TAG, "BPM still unknown after INITIAL (FE nested f56 should supply it)");
+        }
     }
 
     maybe_retry_tuner_sync();
@@ -390,10 +426,20 @@ static bool is_fe_stream(const uint8_t *data, size_t len, nano_rx_mode_t mode)
     return false;
 }
 
-/** Preset state stream uses FE 41; metadata uses FE 01 and must not enter the state buffer. */
+/** Preset state: FE 41 stream chunks, or single-packet dump with byte1 == 0xC1. */
 static bool is_state_stream_chunk(const uint8_t *data, size_t len)
 {
-    return len >= 3 && data[0] == 0xFE && data[1] == 0x41;
+    if (len < 3) {
+        return false;
+    }
+    if (data[0] == 0xFE && data[1] == 0x41) {
+        return true;
+    }
+    /* Desktop decoder: full current-state dump notifications use second byte 0xC1. */
+    if (data[1] == 0xC1) {
+        return true;
+    }
+    return false;
 }
 
 static void sniff_unknown_c305(const uint8_t *data, size_t len)
@@ -403,7 +449,9 @@ static void sniff_unknown_c305(const uint8_t *data, size_t len)
         return;
     }
     s_last_sniff_us = now;
-    nano_log_bytes(TAG, "C305 sniff (turn a knob — capture this)", data, len > 32 ? 32 : len);
+    ESP_LOGI(TAG, "BPM hunt: unknown C305 len=%u lead=%02X %02X", (unsigned)len,
+             len > 0 ? data[0] : 0, len > 1 ? data[1] : 0);
+    nano_log_bytes_full(TAG, "BPM hunt C305", data, len > 64 ? 64 : len);
 }
 
 static bool apply_knob_update(uint8_t knob_id, uint8_t raw, const char *source)
@@ -514,6 +562,7 @@ static void reset_amp_sync(void)
     s_tuner_watch_running = false;
     s_pending_tuner_sync = false;
     s_state_rx_since_us = 0;
+    s_bpm_known = false;
     memset(&s_amp, 0, sizeof(s_amp));
     if (s_parse_timer) {
         esp_timer_stop(s_parse_timer);
@@ -541,6 +590,7 @@ void nano_state_reset(void)
     reset_amp_sync();
     nano_tuner_reset();
     nano_fx_reset();
+    nano_ui_set_bpm(0, false);
 }
 
 void nano_rx_mode_set(nano_rx_mode_t mode)
@@ -604,6 +654,9 @@ void nano_state_feed_c305(const uint8_t *data, size_t len)
             s_mode = NANO_RX_CURRENT;
             s_state_rx_since_us = esp_timer_get_time();
         }
+        if (data[1] == 0xC1) {
+            ESP_LOGI(TAG, "BPM hunt: C1 state dump chunk len=%u", (unsigned)len);
+        }
         append_state_payload(data, len);
         schedule_parse();
         return;
@@ -627,6 +680,14 @@ void nano_state_feed_c305(const uint8_t *data, size_t len)
         return;
     }
 
+    uint16_t live_bpm = 0;
+    if (nano_try_parse_bpm_notify(data, len, &live_bpm)) {
+        ESP_LOGI(TAG, "BPM %u (live tap notify)", (unsigned)live_bpm);
+        s_bpm_known = true;
+        nano_ui_bpm_tap(live_bpm);
+        return;
+    }
+
     if (try_inline_amp_update(data, len)) {
         return;
     }
@@ -643,7 +704,9 @@ void nano_state_feed_c305(const uint8_t *data, size_t len)
         sniff_unknown_c305(data, len);
         schedule_refresh();
     } else {
-        ESP_LOGD(TAG, "Other C305 packet (%u bytes), first=0x%02X", (unsigned)len, data[0]);
+        ESP_LOGI(TAG, "BPM hunt: other C305 while mode=%d len=%u lead=%02X", (int)s_mode,
+                 (unsigned)len, data[0]);
+        nano_log_bytes_full(TAG, "BPM hunt other C305", data, len > 48 ? 48 : len);
     }
 }
 

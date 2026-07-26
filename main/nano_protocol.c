@@ -1,5 +1,6 @@
 #include "nano_protocol.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 
 #include "esp_log.h"
@@ -57,6 +58,22 @@ size_t nano_post_save_refresh(uint8_t *buf, size_t cap)
         0x0C, 0xC0, 0x08, 0x03, 0x18, 0x00, 0x20, 0x01, 0x28, 0x01, 0x01, 0x00, 0x00, 0x00,
     };
     return copy_fixed(pkt, sizeof(pkt), buf, cap);
+}
+
+size_t nano_bpm_probe_payload(unsigned step, uint8_t *buf, size_t cap, bool *out_expects_state_dump)
+{
+    /*
+     * DO NOT send trailer 0x91 frames — they enter tap-tempo and can rewrite BPM
+     * (boot probe 08 C0 08 03 18 01 91 set the pedal to 240). BPM is read from
+     * nested field 56 in FE metadata instead. No active C304 probes.
+     */
+    (void)step;
+    (void)buf;
+    (void)cap;
+    if (out_expects_state_dump) {
+        *out_expects_state_dump = false;
+    }
+    return 0;
 }
 
 size_t nano_amp_knob_payload(nano_knob_t knob, uint8_t raw_value, uint8_t *buf, size_t cap)

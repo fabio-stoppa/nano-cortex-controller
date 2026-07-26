@@ -22,6 +22,12 @@ void nano_ui_set_ble_connected(bool connected);
 /** Update header tempo readout (safe from any task). */
 void nano_ui_set_bpm(uint16_t bpm, bool valid);
 
+/**
+ * Live tap-tempo notify: update BPM and rephase the beat blinker to this instant.
+ * Safe from any task.
+ */
+void nano_ui_bpm_tap(uint16_t bpm);
+
 /** Update header preset name (safe from any task). */
 void nano_ui_set_preset_name(const char *name);
 

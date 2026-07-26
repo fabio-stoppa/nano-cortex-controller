@@ -22,6 +22,9 @@ bool nano_ble_scanning(void);
 /** Write payload to C304 (no-op if not connected). */
 esp_err_t nano_ble_write_c304(const char *label, const uint8_t *data, size_t len);
 
+/** Read C300/C301/C307 (and log hex) — boot BPM hunt. */
+void nano_ble_read_bpm_probe_chars(void);
+
 /** Drop pending C305 packets (call on disconnect). */
 void nano_ble_drain_rx_queue(void);
 

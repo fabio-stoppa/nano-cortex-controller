@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,6 +21,13 @@ size_t nano_fe_metadata_request(uint8_t *buf, size_t cap);
 size_t nano_request_current_state(uint8_t *buf, size_t cap);
 size_t nano_preset_change_ack(uint8_t *buf, size_t cap);
 size_t nano_post_save_refresh(uint8_t *buf, size_t cap);
+
+/**
+ * Boot BPM hunt frames — intentionally empty.
+ * Trailer 0x91 writes enter tap-tempo and can rewrite BPM; do not probe via C304.
+ * BPM is read from nested field 56 in FE metadata.
+ */
+size_t nano_bpm_probe_payload(unsigned step, uint8_t *buf, size_t cap, bool *out_expects_state_dump);
 
 /** Port of setAmpKnob() in index.html. */
 size_t nano_amp_knob_payload(nano_knob_t knob, uint8_t raw_value, uint8_t *buf, size_t cap);

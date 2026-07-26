@@ -48,9 +48,9 @@ if [[ "$MODE" == "tuner" ]]; then
 fi
 
 if [[ "$MODE" == "hunt" ]]; then
-  echo "==> Monitor (BLE hunt: nano_ble + nano_tuner + nano_state INFO)..."
-  echo "    Look for: C306 INDICATE + CCCD 0x0002, GATT RX C306/BLE-MIDI, C305 quiet"
-  idf.py -p "$PORT" monitor --print-filter="nano_ble:I nano_tuner:I nano_state:I *:W"
+  echo "==> Monitor (BPM/BLE hunt: nano_state + nano_ble + nano_tuner INFO)"
+  echo "    Look for: 'BPM hunt:', field 56, C1 dump chunks, suspicious amp-hw / unknown C305"
+  idf.py -p "$PORT" monitor --print-filter="nano_ble:I nano_tuner:I nano_state:I nano:I *:W"
   exit 0
 fi
 
