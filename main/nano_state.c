@@ -177,6 +177,15 @@ static void start_live_poll(void)
 
 static void send_state_request(const char *label, bool from_initial_sync)
 {
+    /* Preset FE streams stomp the live pitch mailbox — never poll while tuning. */
+    const nano_tuner_t *tuner = nano_tuner_get();
+    if (!from_initial_sync && tuner && tuner->active) {
+        if (label && strstr(label, "Tuner") != NULL) {
+            s_pending_tuner_sync = true;
+        }
+        return;
+    }
+
     if (s_mode == NANO_RX_CURRENT) {
         check_state_rx_timeout();
         if (s_mode == NANO_RX_CURRENT) {
@@ -307,6 +316,10 @@ static void refresh_timer_cb(void *arg)
 static void poll_timer_cb(void *arg)
 {
     (void)arg;
+    const nano_tuner_t *tuner = nano_tuner_get();
+    if (tuner && tuner->active) {
+        return;
+    }
     if (s_mode == NANO_RX_IDLE && s_amp.valid) {
         request_current_state_now("Live amp poll");
     }
@@ -315,6 +328,11 @@ static void poll_timer_cb(void *arg)
 static void tuner_fast_sync_timer_cb(void *arg)
 {
     (void)arg;
+    const nano_tuner_t *tuner = nano_tuner_get();
+    if (tuner && tuner->active) {
+        s_pending_tuner_sync = true;
+        return;
+    }
     if (s_mode != NANO_RX_IDLE) {
         s_pending_tuner_sync = true;
         return;
@@ -546,12 +564,37 @@ void nano_state_feed_c305(const uint8_t *data, size_t len)
 
     check_state_rx_timeout();
 
+    const nano_tuner_t *tuner = nano_tuner_get();
+    bool tuner_live = tuner && tuner->active;
+    if (tuner_live) {
+        nano_tuner_note_c305_rx();
+    }
+
+    /*
+     * Pitch / tuner frames are length-prefixed: <len> C0 08 01 22 …
+     * Natural mid-range 22/01 often uses len=0x10 — do NOT treat that as preset ACK.
+     */
+    if (len >= 5 && data[1] == 0xC0 && data[2] == 0x08 && data[3] == 0x01 && data[4] == 0x22) {
+        if (nano_tuner_feed_c305(data, len)) {
+            return;
+        }
+    }
+
     if (len >= 2 && data[0] == 0x10 && data[1] == 0xC0) {
-        ESP_LOGD(TAG, "Preset change ACK");
+        if (tuner_live) {
+            ESP_LOGD(TAG, "C305 diverted (preset ACK) len=%u", (unsigned)len);
+        } else {
+            ESP_LOGD(TAG, "Preset change ACK");
+        }
         return;
     }
 
+    /* While tuner is live, ignore preset/amp/FX traffic — pitch must stay snappy. */
     if (is_state_stream_chunk(data, len)) {
+        if (tuner_live) {
+            ESP_LOGD(TAG, "C305 dropped (state stream FE 41) while tuner live len=%u", (unsigned)len);
+            return;
+        }
         if (s_mode == NANO_RX_METADATA) {
             ESP_LOGD(TAG, "State stream chunk before request (%u bytes)", (unsigned)len);
             return;
@@ -567,10 +610,20 @@ void nano_state_feed_c305(const uint8_t *data, size_t len)
     }
 
     if (is_fe_stream(data, len, s_mode)) {
+        if (tuner_live) {
+            ESP_LOGD(TAG, "C305 dropped (FE stream) while tuner live len=%u", (unsigned)len);
+            return;
+        }
         if (s_mode == NANO_RX_METADATA) {
             append_fe_payload(data, len);
             return;
         }
+        return;
+    }
+
+    if (tuner_live) {
+        /* Amp/FX updates wait until tuner exits — do not spend cycles on them. */
+        ESP_LOGD(TAG, "C305 unhandled while tuner live len=%u lead=0x%02X", (unsigned)len, data[0]);
         return;
     }
 
@@ -719,6 +772,20 @@ void nano_state_tuner_watch_update(bool tuner_active)
         if (s_tuner_watch_running) {
             esp_timer_stop(s_tuner_watch_timer);
             s_tuner_watch_running = false;
+        }
+        if (s_tuner_fast_sync_timer) {
+            esp_timer_stop(s_tuner_fast_sync_timer);
+        }
+        if (s_refresh_timer) {
+            esp_timer_stop(s_refresh_timer);
+        }
+        /* Abort an in-flight FE/state capture so leftover chunks can't block pitch. */
+        if (s_mode == NANO_RX_CURRENT) {
+            ESP_LOGI(TAG, "Aborting preset state RX — tuner live");
+            s_mode = NANO_RX_IDLE;
+            s_state_len = 0;
+            s_state_rx_since_us = 0;
+            s_state_probe_label[0] = '\0';
         }
         return;
     }

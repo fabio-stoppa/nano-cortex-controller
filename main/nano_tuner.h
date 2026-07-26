@@ -28,7 +28,25 @@ void nano_tuner_tick(void);
 /** Parse tuner pitch / on / off from a C305 packet. Returns true if handled. */
 bool nano_tuner_feed_c305(const uint8_t *data, size_t len);
 
+/** Apply pitch immediately from the GATT notify path (no worker hop). */
+bool nano_tuner_feed_pitch_fast(const uint8_t *data, size_t len);
+
+/** Mark that any C305 arrived while hunting (keeps gap timer honest). */
+void nano_tuner_note_c305_rx(void);
+
+/** ms since the last pitch packet was applied (large => BLE/UI backlog). */
+int nano_tuner_pitch_age_ms(void);
+
+/** ms between the last two pitch packets (device stream pacing). */
+int nano_tuner_pitch_dt_ms(void);
+
+/** Nearest-note residual in cents (fractional, for snappy UI). */
+float nano_tuner_cents_f(void);
+
 const nano_tuner_t *nano_tuner_get(void);
+
+/** Consistent copy for UI thread (seqlock). */
+void nano_tuner_snapshot(nano_tuner_t *out);
 
 /** Human-readable mute/bypass label matching the Nano pedal (not raw wire enum). */
 const char *nano_tuner_route_label(nano_tuner_route_t route);

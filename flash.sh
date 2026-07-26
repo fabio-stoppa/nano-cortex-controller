@@ -5,48 +5,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
-PORT="${1:-}"
-MODE="${2:-}"
-if [[ -z "$PORT" ]]; then
-  PORT="$(ls /dev/ttyACM* 2>/dev/null | head -1 || true)"
-fi
-if [[ -z "$PORT" ]]; then
-  echo "ERROR: No /dev/ttyACM* port found. Plug in the board and retry."
-  exit 1
-fi
-echo "Using port: $PORT"
-
-if [[ "$MODE" == "tuner" ]]; then
-  if [[ -z "${IDF_PATH:-}" ]]; then
-    LOCAL_IDF="$ROOT/.embuild/espressif/esp-idf/v5.3.2"
-    if [[ -f "$LOCAL_IDF/export.sh" ]]; then
-      export IDF_TOOLS_PATH="$ROOT/.embuild/espressif"
-      # shellcheck disable=SC1091
-      source "$LOCAL_IDF/export.sh"
-    fi
+source_idf() {
+  if [[ -n "${IDF_PATH:-}" ]]; then
+    return 0
   fi
-  echo "==> Monitor (nano_tuner INFO+, others WARN+ only)..."
-  idf.py -p "$PORT" monitor --print-filter="nano_tuner:I *:W"
-  exit 0
-fi
-
-if [[ "$MODE" == "monitor" ]]; then
-  if [[ -z "${IDF_PATH:-}" ]]; then
-    LOCAL_IDF="$ROOT/.embuild/espressif/esp-idf/v5.3.2"
-    if [[ -f "$LOCAL_IDF/export.sh" ]]; then
-      export IDF_TOOLS_PATH="$ROOT/.embuild/espressif"
-      # shellcheck disable=SC1091
-      source "$LOCAL_IDF/export.sh"
-    fi
-  fi
-  echo "NOTE: monitor-only — not building or flashing. Run './flash.sh $PORT' first to update firmware."
-  echo "==> Monitor (full INFO logs)..."
-  idf.py -p "$PORT" monitor
-  exit 0
-fi
-
-if [[ -z "${IDF_PATH:-}" ]]; then
-  # Reuse ESP-IDF from a prior Rust/embuild install if present
   LOCAL_IDF="$ROOT/.embuild/espressif/esp-idf/v5.3.2"
   if [[ -f "$LOCAL_IDF/export.sh" ]]; then
     export IDF_TOOLS_PATH="$ROOT/.embuild/espressif"
@@ -59,7 +21,46 @@ if [[ -z "${IDF_PATH:-}" ]]; then
     echo "ERROR: ESP-IDF not found. Install ESP-IDF v5.3+ and run export.sh, or build once with Rust embuild."
     exit 1
   fi
+}
+
+PORT="${1:-}"
+MODE="${2:-}"
+if [[ -z "$PORT" ]]; then
+  PORT="$(ls /dev/ttyACM* 2>/dev/null | head -1 || true)"
 fi
+if [[ -z "$PORT" ]]; then
+  echo "ERROR: No /dev/ttyACM* port found. Plug in the board and retry."
+  exit 1
+fi
+echo "Using port: $PORT"
+
+if [[ "$MODE" == "tuner" || "$MODE" == "hunt" || "$MODE" == "monitor" ]]; then
+  source_idf
+  echo "NOTE: '$MODE' is monitor-only — firmware is NOT updated."
+  echo "      To flash first, run:  ./flash.sh $PORT"
+  echo ""
+fi
+
+if [[ "$MODE" == "tuner" ]]; then
+  echo "==> Monitor (nano_tuner INFO+, others WARN+ only)..."
+  idf.py -p "$PORT" monitor --print-filter="nano_tuner:I *:W"
+  exit 0
+fi
+
+if [[ "$MODE" == "hunt" ]]; then
+  echo "==> Monitor (BLE hunt: nano_ble + nano_tuner + nano_state INFO)..."
+  echo "    Look for: C306 INDICATE + CCCD 0x0002, GATT RX C306/BLE-MIDI, C305 quiet"
+  idf.py -p "$PORT" monitor --print-filter="nano_ble:I nano_tuner:I nano_state:I *:W"
+  exit 0
+fi
+
+if [[ "$MODE" == "monitor" ]]; then
+  echo "==> Monitor (full INFO logs)..."
+  idf.py -p "$PORT" monitor
+  exit 0
+fi
+
+source_idf
 
 if [[ ! -f sdkconfig ]]; then
   echo "==> Setting target esp32s3..."
@@ -79,10 +80,13 @@ echo "==> Flashing to $PORT..."
 idf.py -p "$PORT" flash
 
 echo ""
-echo "Done! Monitor (full logs):"
+echo "Flash complete. Boot should log:  nano: firmware build ..."
+echo "Monitor (full logs):"
 echo "  ./flash.sh $PORT monitor"
 echo "Tuner-only monitor:"
 echo "  ./flash.sh $PORT tuner"
+echo "BLE hunt (all GATT notifies + diverted C305):"
+echo "  ./flash.sh $PORT hunt"
 echo "Or:"
 echo "  idf.py -p $PORT monitor"
 echo "Or miniterm:"

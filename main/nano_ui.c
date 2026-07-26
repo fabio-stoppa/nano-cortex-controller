@@ -256,7 +256,11 @@ typedef struct {
 static param_gesture_t s_param_gesture;
 
 static QueueHandle_t s_ui_wake_queue;
+static lv_timer_t *s_ui_dispatch_timer;
 static volatile uint8_t s_ui_dispatch_mask;
+
+/** Keep LVGL awake for live tuner (~12.5 Hz pitch → paint a bit faster). */
+#define UI_DISPATCH_PERIOD_MS 8
 
 static SemaphoreHandle_t s_ui_build_done;
 
@@ -286,6 +290,7 @@ static void async_apply_preset_cb(void *arg);
 static void async_apply_bpm_cb(void *arg);
 static void async_apply_fx_cb(void *arg);
 static void show_content_for_chain(chain_slot_t slot);
+static void show_tuner_view(bool on);
 static void update_chain_blocks_locked(const nano_amp_t *amp, const nano_fx_state_t *fx);
 static ui_icon_kind_t category_to_icon(nano_fx_category_t cat);
 static lv_color_t icon_kind_color(ui_icon_kind_t kind);
@@ -350,40 +355,44 @@ static void apply_tuner_locked(const nano_tuner_t *tuner)
     }
 
     if (!tuner || !tuner->active) {
-        lv_label_set_text(s_tuner_note, "-");
-        lv_label_set_text(s_tuner_cents, "Tuner off");
-        lv_label_set_text(s_tuner_state, s_ble_connected ? "Ready" : "Not connected");
+        ui_set_label_if_changed(s_tuner_note, "-");
+        ui_set_label_if_changed(s_tuner_cents, "Tuner off");
+        ui_set_label_if_changed(s_tuner_state, s_ble_connected ? "Ready" : "Not connected");
         lv_label_set_text(lv_obj_get_child(s_tuner_btn, 0), "ON");
-        lv_label_set_text(s_tuner_hint, "Hold right footswitch to start. OFF works over BLE.");
+        ui_set_label_if_changed(s_tuner_hint, "Hold right footswitch to start. OFF works over BLE.");
         return;
     }
 
     if (tuner->has_pitch) {
         char note_buf[8];
         note_label(note_buf, sizeof(note_buf), tuner->note);
-        lv_label_set_text(s_tuner_note, note_buf);
+        ui_set_label_if_changed(s_tuner_note, note_buf);
 
         char cents_buf[24];
-        if (tuner->cents > 0) {
-            snprintf(cents_buf, sizeof(cents_buf), "+%d cents", tuner->cents);
-        } else {
-            snprintf(cents_buf, sizeof(cents_buf), "%d cents", tuner->cents);
-        }
-        lv_label_set_text(s_tuner_cents, cents_buf);
+        float cf = nano_tuner_cents_f();
+        snprintf(cents_buf, sizeof(cents_buf), "%+.1f cents", cf);
+        ui_set_label_if_changed(s_tuner_cents, cents_buf);
     } else {
-        lv_label_set_text(s_tuner_note, "...");
-        lv_label_set_text(s_tuner_cents, "Listening...");
+        ui_set_label_if_changed(s_tuner_note, "...");
+        ui_set_label_if_changed(s_tuner_cents, "Listening...");
     }
 
-    if (tuner->route == NANO_TUNER_ROUTE_MUTE || tuner->route == NANO_TUNER_ROUTE_BYPASS) {
-        char state_buf[32];
-        snprintf(state_buf, sizeof(state_buf), "Tuner active (%s)", nano_tuner_route_label(tuner->route));
-        lv_label_set_text(s_tuner_state, state_buf);
+    if (tuner->route != NANO_TUNER_ROUTE_UNKNOWN) {
+        char state_buf[48];
+        int age = nano_tuner_pitch_age_ms();
+        int dt = nano_tuner_pitch_dt_ms();
+        if (tuner->has_pitch && age >= 0) {
+            snprintf(state_buf, sizeof(state_buf), "%s · age %dms dt %dms",
+                     nano_tuner_route_label(tuner->route), age, dt >= 0 ? dt : 0);
+        } else {
+            snprintf(state_buf, sizeof(state_buf), "%s", nano_tuner_route_label(tuner->route));
+        }
+        ui_set_label_if_changed(s_tuner_state, state_buf);
     } else {
-        lv_label_set_text(s_tuner_state, "Tuner active");
+        ui_set_label_if_changed(s_tuner_state, "Tuner active");
     }
     lv_label_set_text(lv_obj_get_child(s_tuner_btn, 0), "OFF");
-    lv_label_set_text(s_tuner_hint, "Tap OFF to exit, or use the Nano footswitch.");
+    ui_set_label_if_changed(s_tuner_hint, "Tap OFF to exit, or use the Nano footswitch.");
 }
 
 static void async_apply_amp_cb(void *arg)
@@ -395,9 +404,55 @@ static void async_apply_amp_cb(void *arg)
 static void async_apply_tuner_cb(void *arg)
 {
     (void)arg;
+    /* Mode on/off still arrives via snapshot; pitch is sampled live below. */
     if (s_async_tuner_pending) {
-        apply_tuner_locked(&s_async_tuner);
+        nano_tuner_t t = s_async_tuner;
         s_async_tuner_pending = false;
+        apply_tuner_locked(&t);
+        if (t.active && !s_tuner_view) {
+            show_tuner_view(true);
+        } else if (!t.active && s_tuner_view) {
+            show_tuner_view(false);
+        }
+    }
+}
+
+static void paint_tuner_live_locked(void)
+{
+    if (!s_tuner_note || !s_tuner_view) {
+        return;
+    }
+
+    nano_tuner_t t;
+    nano_tuner_snapshot(&t);
+    if (!t.active) {
+        return;
+    }
+
+    /* Pitch-only path — do not touch btn/hint every tick (was forcing redraws). */
+    if (t.has_pitch) {
+        char note_buf[8];
+        note_label(note_buf, sizeof(note_buf), t.note);
+        ui_set_label_if_changed(s_tuner_note, note_buf);
+
+        char cents_buf[24];
+        snprintf(cents_buf, sizeof(cents_buf), "%+.1f cents", nano_tuner_cents_f());
+        ui_set_label_if_changed(s_tuner_cents, cents_buf);
+
+        char state_buf[48];
+        int age = nano_tuner_pitch_age_ms();
+        int dt = nano_tuner_pitch_dt_ms();
+        if (t.route != NANO_TUNER_ROUTE_UNKNOWN) {
+            snprintf(state_buf, sizeof(state_buf), "%s · age %dms dt %dms",
+                     nano_tuner_route_label(t.route), age >= 0 ? age : 0, dt >= 0 ? dt : 0);
+        } else {
+            snprintf(state_buf, sizeof(state_buf), "age %dms dt %dms", age >= 0 ? age : 0,
+                     dt >= 0 ? dt : 0);
+        }
+        ui_set_label_if_changed(s_tuner_state, state_buf);
+    } else {
+        ui_set_label_if_changed(s_tuner_note, "...");
+        ui_set_label_if_changed(s_tuner_cents, "Listening...");
     }
 }
 
@@ -440,7 +495,11 @@ static void async_apply_ble_cb(void *arg)
     s_ble_connected = s_async_ble_connected;
     refresh_ble_icon_locked();
     set_slider_enabled_locked(s_ble_connected);
-    apply_tuner_locked(nano_tuner_get());
+    if (s_async_tuner_pending) {
+        apply_tuner_locked(&s_async_tuner);
+    } else {
+        apply_tuner_locked(nano_tuner_get());
+    }
     apply_fx_locked(s_async_fx_pending ? &s_async_fx : nano_fx_get());
 }
 
@@ -448,7 +507,6 @@ static void ui_run_pending_updates(uint8_t mask)
 {
     if ((mask & UI_DISP_BLE) && s_async_ble_pending) {
         async_apply_ble_cb(NULL);
-        return;
     }
     if (mask & UI_DISP_AMP) {
         async_apply_amp_cb(NULL);
@@ -474,16 +532,50 @@ void nano_ui_dispatch_if_pending(void)
     }
 
     ui_wake_t wake;
-    if (xQueueReceive(s_ui_wake_queue, &wake, 0) != pdTRUE) {
-        return;
-    }
-
-    while (xQueueReceive(s_ui_wake_queue, &wake, 0) == pdTRUE) {
+    bool have_wake = xQueueReceive(s_ui_wake_queue, &wake, 0) == pdTRUE;
+    if (have_wake) {
+        while (xQueueReceive(s_ui_wake_queue, &wake, 0) == pdTRUE) {
+        }
     }
 
     uint8_t mask = s_ui_dispatch_mask;
+    if (mask == 0) {
+        /* Wake can be lost when the queue is full; still paint hot pending snapshots. */
+        if (s_async_tuner_pending) {
+            mask = UI_DISP_TUNER;
+        } else if (s_async_ble_pending) {
+            mask = UI_DISP_BLE;
+        } else if (s_async_fx_pending) {
+            mask = UI_DISP_FX;
+        } else if (s_async_bpm_pending) {
+            mask = UI_DISP_BPM;
+        } else if (s_async_preset_pending) {
+            mask = UI_DISP_PRESET;
+        } else {
+            return;
+        }
+    }
+
     s_ui_dispatch_mask = 0;
     ui_run_pending_updates(mask);
+}
+
+static void ui_dispatch_timer_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    nano_ui_dispatch_if_pending();
+
+    nano_tuner_t t;
+    nano_tuner_snapshot(&t);
+    if (t.active && !s_tuner_view) {
+        show_tuner_view(true);
+        apply_tuner_locked(&t);
+    } else if (!t.active && s_tuner_view) {
+        show_tuner_view(false);
+        apply_tuner_locked(&t);
+    }
+
+    paint_tuner_live_locked();
 }
 
 static void ui_request_dispatch(void)
@@ -498,9 +590,17 @@ static void ui_request_dispatch(void)
 
 static void ui_init_dispatch(void)
 {
-    s_ui_wake_queue = xQueueCreate(8, sizeof(ui_wake_t));
     if (!s_ui_wake_queue) {
-        ESP_LOGE(TAG, "UI wake queue create failed");
+        s_ui_wake_queue = xQueueCreate(16, sizeof(ui_wake_t));
+        if (!s_ui_wake_queue) {
+            ESP_LOGE(TAG, "UI wake queue create failed");
+        }
+    }
+    if (!s_ui_dispatch_timer) {
+        s_ui_dispatch_timer = lv_timer_create(ui_dispatch_timer_cb, UI_DISPATCH_PERIOD_MS, NULL);
+        if (!s_ui_dispatch_timer) {
+            ESP_LOGE(TAG, "UI dispatch timer create failed");
+        }
     }
 }
 

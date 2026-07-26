@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -908,6 +909,59 @@ static void fx_param_range_impl(const char *name, float *min_out, float *max_out
     }
 }
 
+static const char *semitone_interval_abbr(int semitones)
+{
+    switch (abs(semitones)) {
+    case 0:
+        return "Unison";
+    case 1:
+        return "m2nd";
+    case 2:
+        return "M2nd";
+    case 3:
+        return "m3rd";
+    case 4:
+        return "M3rd";
+    case 5:
+        return "P4th";
+    case 6:
+        return "TT";
+    case 7:
+        return "P5th";
+    case 8:
+        return "m6th";
+    case 9:
+        return "M6th";
+    case 10:
+        return "m7th";
+    case 11:
+        return "M7th";
+    case 12:
+        return "Oct";
+    default:
+        return NULL;
+    }
+}
+
+static void format_semitone_param(float display, char *buf, size_t cap)
+{
+    int semi = (int)(display + (display >= 0.f ? 0.5f : -0.5f));
+    const char *interval = semitone_interval_abbr(semi);
+
+    if (interval) {
+        if (semi > 0) {
+            snprintf(buf, cap, "+%d (%s)", semi, interval);
+        } else if (semi < 0) {
+            snprintf(buf, cap, "%d (%s)", semi, interval);
+        } else {
+            snprintf(buf, cap, "0 (%s)", interval);
+        }
+        return;
+    }
+
+    snprintf(buf, cap, "%d", semi);
+}
+
 float nano_fx_display_to_normalized(const char *param_name, float display)
 {
     float min_v, max_v, step;
@@ -947,6 +1001,11 @@ void nano_fx_format_param(const nano_fx_block_t *block, uint8_t param_index, cha
     }
 
     const char *name = block->model->param_names[param_index];
+    if (strstr(name, "Semitones")) {
+        format_semitone_param(p->display, buf, cap);
+        return;
+    }
+
     if (nano_fx_param_is_enum(name)) {
         int idx = (int)(p->display + 0.5f);
         int count = nano_fx_param_enum_count(name);
