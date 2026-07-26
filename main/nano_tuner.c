@@ -18,7 +18,7 @@ static const char *TAG = "nano_tuner";
 #define PITCH_MAGIC0 0x23
 #define PITCH_MAGIC1 0x2D
 #define RX_IGNORE_ACTIVE_US (400 * 1000)
-#define PITCH_STALE_US (2000 * 1000)
+#define PITCH_STALE_US (500 * 1000)
 #define PITCH_CENTS_MAX 1200.f
 #define PITCH_DISPLAY_EPS 0.8f
 #define PITCH_LOG_US (500 * 1000)

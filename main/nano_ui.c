@@ -1,5 +1,6 @@
 #include "nano_ui.h"
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -127,6 +128,14 @@ typedef struct {
 #define PARAM_CELL_GATE_TAG 0x200
 #define PARAM_CELL_GATE_ON_TAG 0x400
 #define UI_FONT_CELL      UI_FONT_MD
+#define TUNER_METER_W     560
+#define TUNER_METER_H     36
+#define TUNER_NEEDLE_W    8
+#define TUNER_CENTS_SPAN  50.f
+#define TUNER_IN_TUNE_CENTS 2.f
+#define TUNER_COLOR_OK    0x3DCC7A
+#define TUNER_COLOR_IDLE  0x606060
+#define TUNER_COLOR_NEEDLE 0xFFFFFF
 
 typedef struct {
     const char *label;
@@ -155,8 +164,10 @@ static bool s_ble_blink_on;
 static lv_obj_t *s_tuner_note;
 static lv_obj_t *s_tuner_cents;
 static lv_obj_t *s_tuner_state;
-static lv_obj_t *s_tuner_hint;
 static lv_obj_t *s_tuner_btn;
+static lv_obj_t *s_tuner_meter;
+static lv_obj_t *s_tuner_meter_center;
+static lv_obj_t *s_tuner_meter_needle;
 static amp_knob_ui_t s_knobs[KNOB_COUNT];
 static bool s_ui_sync;
 static bool s_ble_connected;
@@ -184,6 +195,9 @@ static lv_obj_t *s_header_bar;
 static lv_obj_t *s_preset_lbl;
 static lv_obj_t *s_chain_bar;
 static lv_obj_t *s_content_root;
+static lv_coord_t s_content_w_normal;
+static lv_coord_t s_content_x_normal;
+static lv_coord_t s_body_h;
 static lv_obj_t *s_amp_panel;
 static lv_obj_t *s_fx_panel;
 static lv_obj_t *s_tuner_panel;
@@ -303,12 +317,15 @@ static lv_coord_t calc_param_cell_height(lv_coord_t area_h, int rows);
 static lv_coord_t param_slider_width(void);
 static void style_param_grid_container(lv_obj_t *obj);
 static void sync_header_model_locked(const nano_fx_state_t *fx);
+static void refresh_preset_label_locked(void);
 static void style_fx_model_header_btn(lv_obj_t *btn);
 static void try_send_knob_locked(int idx, uint8_t raw, bool force);
 static void param_cell_event_cb(lv_event_t *e);
 static void apply_fx_param_locked(int i, const nano_fx_block_t *block);
 static void ui_set_label_if_changed(lv_obj_t *lbl, const char *txt);
 static void ui_set_slider_if_changed(lv_obj_t *slider, int val);
+static void paint_tuner_meter_locked(float cents_f, bool has_pitch);
+static void layout_chrome_for_tuner(bool tuner_on);
 
 static unsigned pct(uint8_t raw)
 {
@@ -326,6 +343,45 @@ static void note_label(char *buf, size_t cap, int8_t note)
         "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
     };
     snprintf(buf, cap, "%s", names[note]);
+}
+
+static void paint_tuner_meter_locked(float cents_f, bool has_pitch)
+{
+    if (!s_tuner_meter || !s_tuner_meter_needle) {
+        return;
+    }
+
+    float c = cents_f;
+    if (c > TUNER_CENTS_SPAN) {
+        c = TUNER_CENTS_SPAN;
+    } else if (c < -TUNER_CENTS_SPAN) {
+        c = -TUNER_CENTS_SPAN;
+    }
+
+    bool in_tune = has_pitch && fabsf(c) <= TUNER_IN_TUNE_CENTS;
+    lv_coord_t x;
+    lv_color_t color;
+    if (!has_pitch) {
+        color = lv_color_hex(TUNER_COLOR_IDLE);
+        x = (TUNER_METER_W - TUNER_NEEDLE_W) / 2;
+    } else {
+        float t = (c + TUNER_CENTS_SPAN) / (2.f * TUNER_CENTS_SPAN);
+        lv_coord_t travel = TUNER_METER_W - TUNER_NEEDLE_W;
+        x = (lv_coord_t)lroundf(t * (float)travel);
+        color = lv_color_hex(in_tune ? TUNER_COLOR_OK : TUNER_COLOR_NEEDLE);
+    }
+
+    if (lv_obj_get_x(s_tuner_meter_needle) != x) {
+        lv_obj_set_x(s_tuner_meter_needle, x);
+    }
+    lv_obj_set_style_bg_color(s_tuner_meter_needle, color, 0);
+    if (s_tuner_meter_center) {
+        lv_obj_set_style_bg_opa(s_tuner_meter_center, in_tune ? LV_OPA_80 : LV_OPA_30, 0);
+    }
+    if (s_tuner_note) {
+        lv_obj_set_style_text_color(s_tuner_note,
+                                    lv_color_hex(in_tune ? TUNER_COLOR_OK : 0xFFFFFF), 0);
+    }
 }
 
 static void tuner_btn_event_cb(lv_event_t *e)
@@ -356,10 +412,10 @@ static void apply_tuner_locked(const nano_tuner_t *tuner)
 
     if (!tuner || !tuner->active) {
         ui_set_label_if_changed(s_tuner_note, "-");
+        lv_obj_set_style_text_color(s_tuner_note, lv_color_hex(0xFFFFFF), 0);
         ui_set_label_if_changed(s_tuner_cents, "Tuner off");
-        ui_set_label_if_changed(s_tuner_state, s_ble_connected ? "Ready" : "Not connected");
+        paint_tuner_meter_locked(0.f, false);
         lv_label_set_text(lv_obj_get_child(s_tuner_btn, 0), "ON");
-        ui_set_label_if_changed(s_tuner_hint, "Hold right footswitch to start. OFF works over BLE.");
         return;
     }
 
@@ -368,31 +424,18 @@ static void apply_tuner_locked(const nano_tuner_t *tuner)
         note_label(note_buf, sizeof(note_buf), tuner->note);
         ui_set_label_if_changed(s_tuner_note, note_buf);
 
-        char cents_buf[24];
         float cf = nano_tuner_cents_f();
+        char cents_buf[24];
         snprintf(cents_buf, sizeof(cents_buf), "%+.1f cents", cf);
         ui_set_label_if_changed(s_tuner_cents, cents_buf);
+        paint_tuner_meter_locked(cf, true);
     } else {
         ui_set_label_if_changed(s_tuner_note, "...");
+        lv_obj_set_style_text_color(s_tuner_note, lv_color_hex(0xFFFFFF), 0);
         ui_set_label_if_changed(s_tuner_cents, "Listening...");
-    }
-
-    if (tuner->route != NANO_TUNER_ROUTE_UNKNOWN) {
-        char state_buf[48];
-        int age = nano_tuner_pitch_age_ms();
-        int dt = nano_tuner_pitch_dt_ms();
-        if (tuner->has_pitch && age >= 0) {
-            snprintf(state_buf, sizeof(state_buf), "%s · age %dms dt %dms",
-                     nano_tuner_route_label(tuner->route), age, dt >= 0 ? dt : 0);
-        } else {
-            snprintf(state_buf, sizeof(state_buf), "%s", nano_tuner_route_label(tuner->route));
-        }
-        ui_set_label_if_changed(s_tuner_state, state_buf);
-    } else {
-        ui_set_label_if_changed(s_tuner_state, "Tuner active");
+        paint_tuner_meter_locked(0.f, false);
     }
     lv_label_set_text(lv_obj_get_child(s_tuner_btn, 0), "OFF");
-    ui_set_label_if_changed(s_tuner_hint, "Tap OFF to exit, or use the Nano footswitch.");
 }
 
 static void async_apply_amp_cb(void *arg)
@@ -429,30 +472,21 @@ static void paint_tuner_live_locked(void)
         return;
     }
 
-    /* Pitch-only path — do not touch btn/hint every tick (was forcing redraws). */
     if (t.has_pitch) {
         char note_buf[8];
         note_label(note_buf, sizeof(note_buf), t.note);
         ui_set_label_if_changed(s_tuner_note, note_buf);
 
+        float cf = nano_tuner_cents_f();
         char cents_buf[24];
-        snprintf(cents_buf, sizeof(cents_buf), "%+.1f cents", nano_tuner_cents_f());
+        snprintf(cents_buf, sizeof(cents_buf), "%+.1f cents", cf);
         ui_set_label_if_changed(s_tuner_cents, cents_buf);
-
-        char state_buf[48];
-        int age = nano_tuner_pitch_age_ms();
-        int dt = nano_tuner_pitch_dt_ms();
-        if (t.route != NANO_TUNER_ROUTE_UNKNOWN) {
-            snprintf(state_buf, sizeof(state_buf), "%s · age %dms dt %dms",
-                     nano_tuner_route_label(t.route), age >= 0 ? age : 0, dt >= 0 ? dt : 0);
-        } else {
-            snprintf(state_buf, sizeof(state_buf), "age %dms dt %dms", age >= 0 ? age : 0,
-                     dt >= 0 ? dt : 0);
-        }
-        ui_set_label_if_changed(s_tuner_state, state_buf);
+        paint_tuner_meter_locked(cf, true);
     } else {
         ui_set_label_if_changed(s_tuner_note, "...");
+        lv_obj_set_style_text_color(s_tuner_note, lv_color_hex(0xFFFFFF), 0);
         ui_set_label_if_changed(s_tuner_cents, "Listening...");
+        paint_tuner_meter_locked(0.f, false);
     }
 }
 
@@ -657,6 +691,9 @@ static void refresh_preset_label_locked(void)
         text[sizeof(text) - 1] = '\0';
     } else if (preset) {
         strncpy(text, preset, sizeof(text) - 1);
+        text[sizeof(text) - 1] = '\0';
+    } else if (s_tuner_view) {
+        strncpy(text, "Tuner", sizeof(text) - 1);
         text[sizeof(text) - 1] = '\0';
     } else {
         strncpy(text, "-", sizeof(text) - 1);
@@ -977,6 +1014,43 @@ static void show_content_for_chain(chain_slot_t slot)
     sync_header_model_locked(nano_fx_get());
 }
 
+static void layout_chrome_for_tuner(bool tuner_on)
+{
+    if (!s_content_root) {
+        return;
+    }
+
+#if NANO_UI_CHAIN_LEFT
+    if (s_chain_bar) {
+        if (tuner_on) {
+            lv_obj_add_flag(s_chain_bar, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_remove_flag(s_chain_bar, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    if (tuner_on) {
+        lv_coord_t full_w = LV_HOR_RES - 2 * UI_EDGE_PAD;
+        lv_obj_set_size(s_content_root, full_w, s_body_h > 0 ? s_body_h : lv_obj_get_height(s_content_root));
+        lv_obj_align(s_content_root, LV_ALIGN_TOP_LEFT, 0, HEADER_H);
+    } else {
+        lv_coord_t w = s_content_w_normal > 0 ? s_content_w_normal : lv_obj_get_width(s_content_root);
+        lv_coord_t h = s_body_h > 0 ? s_body_h : lv_obj_get_height(s_content_root);
+        lv_obj_set_size(s_content_root, w, h);
+        lv_obj_align(s_content_root, LV_ALIGN_TOP_LEFT, s_content_x_normal, HEADER_H);
+    }
+#else
+    if (s_chain_bar) {
+        if (tuner_on) {
+            lv_obj_add_flag(s_chain_bar, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_remove_flag(s_chain_bar, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    (void)tuner_on;
+#endif
+}
+
 static void show_tuner_view(bool on)
 {
     s_tuner_view = on;
@@ -1000,9 +1074,13 @@ static void show_tuner_view(bool on)
         if (on) {
             lv_obj_remove_flag(s_tuner_panel, LV_OBJ_FLAG_HIDDEN);
             lv_obj_move_foreground(s_tuner_panel);
+            layout_chrome_for_tuner(true);
+            sync_header_model_locked(nano_fx_get());
+            refresh_preset_label_locked();
             ui_bring_chrome_to_front();
         } else {
             lv_obj_add_flag(s_tuner_panel, LV_OBJ_FLAG_HIDDEN);
+            layout_chrome_for_tuner(false);
             show_content_for_chain(s_chain_selected);
         }
     }
@@ -2153,7 +2231,21 @@ static void sync_header_model_locked(const nano_fx_state_t *fx)
 
     if (s_tuner_view) {
         text = "Tuner";
-    } else if (s_chain_selected == CHAIN_AMP) {
+        ui_set_label_if_changed(s_fx_model_btn_lbl, text);
+        lv_obj_remove_state(s_fx_model_btn, LV_STATE_DISABLED);
+        lv_obj_remove_flag(s_fx_model_btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_bg_color(s_fx_model_btn, lv_color_hex(0x080808), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(s_fx_model_btn, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_text_color(s_fx_model_btn_lbl, lv_color_hex(0xECECEC), 0);
+        return;
+    }
+
+    lv_obj_add_flag(s_fx_model_btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(s_fx_model_btn, lv_color_hex(0x080808), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_fx_model_btn, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_fx_model_btn, LV_OPA_40, LV_PART_MAIN | LV_STATE_DISABLED);
+
+    if (s_chain_selected == CHAIN_AMP) {
         const nano_amp_t *amp = nano_state_get_amp();
         if (amp && amp->valid) {
             nano_amp_capture_header_text(amp, model_text, sizeof(model_text));
@@ -2457,40 +2549,90 @@ static void build_tuner_panel(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(parent, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(parent, 0, 0);
     lv_obj_set_flex_flow(parent, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(parent, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(parent, 16, 0);
-    lv_obj_set_style_pad_top(parent, 24, 0);
+    lv_obj_set_flex_align(parent, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(parent, 0, 0);
+    lv_obj_set_style_pad_top(parent, 0, 0);
+    lv_obj_set_style_pad_bottom(parent, 20, 0);
+    lv_obj_set_size(parent, LV_PCT(100), LV_PCT(100));
 
-    s_tuner_note = lv_label_create(parent);
+    lv_obj_t *body = lv_obj_create(parent);
+    lv_obj_set_width(body, LV_PCT(100));
+    lv_obj_set_flex_grow(body, 1);
+    lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(body, 0, 0);
+    lv_obj_set_style_pad_all(body, 0, 0);
+    lv_obj_set_style_pad_row(body, 10, 0);
+    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(body, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(body, LV_OBJ_FLAG_CLICKABLE);
+
+    s_tuner_note = lv_label_create(body);
     lv_label_set_text(s_tuner_note, "-");
     lv_obj_set_style_text_color(s_tuner_note, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_tuner_note, UI_FONT_LG, 0);
+    lv_obj_set_style_text_font(s_tuner_note, UI_FONT_TUNER_NOTE, 0);
 
-    s_tuner_cents = lv_label_create(parent);
+    s_tuner_cents = lv_label_create(body);
     lv_label_set_text(s_tuner_cents, "Tuner off");
     lv_obj_set_style_text_color(s_tuner_cents, lv_color_hex(0xC0C0C0), 0);
-    lv_obj_set_style_text_font(s_tuner_cents, UI_FONT_MD, 0);
+    lv_obj_set_style_text_font(s_tuner_cents, UI_FONT_LG, 0);
+    lv_obj_set_style_pad_bottom(s_tuner_cents, 16, 0);
 
-    s_tuner_state = lv_label_create(parent);
-    lv_label_set_text(s_tuner_state, "Ready");
-    lv_obj_set_style_text_color(s_tuner_state, lv_color_hex(0xF0A020), 0);
-    lv_obj_set_style_text_font(s_tuner_state, UI_FONT_SM, 0);
+    s_tuner_meter = lv_obj_create(body);
+    lv_obj_set_size(s_tuner_meter, TUNER_METER_W, TUNER_METER_H);
+    lv_obj_set_style_bg_color(s_tuner_meter, lv_color_hex(0x1A1A1A), 0);
+    lv_obj_set_style_bg_opa(s_tuner_meter, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_tuner_meter, 1, 0);
+    lv_obj_set_style_border_color(s_tuner_meter, lv_color_hex(0x404040), 0);
+    lv_obj_set_style_radius(s_tuner_meter, 8, 0);
+    lv_obj_set_style_pad_all(s_tuner_meter, 0, 0);
+    lv_obj_clear_flag(s_tuner_meter, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(s_tuner_meter, LV_OBJ_FLAG_CLICKABLE);
+
+    s_tuner_meter_center = lv_obj_create(s_tuner_meter);
+    lv_obj_set_size(s_tuner_meter_center, 48, TUNER_METER_H - 4);
+    lv_obj_set_style_bg_color(s_tuner_meter_center, lv_color_hex(TUNER_COLOR_OK), 0);
+    lv_obj_set_style_bg_opa(s_tuner_meter_center, LV_OPA_30, 0);
+    lv_obj_set_style_border_width(s_tuner_meter_center, 0, 0);
+    lv_obj_set_style_radius(s_tuner_meter_center, 4, 0);
+    lv_obj_set_style_pad_all(s_tuner_meter_center, 0, 0);
+    lv_obj_align(s_tuner_meter_center, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_clear_flag(s_tuner_meter_center, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(s_tuner_meter_center, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *tick = lv_obj_create(s_tuner_meter);
+    lv_obj_set_size(tick, 2, TUNER_METER_H);
+    lv_obj_set_style_bg_color(tick, lv_color_hex(0xA0A0A0), 0);
+    lv_obj_set_style_bg_opa(tick, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(tick, 0, 0);
+    lv_obj_set_style_radius(tick, 0, 0);
+    lv_obj_set_style_pad_all(tick, 0, 0);
+    lv_obj_align(tick, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_clear_flag(tick, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(tick, LV_OBJ_FLAG_CLICKABLE);
+
+    s_tuner_meter_needle = lv_obj_create(s_tuner_meter);
+    lv_obj_set_size(s_tuner_meter_needle, TUNER_NEEDLE_W, TUNER_METER_H);
+    lv_obj_set_style_bg_color(s_tuner_meter_needle, lv_color_hex(TUNER_COLOR_IDLE), 0);
+    lv_obj_set_style_bg_opa(s_tuner_meter_needle, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_tuner_meter_needle, 0, 0);
+    lv_obj_set_style_radius(s_tuner_meter_needle, 3, 0);
+    lv_obj_set_style_pad_all(s_tuner_meter_needle, 0, 0);
+    lv_obj_set_pos(s_tuner_meter_needle, (TUNER_METER_W - TUNER_NEEDLE_W) / 2, 0);
+    lv_obj_clear_flag(s_tuner_meter_needle, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(s_tuner_meter_needle, LV_OBJ_FLAG_CLICKABLE);
+
+    s_tuner_state = lv_label_create(body);
+    lv_label_set_text(s_tuner_state, "");
+    lv_obj_add_flag(s_tuner_state, LV_OBJ_FLAG_HIDDEN);
 
     s_tuner_btn = lv_button_create(parent);
-    lv_obj_set_size(s_tuner_btn, 140, 44);
+    lv_obj_set_size(s_tuner_btn, 160, 48);
     lv_obj_add_event_cb(s_tuner_btn, tuner_btn_event_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_state(s_tuner_btn, LV_STATE_DISABLED);
     lv_obj_t *btn_label = lv_label_create(s_tuner_btn);
     lv_label_set_text(btn_label, "ON");
     lv_obj_center(btn_label);
-
-    s_tuner_hint = lv_label_create(parent);
-    lv_label_set_text(s_tuner_hint, "Hold right footswitch to start. OFF works over BLE.");
-    lv_obj_set_style_text_color(s_tuner_hint, lv_color_hex(0x808080), 0);
-    lv_obj_set_style_text_font(s_tuner_hint, UI_FONT_SM, 0);
-    lv_obj_set_style_text_align(s_tuner_hint, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(s_tuner_hint, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_tuner_hint, 520);
 }
 
 static void set_slider_enabled_locked(bool enabled)
@@ -2878,6 +3020,9 @@ static void build_ui(void)
 
     const lv_coord_t content_w = LV_HOR_RES - 2 * UI_EDGE_PAD - CHAIN_RAIL_W - CONTENT_CHAIN_GAP;
     const lv_coord_t content_x = CHAIN_RAIL_W + CONTENT_CHAIN_GAP;
+    s_body_h = body_h;
+    s_content_w_normal = content_w;
+    s_content_x_normal = content_x;
 
     s_param_cell_w = calc_param_cell_width(content_w - PARAM_GRID_SCROLLBAR_W, PARAM_GRID_COLS);
     s_param_cell_h = calc_param_cell_height(body_h, PARAM_GRID_ROWS);
