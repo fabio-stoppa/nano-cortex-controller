@@ -45,10 +45,12 @@ bool nano_parse_amp(const uint8_t *data, size_t len, nano_amp_t *out)
 
     out->valid = false;
     out->gain = out->level = out->bass = out->mid = out->treble = 0;
+    out->capture_volume = 128;
     out->capture_slot = 0;
     out->capture_name[0] = '\0';
     out->have_capture_slot = false;
     out->have_capture_name = false;
+    out->have_capture_volume = false;
 
     bool have[5] = {false, false, false, false, false};
     size_t i = 0;
@@ -108,6 +110,9 @@ bool nano_parse_amp(const uint8_t *data, size_t len, nano_amp_t *out)
             } else if (field == 11 && !out->have_capture_slot) {
                 out->capture_slot = (uint8_t)(val > 255 ? 255 : val);
                 out->have_capture_slot = true;
+            } else if (field == 44 && !out->have_capture_volume) {
+                out->capture_volume = (uint8_t)(val > 255 ? 255 : val);
+                out->have_capture_volume = true;
             }
             i = next;
         } else if (wire == 1) {
@@ -143,7 +148,28 @@ bool nano_parse_amp(const uint8_t *data, size_t len, nano_amp_t *out)
         }
     }
 
-    out->valid = have[0] || have[1] || have[2] || have[3] || have[4];
+    /* Truncated dumps may stop mid-f34 before a walk reaches field 44. */
+    if (!out->have_capture_volume) {
+        /* Tag for field 44 wire0 = (44<<3)|0 = 352 = E0 02 */
+        for (size_t off = 0; off + 3 <= len; off++) {
+            if (data[off] != 0xE0 || data[off + 1] != 0x02) {
+                continue;
+            }
+            uint32_t val = 0;
+            size_t next = 0;
+            if (!nano_read_varint(data, len, off + 2, &val, &next)) {
+                continue;
+            }
+            if (val > 255U) {
+                continue;
+            }
+            out->capture_volume = (uint8_t)val;
+            out->have_capture_volume = true;
+            break;
+        }
+    }
+
+    out->valid = have[0] || have[1] || have[2] || have[3] || have[4] || out->have_capture_volume;
     return out->valid;
 }
 
@@ -724,12 +750,10 @@ static float read_f32_le(const uint8_t *p)
 
 static bool map_pedal_knob_id(uint8_t hw_id, uint8_t *knob_id)
 {
+    /* 0–4 are the five amp knobs. 0x0A is capture volume (handled separately).
+     * Do NOT map 0x05–0x09 here — 0x06 collides with capture-volume mode LEVEL. */
     if (hw_id <= 4) {
         *knob_id = hw_id;
-        return true;
-    }
-    if (hw_id >= 0x05 && hw_id <= 0x09) {
-        *knob_id = (uint8_t)(hw_id - 0x05);
         return true;
     }
     return false;
@@ -803,6 +827,51 @@ bool nano_try_parse_amp_knob_notify(const uint8_t *data, size_t len, uint8_t *kn
         }
 
         *knob_id = data[i + 2];
+        *raw = (uint8_t)(val > 255 ? 255 : val);
+        return true;
+    }
+
+    return false;
+}
+
+bool nano_try_parse_capture_volume_notify(const uint8_t *data, size_t len, uint8_t *raw)
+{
+    if (!data || !raw || len < 5) {
+        return false;
+    }
+
+    /* Write echo: C0 18 0A 20 <varint> */
+    for (size_t i = 0; i + 4 < len; i++) {
+        if (data[i] != 0xC0 || data[i + 1] != 0x18 || data[i + 2] != 0x0A || data[i + 3] != 0x20) {
+            continue;
+        }
+
+        uint32_t val = 0;
+        size_t next = 0;
+        if (!nano_read_varint(data, len, i + 4, &val, &next)) {
+            continue;
+        }
+
+        *raw = (uint8_t)(val > 255 ? 255 : val);
+        return true;
+    }
+
+    /* Hardware / live: C0 08 01 18 0A 20 <varint> */
+    for (size_t i = 0; i + 7 < len; i++) {
+        if (data[i] != 0xC0 || data[i + 1] != 0x08 || data[i + 2] != 0x01 || data[i + 3] != 0x18 ||
+            data[i + 4] != 0x0A || data[i + 5] != 0x20) {
+            continue;
+        }
+
+        uint32_t val = 0;
+        size_t next = 0;
+        if (!nano_read_varint(data, len, i + 6, &val, &next)) {
+            continue;
+        }
+        if (next < len && data[next] == 0x2D) {
+            continue;
+        }
+
         *raw = (uint8_t)(val > 255 ? 255 : val);
         return true;
     }
@@ -938,10 +1007,12 @@ void nano_log_amp(const char *tag, const nano_amp_t *amp)
         return;
     }
     ESP_LOGI(tag,
-             "Amp — Gain: %u%% Level: %u%% Bass: %u%% Mid: %u%% Treble: %u%%  "
-             "(raw %u/%u/%u/%u/%u)",
-             pct(amp->gain), pct(amp->level), pct(amp->bass), pct(amp->mid), pct(amp->treble),
-             amp->gain, amp->level, amp->bass, amp->mid, amp->treble);
+             "Amp — Gain: %u%% Level: %u%% CapVol: %u%% Bass: %u%% Mid: %u%% Treble: %u%%  "
+             "(raw %u/%u/%u/%u/%u/%u)",
+             pct(amp->gain), pct(amp->level),
+             amp->have_capture_volume ? pct(amp->capture_volume) : 0,
+             pct(amp->bass), pct(amp->mid), pct(amp->treble), amp->gain, amp->level,
+             amp->have_capture_volume ? amp->capture_volume : 0, amp->bass, amp->mid, amp->treble);
 }
 
 static bool field_is_known(uint32_t field)

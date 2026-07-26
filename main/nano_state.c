@@ -38,6 +38,18 @@ static const char *TAG = "nano_state";
 
 static nano_rx_mode_t s_mode = NANO_RX_IDLE;
 static nano_amp_t s_amp;
+static uint8_t s_cap_vol_kept = 128;
+static bool s_cap_vol_kept_valid;
+/** Pedal LEVEL knob is shared with capture-volume mode — resolve via dump. */
+static int s_level_pending_raw = -1;
+static uint8_t s_level_pending_prev_cap;
+static uint8_t s_level_pending_prev_master;
+static bool s_level_pending_active;
+static int64_t s_master_write_us;
+static int s_master_write_raw = -1;
+/** Knobs / capture-vol updated live while a dump is in flight — keep over stale parse. */
+static uint8_t s_amp_live_dirty;
+static bool s_cap_vol_live_dirty;
 static uint8_t *s_state_buf;
 static uint8_t *s_fe_buf;
 static size_t s_state_len;
@@ -67,6 +79,7 @@ static int64_t s_tap_times[TAP_HISTORY_MAX];
 static unsigned s_tap_count;
 
 static void parse_state_buffer(void);
+static void resolve_pending_level_from_dump(void);
 static void on_tempo_notify(uint16_t bpm, bool tap_marker);
 
 void nano_state_on_bpm_found(uint16_t bpm)
@@ -434,7 +447,50 @@ static void parse_state_buffer(void)
         nano_log_proto_fields(TAG, label, s_state_buf, buf_len);
     }
 
+    nano_amp_t live_amp = s_amp;
+    uint8_t live_dirty = s_amp_live_dirty;
+    bool cap_dirty = s_cap_vol_live_dirty;
     if (nano_parse_amp(s_state_buf, buf_len, &s_amp)) {
+        /*
+         * Field 44 often sits in the missing mid-dump gap. Keep a previously
+         * known capture volume (notify / write / earlier full dump); only seed
+         * the web-editor 0 dB default (raw 128) when still unknown.
+         */
+        if (s_amp.have_capture_volume) {
+            s_cap_vol_kept = s_amp.capture_volume;
+            s_cap_vol_kept_valid = true;
+        } else if (s_cap_vol_kept_valid) {
+            s_amp.capture_volume = s_cap_vol_kept;
+            s_amp.have_capture_volume = true;
+        } else {
+            s_amp.capture_volume = 128;
+            s_amp.have_capture_volume = true;
+            s_cap_vol_kept = 128;
+            s_cap_vol_kept_valid = true;
+        }
+        /* Dump snapshot can be older than knobs turned during RX — keep live. */
+        if (live_amp.valid && live_dirty) {
+            uint8_t *dst[] = {
+                &s_amp.gain, &s_amp.level, &s_amp.bass, &s_amp.mid, &s_amp.treble,
+            };
+            const uint8_t *src[] = {
+                &live_amp.gain, &live_amp.level, &live_amp.bass, &live_amp.mid, &live_amp.treble,
+            };
+            for (int i = 0; i < 5; i++) {
+                if (live_dirty & (1u << i)) {
+                    *dst[i] = *src[i];
+                }
+            }
+        }
+        if (cap_dirty && live_amp.valid && live_amp.have_capture_volume) {
+            s_amp.capture_volume = live_amp.capture_volume;
+            s_amp.have_capture_volume = true;
+            s_cap_vol_kept = live_amp.capture_volume;
+            s_cap_vol_kept_valid = true;
+        }
+        s_amp_live_dirty = 0;
+        s_cap_vol_live_dirty = false;
+        resolve_pending_level_from_dump();
         nano_log_amp(TAG, &s_amp);
         nano_ui_set_amp(&s_amp);
         start_live_poll();
@@ -591,7 +647,13 @@ static bool is_fe_stream(const uint8_t *data, size_t len, nano_rx_mode_t mode)
     if (data[0] == 0xFE || data[0] == 0xFD || data[0] == 0xCE || data[0] == 0xD0) {
         return true;
     }
-    if ((mode == NANO_RX_METADATA || mode == NANO_RX_CURRENT) && (data[1] & 0x80)) {
+    /*
+     * High-bit byte1 marks segmented FE/state continuations, but live notifies
+     * use lead C0 (also high bit). Classifying C0 as FE stream drops gain/EQ/
+     * master updates for the whole dump window — UI freezes until parse.
+     */
+    if ((mode == NANO_RX_METADATA || mode == NANO_RX_CURRENT) && (data[1] & 0x80) != 0 &&
+        data[1] != 0xC0) {
         return true;
     }
     return false;
@@ -642,9 +704,37 @@ static bool apply_knob_update(uint8_t knob_id, uint8_t raw, const char *source)
 
     *fields[knob_id] = raw;
     s_amp.valid = true;
-    ESP_LOGI(TAG, "Amp %s -> raw %u (%s)", names[knob_id], raw, source);
+    if (s_mode == NANO_RX_CURRENT) {
+        s_amp_live_dirty |= (uint8_t)(1u << knob_id);
+    }
+    ESP_LOGD(TAG, "Amp %s -> raw %u (%s)", names[knob_id], raw, source);
     nano_ui_set_amp(&s_amp);
     return true;
+}
+
+/**
+ * Pedal LEVEL notifies: always C0 08 01 18 01 20 <v> 30 01 …
+ * Same frame for normal LEVEL and capture-volume mode — no distinct BLE id.
+ * Map LEVEL notifies to MASTER only. CAPTURE LV is driven by id 0x0A / field 44.
+ */
+static void on_shared_level_notify(uint8_t raw)
+{
+    int64_t now = esp_timer_get_time();
+    if (s_master_write_raw >= 0 && (now - s_master_write_us) < (500 * 1000) &&
+        (int)raw == s_master_write_raw) {
+        apply_knob_update((uint8_t)NANO_KNOB_LEVEL, raw, "master echo");
+        s_master_write_raw = -1;
+        return;
+    }
+
+    apply_knob_update((uint8_t)NANO_KNOB_LEVEL, raw, "hw level");
+}
+
+static void resolve_pending_level_from_dump(void)
+{
+    /* No-op: LEVEL notifies are master-only; capture volume uses id 0x0A. */
+    s_level_pending_active = false;
+    s_level_pending_raw = -1;
 }
 
 static bool try_inline_amp_update(const uint8_t *data, size_t len)
@@ -652,7 +742,31 @@ static bool try_inline_amp_update(const uint8_t *data, size_t len)
     uint8_t knob_id = 0;
     uint8_t raw = 0;
 
+    if (nano_try_parse_capture_volume_notify(data, len, &raw)) {
+        if (s_amp.valid && s_amp.have_capture_volume && s_amp.capture_volume == raw) {
+            return true;
+        }
+        s_amp.capture_volume = raw;
+        s_amp.have_capture_volume = true;
+        s_amp.valid = true;
+        s_cap_vol_kept = raw;
+        s_cap_vol_kept_valid = true;
+        if (s_mode == NANO_RX_CURRENT) {
+            s_cap_vol_live_dirty = true;
+        }
+        ESP_LOGD(TAG, "Capture volume -> raw %u (notify)", raw);
+        nano_ui_set_amp(&s_amp);
+        return true;
+    }
+
     if (nano_try_parse_amp_hw_notify(data, len, &knob_id, &raw)) {
+        if (knob_id == (uint8_t)NANO_KNOB_LEVEL) {
+            on_shared_level_notify(raw);
+            if (s_refresh_timer) {
+                esp_timer_stop(s_refresh_timer);
+            }
+            return true;
+        }
         if (apply_knob_update(knob_id, raw, "hw knob")) {
             if (s_refresh_timer) {
                 esp_timer_stop(s_refresh_timer);
@@ -662,10 +776,19 @@ static bool try_inline_amp_update(const uint8_t *data, size_t len)
     }
 
     if (nano_try_parse_amp_knob_notify(data, len, &knob_id, &raw)) {
+        if (knob_id == (uint8_t)NANO_KNOB_LEVEL) {
+            on_shared_level_notify(raw);
+            return true;
+        }
         return apply_knob_update(knob_id, raw, "knob notify");
     }
 
     return false;
+}
+
+bool nano_state_try_amp_notify_fast(const uint8_t *data, size_t len)
+{
+    return try_inline_amp_update(data, len);
 }
 
 static void sync_timer_cb(void *arg)
@@ -739,6 +862,11 @@ static void reset_amp_sync(void)
     s_tempo_mode_active = false;
     s_tempo_ignore_exit_echo_us = 0;
     memset(&s_amp, 0, sizeof(s_amp));
+    s_amp_live_dirty = 0;
+    s_cap_vol_live_dirty = false;
+    s_cap_vol_kept = 128;
+    s_cap_vol_kept_valid = false;
+    s_master_write_raw = -1;
     if (s_parse_timer) {
         esp_timer_stop(s_parse_timer);
     }
@@ -845,8 +973,11 @@ void nano_state_feed_c305(const uint8_t *data, size_t len)
      * Segmented current-state continuations (desktop decoder):
      *  - byte1 high-bit continuation frames
      *  - additional FE/FD/CE/D0 segments after the first chunk
+     *
+     * Live notifies use lead byte C0 (high bit set) — never treat those as
+     * dump continuations or knob turns pollute the state buffer.
      */
-    if (s_mode == NANO_RX_CURRENT && len >= 3 &&
+    if (s_mode == NANO_RX_CURRENT && len >= 3 && data[1] != 0xC0 &&
         ((data[1] & 0x80) != 0 || data[0] == 0xFE || data[0] == 0xFD || data[0] == 0xCE ||
          data[0] == 0xD0)) {
         if (tuner_live) {
@@ -924,6 +1055,13 @@ bool nano_state_write_amp_knob(nano_knob_t knob, uint8_t raw)
 
     *fields[knob] = raw;
     s_amp.valid = true;
+    if (s_mode == NANO_RX_CURRENT) {
+        s_amp_live_dirty |= (uint8_t)(1u << (unsigned)knob);
+    }
+    if (knob == NANO_KNOB_LEVEL) {
+        s_master_write_us = esp_timer_get_time();
+        s_master_write_raw = (int)raw;
+    }
 
     uint8_t buf[32];
     size_t n = nano_amp_knob_payload(knob, raw, buf, sizeof(buf));
@@ -933,8 +1071,34 @@ bool nano_state_write_amp_knob(nano_knob_t knob, uint8_t raw)
 
     char label[32];
     snprintf(label, sizeof(label), "Amp %s = %u", names[knob], raw);
-    ESP_LOGI(TAG, "Amp %s -> raw %u (touch)", names[knob], raw);
+    ESP_LOGD(TAG, "Amp %s -> raw %u (touch)", names[knob], raw);
     return nano_ble_write_c304(label, buf, n) == ESP_OK;
+}
+
+bool nano_state_write_capture_volume(uint8_t raw)
+{
+    if (!nano_ble_connected()) {
+        return false;
+    }
+
+    s_amp.capture_volume = raw;
+    s_amp.have_capture_volume = true;
+    s_amp.valid = true;
+    s_cap_vol_kept = raw;
+    s_cap_vol_kept_valid = true;
+    if (s_mode == NANO_RX_CURRENT) {
+        s_cap_vol_live_dirty = true;
+    }
+
+    uint8_t buf[32];
+    size_t n = nano_capture_volume_payload(raw, buf, sizeof(buf));
+    if (n == 0) {
+        return false;
+    }
+
+    ESP_LOGD(TAG, "Capture volume -> raw %u (touch)", raw);
+    nano_ui_set_amp(&s_amp);
+    return nano_ble_write_c304("Capture volume", buf, n) == ESP_OK;
 }
 
 bool nano_state_write_capture_slot(uint8_t slot)

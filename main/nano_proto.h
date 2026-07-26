@@ -14,14 +14,16 @@ extern "C" {
 
 typedef struct {
     uint8_t gain;
-    uint8_t level;
+    uint8_t level; /* master / output LEVEL (field 4, write id 0x01) */
     uint8_t bass;
     uint8_t mid;
     uint8_t treble;
+    uint8_t capture_volume; /* capture output volume (field 44, write id 0x0A) */
     uint8_t capture_slot;
     char capture_name[NANO_AMP_CAPTURE_NAME_MAX];
     bool have_capture_slot;
     bool have_capture_name;
+    bool have_capture_volume;
     bool valid;
 } nano_amp_t;
 
@@ -45,8 +47,13 @@ bool nano_proto_field_varint(const uint8_t *data, size_t len, uint32_t field_num
 /** Parse preset names from FE metadata (top-level field 18 records). */
 bool nano_parse_fe_preset_catalog(const uint8_t *data, size_t len, nano_preset_catalog_t *out);
 
-/** Parse protobuf fields 3–7 (amp knobs) and capture slot/name from a state blob. */
+/** Parse protobuf fields 3–7 (amp knobs), field 44 (capture volume), and capture slot/name. */
 bool nano_parse_amp(const uint8_t *data, size_t len, nano_amp_t *out);
+
+/**
+ * Try to read capture-volume write echo: C0 18 0A 20 <varint>.
+ */
+bool nano_try_parse_capture_volume_notify(const uint8_t *data, size_t len, uint8_t *raw);
 
 /**
  * Parse preset tempo (BPM) from field 56 (fixed32 float), including nested
@@ -84,7 +91,8 @@ bool nano_try_parse_amp_knob_notify(const uint8_t *data, size_t len, uint8_t *kn
  * Hardware knob turn on the Nano (observed C305 captures):
  *   Gain float: C0 08 01 20 01 2D <f32> 63
  *   Gain varint: C0 08 01 20 <varint>
- *   Other: C0 08 01 18 <id 0–4 or 0x05–0x09> 20 <varint>
+ *   Other amp: C0 08 01 18 <id 0–4> 20 <varint>
+ *   Capture volume: C0 08 01 18 0A 20 <varint> (also C0 18 0A write echo)
  */
 bool nano_try_parse_amp_hw_notify(const uint8_t *data, size_t len, uint8_t *knob_id, uint8_t *raw);
 

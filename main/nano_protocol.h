@@ -32,6 +32,12 @@ size_t nano_bpm_probe_payload(unsigned step, uint8_t *buf, size_t cap, bool *out
 /** Port of setAmpKnob() in index.html. */
 size_t nano_amp_knob_payload(nano_knob_t knob, uint8_t raw_value, uint8_t *buf, size_t cap);
 
+/**
+ * Capture volume (id 0x0A) — preset field 44.
+ * Raw 0..255 ≈ -24 dB .. +12 dB (0 dB ≈ 128). Separate from master LEVEL (id 0x01).
+ */
+size_t nano_capture_volume_payload(uint8_t raw_value, uint8_t *buf, size_t cap);
+
 /** Port of setCapture() in index.html — slot 1..25. */
 size_t nano_capture_select_payload(uint8_t slot, uint8_t *buf, size_t cap);
 

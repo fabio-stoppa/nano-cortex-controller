@@ -23,10 +23,19 @@ nano_rx_mode_t nano_rx_mode_get(void);
 /** Feed one C305 notification (handles FE stream reassembly + amp parse). */
 void nano_state_feed_c305(const uint8_t *data, size_t len);
 
+/**
+ * Apply live amp / capture-volume notifies from the GATT callback (no FIFO).
+ * Returns true if the packet was handled — caller must not enqueue it.
+ */
+bool nano_state_try_amp_notify_fast(const uint8_t *data, size_t len);
+
 const nano_amp_t *nano_state_get_amp(void);
 
 /** Optimistically update amp state and send C304 knob write (touch UI). */
 bool nano_state_write_amp_knob(nano_knob_t knob, uint8_t raw);
+
+/** Capture volume (field 44 / write id 0x0A), raw 0..255. */
+bool nano_state_write_capture_volume(uint8_t raw);
 
 /** Select factory/user capture slot 1..25 and refresh preset state. */
 bool nano_state_write_capture_slot(uint8_t slot);

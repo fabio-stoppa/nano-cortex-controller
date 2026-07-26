@@ -112,6 +112,43 @@ size_t nano_amp_knob_payload(nano_knob_t knob, uint8_t raw_value, uint8_t *buf, 
     return i;
 }
 
+size_t nano_capture_volume_payload(uint8_t raw_value, uint8_t *buf, size_t cap)
+{
+    /* Same framing as amp knobs / gate amount; write id 0x0A. */
+    if (cap < 12) {
+        return 0;
+    }
+
+    uint8_t value_bytes[5];
+    size_t vb_len = encode_varint(raw_value, value_bytes, sizeof(value_bytes));
+    if (vb_len == 0) {
+        return 0;
+    }
+
+    size_t total = 1 + 3 + vb_len + 6;
+    if (total > cap) {
+        return 0;
+    }
+
+    size_t i = 0;
+    buf[i++] = 0x00;
+    buf[i++] = 0xC0;
+    buf[i++] = 0x18;
+    buf[i++] = 0x0A;
+    buf[i++] = 0x20;
+    for (size_t v = 0; v < vb_len; v++) {
+        buf[i++] = value_bytes[v];
+    }
+    buf[i++] = 0x28;
+    buf[i++] = 0x00;
+    buf[i++] = 0x1A;
+    buf[i++] = 0x00;
+    buf[i++] = 0x00;
+    buf[i++] = 0x00;
+    buf[0] = (uint8_t)(i - 2);
+    return i;
+}
+
 size_t nano_capture_select_payload(uint8_t slot, uint8_t *buf, size_t cap)
 {
     if (slot < 1 || slot > 25 || cap < 10) {

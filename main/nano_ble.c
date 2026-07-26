@@ -690,7 +690,7 @@ static bool c305_queue_init(void)
         return false;
     }
 
-    ESP_LOGI(TAG, "C305 RX worker ready (queue=%d live=%d) build=2026-07-26h", C305_QUEUE_LEN,
+    ESP_LOGI(TAG, "C305 RX worker ready (queue=%d live=%d) build=2026-07-26i", C305_QUEUE_LEN,
              C305_LIVE_QUEUE_LEN);
     return true;
 }
@@ -799,6 +799,15 @@ static void on_gatt_notify(uint16_t handle, const uint8_t *data, uint16_t len)
      */
     if (is_c305 && c305_is_pitch(data, len)) {
         (void)nano_tuner_feed_pitch_fast(data, len);
+        return;
+    }
+
+    /*
+     * Amp knobs / capture volume: same problem — dump traffic fills the FIFO and
+     * LEVELHUNT-style INFO logging stalled the worker, so UI froze then caught up
+     * seconds later. Apply live, skip the queue.
+     */
+    if (is_c305 && !tuner_live && nano_state_try_amp_notify_fast(data, len)) {
         return;
     }
 

@@ -114,7 +114,7 @@ typedef struct {
 #define PARAM_GRID_COLS   4
 #define PARAM_GRID_ROWS   4
 #define PEDAL_PARAM_GRID_VISIBLE (PARAM_GRID_COLS * PARAM_GRID_ROWS)
-#define AMP_PEDAL_PARAM_COUNT 7
+#define AMP_PEDAL_PARAM_COUNT 8
 #define PARAM_GRID_GAP    4
 #define PARAM_GRID_PAD    2
 #define PARAM_CELL_PAD    4
@@ -129,6 +129,7 @@ typedef struct {
 #define PARAM_CELL_AMP_TAG  0x100
 #define PARAM_CELL_GATE_TAG 0x200
 #define PARAM_CELL_GATE_ON_TAG 0x400
+#define PARAM_CELL_CAP_VOL_TAG 0x800
 #define UI_FONT_CELL      UI_FONT_MD
 #define TUNER_METER_W     560
 #define TUNER_METER_H     36
@@ -185,13 +186,23 @@ static bool s_async_ble_connected;
 
 static gate_cell_ui_t s_gate_on;
 static gate_cell_ui_t s_gate;
+static gate_cell_ui_t s_cap_vol;
 static int s_gate_on_drag;
 static int s_gate_on_last_sent = -1;
 static int64_t s_gate_on_last_send_us;
 static int s_gate_drag;
 static int s_gate_last_sent = -1;
 static int64_t s_gate_last_send_us;
+static int s_cap_vol_drag;
+static int s_cap_vol_last_sent = -1;
+static int64_t s_cap_vol_last_send_us;
 static int s_chain_suppress_click = -1;
+
+/** Skip chain/header redraw when only gain/EQ/master/cap-vol change. */
+static bool s_amp_chrome_valid;
+static bool s_amp_chrome_have_slot;
+static uint8_t s_amp_chrome_slot;
+static char s_amp_chrome_name[NANO_AMP_CAPTURE_NAME_MAX];
 
 static lv_obj_t *s_header_bar;
 static lv_obj_t *s_preset_lbl;
@@ -1413,6 +1424,24 @@ static void try_send_gate_locked(uint8_t pct, bool force_send)
     }
 }
 
+static void try_send_cap_vol_locked(uint8_t raw, bool force_send)
+{
+    if (s_fx_ui_sync || !s_ble_connected) {
+        return;
+    }
+
+    int64_t now = esp_timer_get_time();
+    if (!force_send && raw == (uint8_t)s_cap_vol_last_sent &&
+        (now - s_cap_vol_last_send_us) < DRAG_WRITE_INTERVAL_US) {
+        return;
+    }
+
+    if (nano_state_write_capture_volume(raw)) {
+        s_cap_vol_last_sent = raw;
+        s_cap_vol_last_send_us = now;
+    }
+}
+
 static bool fx_block_matches_model(const nano_fx_block_t *block, const nano_fx_model_def_t *model)
 {
     if (!block || !model) {
@@ -2110,6 +2139,31 @@ static void param_cell_apply_gate(lv_obj_t *cell, bool force_send)
     }
 }
 
+static void param_cell_apply_cap_vol(lv_obj_t *cell, bool force_send)
+{
+    if (!s_cap_vol.slider) {
+        return;
+    }
+
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) {
+        return;
+    }
+
+    lv_point_t pt;
+    lv_indev_get_point(indev, &pt);
+    int val = param_cell_x_to_slider(cell, s_cap_vol.slider, pt.x);
+    lv_slider_set_value(s_cap_vol.slider, val, LV_ANIM_OFF);
+
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%u%%", pct((uint8_t)val));
+    lv_label_set_text(s_cap_vol.value, buf);
+
+    if (s_cap_vol_drag || force_send) {
+        try_send_cap_vol_locked((uint8_t)val, force_send);
+    }
+}
+
 static void param_cell_apply_slider(lv_obj_t *cell, lv_obj_t *slider, bool is_amp, int idx, bool force_send)
 {
     lv_indev_t *indev = lv_indev_active();
@@ -2184,6 +2238,7 @@ static void param_gesture_cancel_drag(void)
     s_drag_knob = -1;
     s_gate_drag = 0;
     s_gate_on_drag = 0;
+    s_cap_vol_drag = 0;
 }
 
 static void param_gesture_motion(lv_coord_t *adx, lv_coord_t *ady)
@@ -2348,6 +2403,36 @@ static void param_cell_event_cb(lv_event_t *e)
                 param_cell_apply_gate(cell, true);
             }
             s_gate_drag = 0;
+            param_gesture_end();
+        }
+        return;
+    }
+
+    if (packed & PARAM_CELL_CAP_VOL_TAG) {
+        if (!s_cap_vol.slider || lv_obj_has_flag(s_cap_vol.slider, LV_OBJ_FLAG_HIDDEN)) {
+            return;
+        }
+        if (code == LV_EVENT_PRESSED) {
+            param_gesture_begin();
+            return;
+        }
+        if (code == LV_EVENT_PRESSING) {
+            param_gesture_mode_t mode = param_gesture_update();
+            if (mode == PARAM_GESTURE_SCROLL) {
+                return;
+            }
+            if (mode == PARAM_GESTURE_ADJUST) {
+                s_cap_vol_drag = 1;
+                param_cell_apply_cap_vol(cell, false);
+            }
+            return;
+        }
+        if (code == LV_EVENT_RELEASED) {
+            if (param_gesture_should_apply_on_release()) {
+                s_cap_vol_drag = 1;
+                param_cell_apply_cap_vol(cell, true);
+            }
+            s_cap_vol_drag = 0;
             param_gesture_end();
         }
         return;
@@ -3181,6 +3266,11 @@ static void make_gate_cell(lv_obj_t *parent)
     make_gate_slider_cell(&s_gate, parent, "GATE AMNT", PARAM_CELL_GATE_TAG, 0, 100);
 }
 
+static void make_cap_vol_cell(lv_obj_t *parent)
+{
+    make_gate_slider_cell(&s_cap_vol, parent, "CAPTURE LV", PARAM_CELL_CAP_VOL_TAG, 0, 255);
+}
+
 static void build_amp_panel(lv_obj_t *parent)
 {
     s_amp_params_row = create_pedal_params_grid(parent);
@@ -3188,7 +3278,8 @@ static void build_amp_panel(lv_obj_t *parent)
     make_gate_on_cell(s_amp_params_row);
     make_gate_cell(s_amp_params_row);
     make_knob_column(s_amp_params_row, &s_knobs[0], "GAIN", 0);
-    make_knob_column(s_amp_params_row, &s_knobs[1], "LEVEL", 1);
+    make_cap_vol_cell(s_amp_params_row);
+    make_knob_column(s_amp_params_row, &s_knobs[1], "MASTER LV", 1);
     make_knob_column(s_amp_params_row, &s_knobs[2], "BASS", 2);
     make_knob_column(s_amp_params_row, &s_knobs[3], "MID", 3);
     make_knob_column(s_amp_params_row, &s_knobs[4], "TREBLE", 4);
@@ -3366,8 +3457,14 @@ static void apply_amp_locked(const nano_amp_t *amp)
             lv_label_set_text(s_knobs[i].value, "-");
             s_last_sent[i] = 0;
         }
+        if (s_cap_vol.slider && s_cap_vol_drag == 0) {
+            lv_slider_set_value(s_cap_vol.slider, 128, LV_ANIM_OFF);
+            lv_label_set_text(s_cap_vol.value, "-");
+            lv_obj_add_state(s_cap_vol.slider, LV_STATE_DISABLED);
+        }
         set_slider_enabled_locked(false);
         update_chain_blocks_locked(NULL, nano_fx_get());
+        s_amp_chrome_valid = false;
         s_ui_sync = false;
         return;
     }
@@ -3385,12 +3482,47 @@ static void apply_amp_locked(const nano_amp_t *amp)
         ui_set_label_if_changed(s_knobs[i].value, buf);
     }
 
+    if (s_cap_vol.slider && s_cap_vol.value) {
+        if (s_ble_connected) {
+            lv_obj_remove_state(s_cap_vol.slider, LV_STATE_DISABLED);
+        } else {
+            lv_obj_add_state(s_cap_vol.slider, LV_STATE_DISABLED);
+        }
+        if (s_cap_vol_drag == 0) {
+            if (amp->have_capture_volume) {
+                ui_set_slider_if_changed(s_cap_vol.slider, amp->capture_volume);
+                snprintf(buf, sizeof(buf), "%u%%", pct(amp->capture_volume));
+                ui_set_label_if_changed(s_cap_vol.value, buf);
+                s_cap_vol_last_sent = amp->capture_volume;
+            } else {
+                lv_slider_set_value(s_cap_vol.slider, 128, LV_ANIM_OFF);
+                lv_label_set_text(s_cap_vol.value, "-");
+            }
+        }
+    }
+
     set_slider_enabled_locked(s_ble_connected);
     update_pedal_params_grid_scroll(s_amp_params_row, AMP_PEDAL_PARAM_COUNT);
-    update_chain_blocks_locked(amp, nano_fx_get());
-    refresh_preset_label_locked();
-    if (s_chain_selected == CHAIN_AMP && !s_tuner_view) {
-        sync_header_model_locked(nano_fx_get());
+
+    /*
+     * Knob ticks arrive many times per second. Chain / preset / header only
+     * change with capture/slot metadata — skip them on pure gain/EQ/master.
+     */
+    bool chrome_dirty = !s_amp_chrome_valid ||
+                        amp->have_capture_slot != s_amp_chrome_have_slot ||
+                        (amp->have_capture_slot && amp->capture_slot != s_amp_chrome_slot) ||
+                        strncmp(amp->capture_name, s_amp_chrome_name, sizeof(s_amp_chrome_name)) != 0;
+    if (chrome_dirty) {
+        s_amp_chrome_valid = true;
+        s_amp_chrome_have_slot = amp->have_capture_slot;
+        s_amp_chrome_slot = amp->capture_slot;
+        strncpy(s_amp_chrome_name, amp->capture_name, sizeof(s_amp_chrome_name) - 1);
+        s_amp_chrome_name[sizeof(s_amp_chrome_name) - 1] = '\0';
+        update_chain_blocks_locked(amp, nano_fx_get());
+        refresh_preset_label_locked();
+        if (s_chain_selected == CHAIN_AMP && !s_tuner_view) {
+            sync_header_model_locked(nano_fx_get());
+        }
     }
     s_ui_sync = false;
 }
