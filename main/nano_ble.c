@@ -20,6 +20,7 @@
 #include "esp_gattc_api.h"
 #include "esp_gatt_defs.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -30,15 +31,19 @@
 
 static const char *TAG = "nano_ble";
 
+/* Set 1 to subscribe C306 + log all notify/indicate with timing; poll readable chars. */
+#define NANO_TEMPO_TICK_HUNT 0
+#define TEMPO_TICK_READ_MS 100
+
 #define C305_QUEUE_LEN 48
 #define C305_LIVE_QUEUE_LEN 1
 #define C305_PKT_MAX 256
 #define C305_TASK_STACK 4096
 /* Keep below LVGL (prio 6) so continuous pitch cannot starve the display. */
 #define C305_TASK_PRIO 1
-#define GATT_NOTIFY_MAX 12
+#define GATT_NOTIFY_MAX 16
 #define GATT_EXTRA_SVC_MAX 6
-#define BPM_READ_HANDLE_MAX 4
+#define BPM_READ_HANDLE_MAX 8
 
 typedef struct {
     uint16_t handle;
@@ -63,6 +68,16 @@ static uint16_t s_bpm_read_handles[BPM_READ_HANDLE_MAX];
 static size_t s_bpm_read_count;
 static size_t s_bpm_read_next;
 
+#if NANO_TEMPO_TICK_HUNT
+static int64_t s_tick_last_us[GATT_NOTIFY_MAX];
+static int64_t s_tick_any_last_us;
+static esp_timer_handle_t s_tick_read_timer;
+static uint8_t s_tick_read_last[BPM_READ_HANDLE_MAX][48];
+static uint16_t s_tick_read_last_len[BPM_READ_HANDLE_MAX];
+static bool s_tick_read_have[BPM_READ_HANDLE_MAX];
+static size_t s_tick_read_idx;
+#endif
+
 static struct {
     uint16_t start;
     uint16_t end;
@@ -80,6 +95,7 @@ static size_t s_extra_svc_count;
 #define UUID_CHAR_C306  0xC306
 #define UUID_CHAR_C300  0xC300
 #define UUID_CHAR_C301  0xC301
+#define UUID_CHAR_C302  0xC302
 #define UUID_CHAR_C307  0xC307
 
 /* BLE-MIDI service/char — Bluedroid little-endian 128-bit form. */
@@ -253,10 +269,146 @@ static const char *handle_label(uint16_t handle)
         return "C306";
     }
     if (s_ble.midi_handle != INVALID_HANDLE && handle == s_ble.midi_handle) {
-        return "BLE-MIDI";
+        return "MIDI/C302";
     }
     return NULL;
 }
+
+#if NANO_TEMPO_TICK_HUNT
+static void tick_hunt_log_notify(uint16_t handle, const uint8_t *data, uint16_t len)
+{
+    int64_t now = esp_timer_get_time();
+    int64_t dt_any = (s_tick_any_last_us > 0) ? ((now - s_tick_any_last_us) / 1000) : -1;
+    s_tick_any_last_us = now;
+
+    int64_t dt_h = -1;
+    for (size_t i = 0; i < s_sub_count; i++) {
+        if (s_subs[i].handle == handle) {
+            if (s_tick_last_us[i] > 0) {
+                dt_h = (now - s_tick_last_us[i]) / 1000;
+            }
+            s_tick_last_us[i] = now;
+            break;
+        }
+    }
+
+    const char *lab = handle_label(handle);
+    char hex[64];
+    size_t n = len > 16 ? 16 : len;
+    size_t pos = 0;
+    for (size_t i = 0; i < n && pos + 4 < sizeof(hex); i++) {
+        pos += (size_t)snprintf(hex + pos, sizeof(hex) - pos, "%02X ", data[i]);
+    }
+    if (pos > 0) {
+        hex[pos - 1] = '\0';
+    } else {
+        hex[0] = '\0';
+    }
+
+    /* Highlight intervals near one beat at current BPM (±8%). */
+    uint16_t bpm = nano_state_get_bpm();
+    const char *beatish = "";
+    if (bpm >= NANO_BPM_MIN && bpm <= NANO_BPM_MAX && dt_h > 0) {
+        int beat_ms = (int)(60000 / (int)bpm);
+        int lo = (beat_ms * 92) / 100;
+        int hi = (beat_ms * 108) / 100;
+        if ((int)dt_h >= lo && (int)dt_h <= hi) {
+            beatish = " ~BEAT";
+        }
+        int clock_ms = beat_ms / 24; /* MIDI clock */
+        if (clock_ms < 1) {
+            clock_ms = 1;
+        }
+        lo = (clock_ms * 85) / 100;
+        hi = (clock_ms * 115) / 100;
+        if ((int)dt_h >= lo && (int)dt_h <= hi) {
+            beatish = " ~MIDIclk?";
+        }
+    }
+
+    ESP_LOGI(TAG, "TICK h=%u %s dt=%lldms any=%lldms len=%u%s [%s]", handle, lab ? lab : "?",
+             (long long)dt_h, (long long)dt_any, (unsigned)len, beatish, hex);
+}
+
+static void tick_read_timer_cb(void *arg)
+{
+    (void)arg;
+    if (!nano_ble_connected() || !nano_state_tempo_active() || s_bpm_read_count == 0) {
+        return;
+    }
+    if (s_ble.gattc_if == ESP_GATT_IF_NONE) {
+        return;
+    }
+    if (s_tick_read_idx >= s_bpm_read_count) {
+        s_tick_read_idx = 0;
+    }
+    uint16_t handle = s_bpm_read_handles[s_tick_read_idx++];
+    esp_err_t err = esp_ble_gattc_read_char(s_ble.gattc_if, s_ble.conn_id, handle,
+                                           ESP_GATT_AUTH_REQ_NONE);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "TICK HUNT read h=%u failed: %s", handle, esp_err_to_name(err));
+    }
+}
+
+static void tick_hunt_on_read(uint16_t handle, const uint8_t *data, uint16_t len)
+{
+    size_t idx = BPM_READ_HANDLE_MAX;
+    for (size_t i = 0; i < s_bpm_read_count; i++) {
+        if (s_bpm_read_handles[i] == handle) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx >= BPM_READ_HANDLE_MAX) {
+        return;
+    }
+
+    uint16_t n = len > sizeof(s_tick_read_last[0]) ? sizeof(s_tick_read_last[0]) : len;
+    bool changed = !s_tick_read_have[idx] || s_tick_read_last_len[idx] != n ||
+                   memcmp(s_tick_read_last[idx], data, n) != 0;
+    if (!changed) {
+        return;
+    }
+    memcpy(s_tick_read_last[idx], data, n);
+    s_tick_read_last_len[idx] = n;
+    s_tick_read_have[idx] = true;
+
+    char hex[64];
+    size_t pos = 0;
+    size_t show = n > 16 ? 16 : n;
+    for (size_t i = 0; i < show && pos + 4 < sizeof(hex); i++) {
+        pos += (size_t)snprintf(hex + pos, sizeof(hex) - pos, "%02X ", data[i]);
+    }
+    if (pos > 0) {
+        hex[pos - 1] = '\0';
+    } else {
+        hex[0] = '\0';
+    }
+    ESP_LOGI(TAG, "TICK READ h=%u changed len=%u [%s]", handle, (unsigned)len, hex);
+}
+
+static void tick_hunt_start_reads(void)
+{
+    if (s_tick_read_timer) {
+        esp_timer_stop(s_tick_read_timer);
+        esp_timer_start_periodic(s_tick_read_timer, TEMPO_TICK_READ_MS * 1000);
+        ESP_LOGI(TAG, "TICK HUNT: polling %u readable chars every %dms while tempo active",
+                 (unsigned)s_bpm_read_count, TEMPO_TICK_READ_MS);
+        return;
+    }
+    const esp_timer_create_args_t args = {
+        .callback = tick_read_timer_cb,
+        .name = "tick_read",
+    };
+    if (esp_timer_create(&args, &s_tick_read_timer) != ESP_OK) {
+        ESP_LOGE(TAG, "TICK HUNT read timer create failed");
+        return;
+    }
+    esp_timer_start_periodic(s_tick_read_timer, TEMPO_TICK_READ_MS * 1000);
+    ESP_LOGI(TAG, "TICK HUNT: polling %u readable chars every %dms", (unsigned)s_bpm_read_count,
+             TEMPO_TICK_READ_MS);
+}
+#endif
 
 static void log_and_collect_notify_chars(esp_gatt_if_t gattc_if, uint16_t conn_id, uint16_t start,
                                          uint16_t end, const char *svc_name)
@@ -300,9 +452,36 @@ static void log_and_collect_notify_chars(esp_gatt_if_t gattc_if, uint16_t conn_i
             uint16_t u16 = elems[i].uuid.uuid.uuid16;
             if (u16 == UUID_CHAR_C306) {
                 s_ble.c306_handle = elems[i].char_handle;
+#if !NANO_TEMPO_TICK_HUNT
                 /* Skip C306 indicate mirror — confirm traffic doubles pitch load. */
                 continue;
+#endif
             }
+        }
+        if (uuid128_eq(&elems[i].uuid, UUID128_BLE_MIDI_IO)) {
+            s_ble.midi_handle = elems[i].char_handle;
+        }
+
+#if NANO_TEMPO_TICK_HUNT
+        if ((elems[i].properties & ESP_GATT_CHAR_PROP_BIT_READ) &&
+            s_bpm_read_count < BPM_READ_HANDLE_MAX &&
+            elems[i].char_handle != s_ble.c304_handle) {
+            bool already = false;
+            for (size_t j = 0; j < s_bpm_read_count; j++) {
+                if (s_bpm_read_handles[j] == elems[i].char_handle) {
+                    already = true;
+                    break;
+                }
+            }
+            if (!already) {
+                s_bpm_read_handles[s_bpm_read_count++] = elems[i].char_handle;
+                ESP_LOGI(TAG, "TICK HUNT: queued read handle=%u (%s)", elems[i].char_handle,
+                         uuid_s);
+            }
+        }
+#else
+        if (elems[i].uuid.len == ESP_UUID_LEN_16) {
+            uint16_t u16 = elems[i].uuid.uuid.uuid16;
             if ((u16 == UUID_CHAR_C300 || u16 == UUID_CHAR_C301 || u16 == UUID_CHAR_C307) &&
                 (elems[i].properties & ESP_GATT_CHAR_PROP_BIT_READ) &&
                 s_bpm_read_count < BPM_READ_HANDLE_MAX) {
@@ -311,9 +490,7 @@ static void log_and_collect_notify_chars(esp_gatt_if_t gattc_if, uint16_t conn_i
                          elems[i].char_handle);
             }
         }
-        if (uuid128_eq(&elems[i].uuid, UUID128_BLE_MIDI_IO)) {
-            s_ble.midi_handle = elems[i].char_handle;
-        }
+#endif
 
         if (can_notify || can_indicate) {
             uint16_t cccd = 0;
@@ -357,6 +534,15 @@ static bool discover_nano_chars(esp_gatt_if_t gattc_if, uint16_t conn_id)
                                   UUID_CHAR_C306, &s_ble.c306_handle);
     }
 
+    /* Prefer Nano C302 (raw MIDI write) over standard BLE-MIDI UUID if present. */
+    uint16_t c302 = INVALID_HANDLE;
+    (void)find_char_in_range(gattc_if, conn_id, s_ble.a002_start, s_ble.a002_end, UUID_CHAR_C302,
+                             &c302);
+    if (c302 == INVALID_HANDLE) {
+        (void)find_char_in_range(gattc_if, conn_id, s_ble.a003_start, s_ble.a003_end, UUID_CHAR_C302,
+                                 &c302);
+    }
+
     log_and_collect_notify_chars(gattc_if, conn_id, s_ble.a002_start, s_ble.a002_end, "A002");
     log_and_collect_notify_chars(gattc_if, conn_id, s_ble.a003_start, s_ble.a003_end, "A003");
     for (size_t i = 0; i < s_extra_svc_count; i++) {
@@ -364,25 +550,48 @@ static bool discover_nano_chars(esp_gatt_if_t gattc_if, uint16_t conn_id)
                                      s_extra_svcs[i].name);
     }
 
+    /* C302 wins over any BLE-MIDI IO char discovered above. */
+    if (c302 != INVALID_HANDLE) {
+        s_ble.midi_handle = c302;
+    }
+
     /* Always include known streams even if property scan missed them. */
     if (c305) {
         add_sub(s_ble.c305_handle, 0x0001);
     }
+#if NANO_TEMPO_TICK_HUNT
+    if (c306) {
+        add_sub(s_ble.c306_handle, 0x0002); /* INDICATE */
+        ESP_LOGI(TAG, "TICK HUNT: subscribed C306 indicate");
+    }
+#else
     /*
      * Do NOT subscribe to C306. It INDICATEs a mirror of C305; each indicate
      * needs a confirm and doubles ATT traffic during pitch streaming.
      */
     (void)c306;
-    if (s_ble.midi_handle != INVALID_HANDLE) {
+#endif
+    if (s_ble.midi_handle != INVALID_HANDLE && s_ble.midi_handle != c302) {
         add_sub(s_ble.midi_handle, 0x0001);
+    }
+    /* Always try C302 notify too — may carry MIDI clock / tap. */
+    if (c302 != INVALID_HANDLE) {
+        add_sub(c302, 0x0001);
     }
 
     ESP_LOGI(TAG,
-             "C304=%u (%s) C305=%u (%s) C306=%u (skip sub) MIDI=%u (%s) subs=%u",
+             "C304=%u (%s) C305=%u (%s) C306=%u (%s) MIDI=%u (%s) subs=%u",
              s_ble.c304_handle, c304 ? "ok" : "missing",
              s_ble.c305_handle, c305 ? "ok" : "missing",
              s_ble.c306_handle,
-             s_ble.midi_handle, s_ble.midi_handle != INVALID_HANDLE ? "ok" : "none",
+#if NANO_TEMPO_TICK_HUNT
+             c306 ? "hunt" : "missing",
+#else
+             "skip sub",
+#endif
+             s_ble.midi_handle,
+             s_ble.midi_handle == INVALID_HANDLE ? "none"
+                 : (s_ble.midi_handle == c302 ? "C302" : "BLE-MIDI"),
              (unsigned)s_sub_count);
     return c304 && c305;
 }
@@ -438,8 +647,13 @@ static void c305_worker_task(void *arg)
         }
 
         if (s_ble.c305_handle == INVALID_HANDLE || item.handle != s_ble.c305_handle) {
+#if NANO_TEMPO_TICK_HUNT
+            /* Already logged in notify callback; do not feed non-C305 into state parser. */
+            continue;
+#else
             const char *lab = handle_label(item.handle);
             ESP_LOGD(TAG, "GATT RX %s h=%u len=%u", lab ? lab : "other", item.handle, item.len);
+#endif
         }
 
         nano_state_feed_c305(item.data, item.len);
@@ -549,10 +763,29 @@ static void on_gatt_notify(uint16_t handle, const uint8_t *data, uint16_t len)
     bool is_c305 = s_ble.c305_handle != INVALID_HANDLE && handle == s_ble.c305_handle;
     bool is_c306 = s_ble.c306_handle != INVALID_HANDLE && handle == s_ble.c306_handle;
 
+#if NANO_TEMPO_TICK_HUNT
+    bool log_it = !is_c305;
+    if (is_c305) {
+        if (nano_state_tempo_active() || len <= 24) {
+            log_it = true;
+        } else {
+            for (uint16_t i = 0; i + 6 <= len && i < 32; i++) {
+                if (data[i] == 0x2D && data[i + 5] == 0x91) {
+                    log_it = true;
+                    break;
+                }
+            }
+        }
+    }
+    if (log_it) {
+        tick_hunt_log_notify(handle, data, len);
+    }
+#else
     if (!is_c305 && !is_c306) {
         const char *lab = handle_label(handle);
         ESP_LOGD(TAG, "GATT notify h=%u (%s) len=%u", handle, lab ? lab : "?", len);
     }
+#endif
 
     /* C306 mirrors C305 — never queue it (doubles work; stomps live pitch mailbox). */
     if (is_c306) {
@@ -727,6 +960,9 @@ static void gattc_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
             ESP_LOGI(TAG, "GATT subscriptions enabled (C305/C306/…) — syncing");
             nano_ui_set_ble_connected(true);
             send_sync_packets();
+#if NANO_TEMPO_TICK_HUNT
+            tick_hunt_start_reads();
+#endif
         }
         break;
 
@@ -745,6 +981,12 @@ static void gattc_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
             ESP_LOGW(TAG, "BPM hunt: GATT read status=%d handle=%u", param->read.status,
                      param->read.handle);
         } else {
+#if NANO_TEMPO_TICK_HUNT
+            if (nano_state_tempo_active()) {
+                tick_hunt_on_read(param->read.handle, param->read.value, param->read.value_len);
+                break;
+            }
+#endif
             char lab[32];
             snprintf(lab, sizeof(lab), "GATT read h=%u", param->read.handle);
             nano_log_bytes_full(TAG, lab, param->read.value, param->read.value_len);
@@ -765,6 +1007,14 @@ static void gattc_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
         ESP_LOGW(TAG, "Disconnected reason=0x%02x — will rescan", param->disconnect.reason);
         s_ble.connected = false;
         s_ble.gattc_if = ESP_GATT_IF_NONE;
+#if NANO_TEMPO_TICK_HUNT
+        if (s_tick_read_timer) {
+            esp_timer_stop(s_tick_read_timer);
+        }
+        memset(s_tick_last_us, 0, sizeof(s_tick_last_us));
+        s_tick_any_last_us = 0;
+        memset(s_tick_read_have, 0, sizeof(s_tick_read_have));
+#endif
         reset_handles();
         nano_ble_drain_rx_queue();
         nano_ui_set_ble_connected(false);

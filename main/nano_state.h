@@ -46,6 +46,24 @@ void nano_state_request_preset_refresh(const char *label);
 /** Apply discovered BPM and stop boot probes. */
 void nano_state_on_bpm_found(uint16_t bpm);
 
+/** Last known BPM (0 if unknown). */
+uint16_t nano_state_get_bpm(void);
+
+/** True while Nano Tempo Mode is considered active (UI or pedal). */
+bool nano_state_tempo_active(void);
+
+/** Open Tempo Mode screen: enter Nano Tempo Mode via C304 tap frame. */
+bool nano_state_tempo_enter(void);
+
+/** Close Tempo Mode screen: best-effort exit-shaped C304 write. */
+bool nano_state_tempo_exit(void);
+
+/**
+ * TAP button: send C304 tap frame. From the 2nd interval onward average BPM
+ * and update UI/blinker.
+ */
+bool nano_state_tempo_tap(void);
+
 #ifdef __cplusplus
 }
 #endif

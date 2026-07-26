@@ -264,6 +264,47 @@ size_t nano_fx_param_payload(uint8_t model_slot, uint8_t param_index, float norm
     return i;
 }
 
+static size_t bpm_float_frame(float bpm, bool include_tap_marker, uint8_t *buf, size_t cap)
+{
+    size_t need = include_tap_marker ? 17 : 15;
+    if (cap < need || bpm < (float)NANO_BPM_MIN || bpm > (float)NANO_BPM_MAX) {
+        return 0;
+    }
+
+    size_t i = 0;
+    buf[i++] = 0x00; /* length placeholder */
+    buf[i++] = 0xC0;
+    buf[i++] = 0x08;
+    buf[i++] = 0x01;
+    if (include_tap_marker) {
+        buf[i++] = 0x18;
+        buf[i++] = 0x01;
+    }
+    buf[i++] = 0x20;
+    buf[i++] = 0x01;
+    buf[i++] = 0x2D;
+    if (append_float32_le(bpm, buf + i, cap - i) != 4) {
+        return 0;
+    }
+    i += 4;
+    buf[i++] = 0x91;
+    buf[i++] = 0x00;
+    buf[i++] = 0x00;
+    buf[i++] = 0x00;
+    buf[0] = (uint8_t)(i - 2);
+    return i;
+}
+
+size_t nano_bpm_tap_payload(float bpm, uint8_t *buf, size_t cap)
+{
+    return bpm_float_frame(bpm, true, buf, cap);
+}
+
+size_t nano_bpm_exit_payload(float bpm, uint8_t *buf, size_t cap)
+{
+    return bpm_float_frame(bpm, false, buf, cap);
+}
+
 size_t nano_tuner_enable_payload(uint8_t *buf, size_t cap)
 {
     static const uint8_t pkt[] = {

@@ -27,7 +27,7 @@ void app_main(void)
     configure_log_filter();
 
     /* Bump this string whenever diagnosing "did flash land?" — check serial at boot. */
-    ESP_LOGI(TAG, "firmware build 2026-07-26y (BPM beat: content-width label, tight left gap)");
+    ESP_LOGI(TAG, "firmware build 2026-07-26ao (no beat dots; plain BPM header)");
     ESP_LOGI(TAG, "Nano Cortex firmware starting");
 
     ESP_ERROR_CHECK(nano_ui_start());

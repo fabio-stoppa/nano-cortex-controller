@@ -1,5 +1,6 @@
 #include "nano_state.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -30,6 +31,10 @@ static const char *TAG = "nano_state";
 #define STATE_RX_TIMEOUT_US (5000 * 1000)
 #define STATE_PROBE_LABEL_MAX 24
 #define PARSE_TASK_STACK 8192
+#define TAP_TIMEOUT_US (2000 * 1000)
+#define TAP_HISTORY_MAX 4
+#define TEMPO_DEFAULT_BPM 120.f
+#define TEMPO_EXIT_ECHO_IGNORE_US (800 * 1000)
 
 static nano_rx_mode_t s_mode = NANO_RX_IDLE;
 static nano_amp_t s_amp;
@@ -53,18 +58,183 @@ static bool s_tuner_fast_sync_armed;
 static bool s_tuner_watch_running;
 static bool s_pending_tuner_sync;
 static bool s_bpm_known;
+static uint16_t s_last_bpm;
+static bool s_tempo_mode_active;
+static int64_t s_tempo_ignore_exit_echo_us;
 static char s_state_probe_label[STATE_PROBE_LABEL_MAX];
 static TaskHandle_t s_parse_task;
+static int64_t s_tap_times[TAP_HISTORY_MAX];
+static unsigned s_tap_count;
 
 static void parse_state_buffer(void);
+static void on_tempo_notify(uint16_t bpm, bool tap_marker);
 
 void nano_state_on_bpm_found(uint16_t bpm)
 {
-    if (bpm < 20 || bpm > 400) {
+    if (bpm < NANO_BPM_MIN || bpm > NANO_BPM_MAX) {
         return;
     }
     s_bpm_known = true;
+    s_last_bpm = bpm;
     nano_ui_set_bpm(bpm, true);
+}
+
+uint16_t nano_state_get_bpm(void)
+{
+    return s_bpm_known ? s_last_bpm : 0;
+}
+
+bool nano_state_tempo_active(void)
+{
+    return s_tempo_mode_active;
+}
+
+static float tempo_bpm_f(void)
+{
+    if (s_bpm_known && s_last_bpm >= NANO_BPM_MIN && s_last_bpm <= NANO_BPM_MAX) {
+        return (float)s_last_bpm;
+    }
+    return TEMPO_DEFAULT_BPM;
+}
+
+static bool write_tempo_tap_bpm(float bpm_f, const char *label)
+{
+    uint8_t buf[24];
+    size_t n = nano_bpm_tap_payload(bpm_f, buf, sizeof(buf));
+    if (n == 0) {
+        return false;
+    }
+    return nano_ble_write_c304(label, buf, n) == ESP_OK;
+}
+
+static void on_tempo_notify(uint16_t bpm, bool tap_marker)
+{
+    if (bpm < NANO_BPM_MIN || bpm > NANO_BPM_MAX) {
+        return;
+    }
+
+    s_bpm_known = true;
+    s_last_bpm = bpm;
+
+    if (tap_marker) {
+        /* Tap / keep-alive while in Tempo Mode — open UI + phase-lock blinker. */
+        ESP_LOGI(TAG, "Tempo Mode notify TAP @ %u BPM", (unsigned)bpm);
+        s_tempo_mode_active = true;
+        nano_ui_set_tempo_mode(true);
+        nano_ui_bpm_tap(bpm);
+        return;
+    }
+
+    int64_t now = esp_timer_get_time();
+    if (now < s_tempo_ignore_exit_echo_us) {
+        ESP_LOGI(TAG, "Tempo Mode notify EXIT @ %u BPM (ignored echo)", (unsigned)bpm);
+        nano_ui_set_bpm(bpm, true);
+        return;
+    }
+
+    /*
+     * Exit-shaped 0x91 (no 18 01):
+     * - While active → leave Tempo Mode (Footswitch II / peer exit).
+     * - While idle → enter announce (Footswitch I hold); Cloud app opens here too.
+     */
+    if (s_tempo_mode_active) {
+        ESP_LOGI(TAG, "Tempo Mode notify EXIT @ %u BPM", (unsigned)bpm);
+        s_tempo_mode_active = false;
+        s_tap_count = 0;
+        nano_ui_set_bpm(bpm, true);
+        nano_ui_set_tempo_mode(false);
+    } else {
+        ESP_LOGI(TAG, "Tempo Mode notify ENTER @ %u BPM", (unsigned)bpm);
+        s_tempo_mode_active = true;
+        nano_ui_set_tempo_mode(true);
+        nano_ui_bpm_tap(bpm);
+    }
+}
+
+bool nano_state_tempo_enter(void)
+{
+    if (!nano_ble_connected()) {
+        return false;
+    }
+    s_tap_count = 0;
+    float bpm_f = tempo_bpm_f();
+    ESP_LOGI(TAG, "Tempo Mode enter @ %.0f BPM", (double)bpm_f);
+    bool ok = write_tempo_tap_bpm(bpm_f, "Tempo Mode enter");
+    if (ok) {
+        uint16_t bpm = (uint16_t)lroundf(bpm_f);
+        s_bpm_known = true;
+        s_last_bpm = bpm;
+        s_tempo_mode_active = true;
+        /* Number only — blinker phase-locks on the pedal echo/notify. */
+        nano_ui_set_bpm(bpm, true);
+    }
+    return ok;
+}
+
+bool nano_state_tempo_exit(void)
+{
+    s_tap_count = 0;
+    s_tempo_mode_active = false;
+    s_tempo_ignore_exit_echo_us = esp_timer_get_time() + TEMPO_EXIT_ECHO_IGNORE_US;
+    if (!nano_ble_connected()) {
+        return false;
+    }
+    float bpm_f = tempo_bpm_f();
+    uint8_t buf[24];
+    size_t n = nano_bpm_exit_payload(bpm_f, buf, sizeof(buf));
+    if (n == 0) {
+        return false;
+    }
+    ESP_LOGI(TAG, "Tempo Mode exit @ %.0f BPM", (double)bpm_f);
+    return nano_ble_write_c304("Tempo Mode exit", buf, n) == ESP_OK;
+}
+
+bool nano_state_tempo_tap(void)
+{
+    if (!nano_ble_connected()) {
+        return false;
+    }
+
+    int64_t now = esp_timer_get_time();
+    if (s_tap_count > 0 && (now - s_tap_times[s_tap_count - 1]) > TAP_TIMEOUT_US) {
+        s_tap_count = 0;
+    }
+
+    if (s_tap_count >= TAP_HISTORY_MAX) {
+        memmove(s_tap_times, s_tap_times + 1, (TAP_HISTORY_MAX - 1) * sizeof(s_tap_times[0]));
+        s_tap_count = TAP_HISTORY_MAX - 1;
+    }
+    s_tap_times[s_tap_count++] = now;
+
+    float bpm_f = tempo_bpm_f();
+    if (s_tap_count >= 2) {
+        double sum_us = 0.0;
+        for (unsigned i = 1; i < s_tap_count; i++) {
+            sum_us += (double)(s_tap_times[i] - s_tap_times[i - 1]);
+        }
+        double avg_us = sum_us / (double)(s_tap_count - 1);
+        if (avg_us >= 1.0) {
+            bpm_f = (float)(60000000.0 / avg_us);
+            if (bpm_f < (float)NANO_BPM_MIN) {
+                bpm_f = (float)NANO_BPM_MIN;
+            } else if (bpm_f > (float)NANO_BPM_MAX) {
+                bpm_f = (float)NANO_BPM_MAX;
+            }
+        }
+    }
+
+    uint16_t bpm = (uint16_t)lroundf(bpm_f);
+    ESP_LOGI(TAG, "Tempo Mode tap #%u -> %u BPM", s_tap_count, (unsigned)bpm);
+    if (!write_tempo_tap_bpm(bpm_f, "Tempo Mode tap")) {
+        return false;
+    }
+
+    s_bpm_known = true;
+    s_last_bpm = bpm;
+    s_tempo_mode_active = true;
+    /* Update readout now; phase-lock on C305 echo so we match the Nano LED. */
+    nano_ui_set_bpm(bpm, true);
+    return true;
 }
 
 static void append_fe_payload(const uint8_t *data, size_t len)
@@ -563,6 +733,10 @@ static void reset_amp_sync(void)
     s_pending_tuner_sync = false;
     s_state_rx_since_us = 0;
     s_bpm_known = false;
+    s_last_bpm = 0;
+    s_tap_count = 0;
+    s_tempo_mode_active = false;
+    s_tempo_ignore_exit_echo_us = 0;
     memset(&s_amp, 0, sizeof(s_amp));
     if (s_parse_timer) {
         esp_timer_stop(s_parse_timer);
@@ -590,7 +764,11 @@ void nano_state_reset(void)
     reset_amp_sync();
     nano_tuner_reset();
     nano_fx_reset();
+    s_tempo_mode_active = false;
+    s_tempo_ignore_exit_echo_us = 0;
+    s_tap_count = 0;
     nano_ui_set_bpm(0, false);
+    nano_ui_set_tempo_mode(false);
 }
 
 void nano_rx_mode_set(nano_rx_mode_t mode)
@@ -681,10 +859,9 @@ void nano_state_feed_c305(const uint8_t *data, size_t len)
     }
 
     uint16_t live_bpm = 0;
-    if (nano_try_parse_bpm_notify(data, len, &live_bpm)) {
-        ESP_LOGI(TAG, "BPM %u (live tap notify)", (unsigned)live_bpm);
-        s_bpm_known = true;
-        nano_ui_bpm_tap(live_bpm);
+    bool tap_marker = false;
+    if (nano_try_parse_bpm_notify_ex(data, len, &live_bpm, &tap_marker)) {
+        on_tempo_notify(live_bpm, tap_marker);
         return;
     }
 

@@ -90,11 +90,14 @@ bool nano_try_parse_amp_hw_notify(const uint8_t *data, size_t len, uint8_t *knob
 
 /**
  * Live tap-tempo BPM notify (C305):
- *   Tap:  len C0 08 01 18 01 20 01 2D <f32 BPM> 91 00 00 00
- *   Exit: len C0 08 01       20 01 2D <f32 BPM> 91 00 00 00
+ *   Tap/active: len C0 08 01 18 01 20 01 2D <f32 BPM> 91 …
+ *   Exit/announce: len C0 08 01       20 01 2D <f32 BPM> 91 …
  * Trailer 0x91 distinguishes from amp gain float (trailer 0x63).
+ * If out_tap_marker is non-NULL, set true when the 18 01 tap field is present.
  */
 bool nano_try_parse_bpm_notify(const uint8_t *data, size_t len, uint16_t *out_bpm);
+bool nano_try_parse_bpm_notify_ex(const uint8_t *data, size_t len, uint16_t *out_bpm,
+                                  bool *out_tap_marker);
 
 /** Log amp as raw + percent (0–255 → 0–100%). */
 void nano_log_amp(const char *tag, const nano_amp_t *amp);

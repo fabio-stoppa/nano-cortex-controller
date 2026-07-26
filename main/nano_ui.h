@@ -28,6 +28,12 @@ void nano_ui_set_bpm(uint16_t bpm, bool valid);
  */
 void nano_ui_bpm_tap(uint16_t bpm);
 
+/**
+ * Pedal Tempo Mode on/off (Footswitch / peer notify). Shows or hides the Tempo
+ * screen without writing enter/exit to the pedal. Safe from any task.
+ */
+void nano_ui_set_tempo_mode(bool active);
+
 /** Update header preset name (safe from any task). */
 void nano_ui_set_preset_name(const char *name);
 

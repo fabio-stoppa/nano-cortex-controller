@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "nano_protocol.h"
 #include "nano_tuner.h"
 
 static float read_f32_le(const uint8_t *p);
@@ -200,7 +201,7 @@ bool nano_parse_bpm(const uint8_t *data, size_t len, uint16_t *out_bpm)
             }
             if (field == field_want) {
                 float f = read_f32_le(data + i);
-                if (isfinite((double)f) && f >= 20.f && f <= 400.f) {
+                if (isfinite((double)f) && f >= (float)NANO_BPM_MIN && f <= (float)NANO_BPM_MAX) {
                     *out_bpm = (uint16_t)lroundf(f);
                     return true;
                 }
@@ -217,7 +218,7 @@ bool nano_parse_bpm(const uint8_t *data, size_t len, uint16_t *out_bpm)
             continue;
         }
         float f = read_f32_le(data + off + 2);
-        if (isfinite((double)f) && f >= 20.f && f <= 400.f) {
+        if (isfinite((double)f) && f >= (float)NANO_BPM_MIN && f <= (float)NANO_BPM_MAX) {
             *out_bpm = (uint16_t)lroundf(f);
             return true;
         }
@@ -264,7 +265,7 @@ void nano_log_bpm_hunt(const char *tag, const uint8_t *data, size_t len)
                 break;
             }
             i = next;
-            if (field >= 40 && val >= 20 && val <= 400) {
+            if (field >= 40 && val >= NANO_BPM_MIN && val <= NANO_BPM_MAX) {
                 ESP_LOGI(tag, "BPM hunt: f%u varint=%u (tempo-ish?)", (unsigned)field, (unsigned)val);
             }
         } else if (wire == 1) {
@@ -869,7 +870,8 @@ bool nano_try_parse_amp_hw_notify(const uint8_t *data, size_t len, uint8_t *knob
     return false;
 }
 
-bool nano_try_parse_bpm_notify(const uint8_t *data, size_t len, uint16_t *out_bpm)
+bool nano_try_parse_bpm_notify_ex(const uint8_t *data, size_t len, uint16_t *out_bpm,
+                                  bool *out_tap_marker)
 {
     if (!data || !out_bpm || len < 12) {
         return false;
@@ -885,10 +887,11 @@ bool nano_try_parse_bpm_notify(const uint8_t *data, size_t len, uint16_t *out_bp
         }
 
         float value = read_f32_le(data + i + 1);
-        if (!isfinite((double)value) || value < 20.f || value > 400.f) {
+        if (!isfinite((double)value) || value < (float)NANO_BPM_MIN || value > (float)NANO_BPM_MAX) {
             continue;
         }
 
+        /* Require C0 08 01 prefix shortly before the float. */
         bool prefix = false;
         size_t back_start = (i >= 12) ? (i - 12) : 0;
         for (size_t back = back_start; back + 3 <= i; back++) {
@@ -901,11 +904,26 @@ bool nano_try_parse_bpm_notify(const uint8_t *data, size_t len, uint16_t *out_bp
             continue;
         }
 
+        /* Tap marker: … 18 01 20 01 2D <f32> 91  vs exit/announce: … 20 01 2D <f32> 91 */
+        bool tap = (i >= 4 && data[i - 4] == 0x18 && data[i - 3] == 0x01 &&
+                    data[i - 2] == 0x20 && data[i - 1] == 0x01);
+        if (!tap && !(i >= 2 && data[i - 2] == 0x20 && data[i - 1] == 0x01)) {
+            continue;
+        }
+
         *out_bpm = (uint16_t)lroundf(value);
+        if (out_tap_marker) {
+            *out_tap_marker = tap;
+        }
         return true;
     }
 
     return false;
+}
+
+bool nano_try_parse_bpm_notify(const uint8_t *data, size_t len, uint16_t *out_bpm)
+{
+    return nano_try_parse_bpm_notify_ex(data, len, out_bpm, NULL);
 }
 
 static unsigned pct(uint8_t raw)

@@ -16,6 +16,7 @@
 #include "nano_ble.h"
 #include "nano_amp.h"
 #include "nano_proto.h"
+#include "nano_protocol.h"
 #include "nano_state.h"
 #include "nano_tuner.h"
 #include "nano_fx.h"
@@ -39,6 +40,7 @@ static const char *TAG = "nano_ui";
 #define UI_DISP_FX    (1u << 3)
 #define UI_DISP_BPM     (1u << 4)
 #define UI_DISP_PRESET  (1u << 5)
+#define UI_DISP_TEMPO   (1u << 6)
 
 #define CHAIN_BLOCK_COUNT 6
 #define UI_EDGE_PAD       1
@@ -159,12 +161,8 @@ typedef struct {
 
 static lv_obj_t *s_ble_icon;
 static lv_obj_t *s_bpm_lbl;
-static lv_obj_t *s_bpm_dot;
 static lv_timer_t *s_ble_icon_timer;
-static lv_timer_t *s_bpm_beat_timer;
 static bool s_ble_blink_on;
-static bool s_bpm_beat_lit;
-static uint16_t s_bpm_beat_bpm;
 static lv_obj_t *s_tuner_note;
 static lv_obj_t *s_tuner_cents;
 static lv_obj_t *s_tuner_state;
@@ -207,6 +205,13 @@ static lv_obj_t *s_fx_panel;
 static lv_obj_t *s_tuner_panel;
 static lv_obj_t *s_tuner_hdr_btn;
 static bool s_tuner_view;
+static lv_obj_t *s_tempo_panel;
+static lv_obj_t *s_tempo_bpm_lbl;
+static lv_obj_t *s_tempo_tap_btn;
+static lv_obj_t *s_tempo_scope_sw;
+static lv_obj_t *s_tempo_scope_lbl;
+static bool s_tempo_view;
+static bool s_tempo_scope_global = true; /* UI-local until BLE frame known */
 
 static chain_block_ui_t s_chain[CHAIN_BLOCK_COUNT];
 static chain_slot_t s_chain_selected = CHAIN_AMP;
@@ -241,9 +246,10 @@ static bool s_async_fx_pending;
 static uint16_t s_async_bpm;
 static bool s_async_bpm_valid;
 static bool s_async_bpm_pending;
-static bool s_async_bpm_rephase;
 static uint16_t s_ui_bpm_cache;
 static bool s_ui_bpm_cache_valid;
+static bool s_async_tempo_mode;
+static bool s_async_tempo_mode_pending;
 static char s_async_preset[NANO_PRESET_NAME_MAX];
 static char s_ui_preset_cache[NANO_PRESET_NAME_MAX];
 static bool s_ui_preset_cache_valid;
@@ -310,6 +316,9 @@ static void async_apply_bpm_cb(void *arg);
 static void async_apply_fx_cb(void *arg);
 static void show_content_for_chain(chain_slot_t slot);
 static void show_tuner_view(bool on);
+static void show_tempo_view(bool on, bool write_pedal);
+static void build_tempo_panel(lv_obj_t *parent);
+static void async_apply_tempo_mode_cb(void *arg);
 static void update_chain_blocks_locked(const nano_amp_t *amp, const nano_fx_state_t *fx);
 static ui_icon_kind_t category_to_icon(nano_fx_category_t cat);
 static lv_color_t icon_kind_color(ui_icon_kind_t kind);
@@ -401,6 +410,38 @@ static void tuner_btn_event_cb(lv_event_t *e)
     }
 
     nano_tuner_set_active(!t->active);
+}
+
+static void bpm_hdr_btn_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED || !s_ble_connected) {
+        return;
+    }
+    show_tempo_view(!s_tempo_view, true);
+    sync_header_model_locked(nano_fx_get());
+    update_chain_blocks_locked(nano_state_get_amp(), nano_fx_get());
+}
+
+static void tempo_tap_btn_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED || !s_ble_connected) {
+        return;
+    }
+    nano_state_tempo_tap();
+}
+
+static void tempo_scope_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED || !s_tempo_scope_sw) {
+        return;
+    }
+    s_tempo_scope_global = lv_obj_has_state(s_tempo_scope_sw, LV_STATE_CHECKED);
+    if (s_tempo_scope_lbl) {
+        lv_label_set_text(s_tempo_scope_lbl, s_tempo_scope_global ? "Global tempo" : "Preset tempo");
+    }
+    /* BLE write for global/preset scope is unknown — UI-local until sniffed. */
+    ESP_LOGI(TAG, "Tempo scope UI: %s (no BLE write yet)",
+             s_tempo_scope_global ? "global" : "preset");
 }
 
 static void apply_tuner_locked(const nano_tuner_t *tuner)
@@ -534,6 +575,13 @@ static void async_apply_ble_cb(void *arg)
     s_ble_connected = s_async_ble_connected;
     refresh_ble_icon_locked();
     set_slider_enabled_locked(s_ble_connected);
+    if (s_tempo_tap_btn) {
+        if (s_ble_connected) {
+            lv_obj_remove_state(s_tempo_tap_btn, LV_STATE_DISABLED);
+        } else {
+            lv_obj_add_state(s_tempo_tap_btn, LV_STATE_DISABLED);
+        }
+    }
     if (s_async_tuner_pending) {
         apply_tuner_locked(&s_async_tuner);
     } else {
@@ -555,6 +603,9 @@ static void ui_run_pending_updates(uint8_t mask)
     }
     if (mask & UI_DISP_FX) {
         async_apply_fx_cb(NULL);
+    }
+    if (mask & UI_DISP_TEMPO) {
+        async_apply_tempo_mode_cb(NULL);
     }
     if (mask & UI_DISP_BPM) {
         async_apply_bpm_cb(NULL);
@@ -586,6 +637,8 @@ void nano_ui_dispatch_if_pending(void)
             mask = UI_DISP_BLE;
         } else if (s_async_fx_pending) {
             mask = UI_DISP_FX;
+        } else if (s_async_tempo_mode_pending) {
+            mask = UI_DISP_TEMPO;
         } else if (s_async_bpm_pending) {
             mask = UI_DISP_BPM;
         } else if (s_async_preset_pending) {
@@ -656,105 +709,30 @@ static void async_apply_fx_cb(void *arg)
     s_async_fx_pending = false;
 }
 
-#define BPM_BEAT_FLASH_MS 100u
-#define BPM_DOT_SIZE 14
-#define BPM_DOT_COLOR 0x00FF66
-#define BPM_DOT_GAP 8
-
-static uint32_t bpm_beat_period_ms(uint16_t bpm)
+static void apply_bpm_locked(uint16_t bpm, bool valid)
 {
-    if (bpm < 20) {
-        bpm = 20;
-    } else if (bpm > 400) {
-        bpm = 400;
-    }
-    uint32_t ms = 60000u / (uint32_t)bpm;
-    if (ms < 150u) {
-        ms = 150u;
-    }
-    return ms;
-}
-
-static void bpm_beat_set_lit(bool lit)
-{
-    if (!s_bpm_dot) {
-        return;
-    }
-    s_bpm_beat_lit = lit;
-    lv_obj_set_style_bg_opa(s_bpm_dot, lit ? LV_OPA_COVER : LV_OPA_20, 0);
-}
-
-static void bpm_beat_timer_cb(lv_timer_t *timer)
-{
-    (void)timer;
-    if (!s_bpm_dot || !s_ui_bpm_cache_valid || s_bpm_beat_bpm < 20) {
+    if (!s_bpm_lbl && !s_tempo_bpm_lbl) {
         return;
     }
 
-    if (!s_bpm_beat_lit) {
-        bpm_beat_set_lit(true);
-        lv_timer_set_period(s_bpm_beat_timer, BPM_BEAT_FLASH_MS);
-        return;
-    }
-
-    bpm_beat_set_lit(false);
-    uint32_t beat_ms = bpm_beat_period_ms(s_bpm_beat_bpm);
-    uint32_t rest = (beat_ms > BPM_BEAT_FLASH_MS) ? (beat_ms - BPM_BEAT_FLASH_MS) : beat_ms;
-    lv_timer_set_period(s_bpm_beat_timer, rest);
-}
-
-static void bpm_beat_sync_locked(uint16_t bpm, bool valid)
-{
-    if (!s_bpm_dot) {
-        return;
-    }
-
-    if (!valid || bpm < 20) {
-        s_bpm_beat_bpm = 0;
-        bpm_beat_set_lit(false);
-        lv_obj_add_flag(s_bpm_dot, LV_OBJ_FLAG_HIDDEN);
-        if (s_bpm_beat_timer) {
-            lv_timer_pause(s_bpm_beat_timer);
+    char buf[16];
+    if (!valid) {
+        if (s_bpm_lbl) {
+            ui_set_label_if_changed(s_bpm_lbl, "- BPM");
+        }
+        if (s_tempo_bpm_lbl) {
+            ui_set_label_if_changed(s_tempo_bpm_lbl, "-");
         }
         return;
     }
 
-    s_bpm_beat_bpm = bpm;
-    lv_obj_clear_flag(s_bpm_dot, LV_OBJ_FLAG_HIDDEN);
-
-    if (!s_bpm_beat_timer) {
-        s_bpm_beat_timer = lv_timer_create(bpm_beat_timer_cb, BPM_BEAT_FLASH_MS, NULL);
+    if (s_bpm_lbl) {
+        snprintf(buf, sizeof(buf), "%u BPM", (unsigned)bpm);
+        ui_set_label_if_changed(s_bpm_lbl, buf);
     }
-
-    /* Downbeat now — phase-lock to tap / tempo change. */
-    bpm_beat_set_lit(true);
-    lv_timer_set_period(s_bpm_beat_timer, BPM_BEAT_FLASH_MS);
-    lv_timer_reset(s_bpm_beat_timer);
-    lv_timer_resume(s_bpm_beat_timer);
-}
-
-static void apply_bpm_locked(uint16_t bpm, bool valid)
-{
-    if (!s_bpm_lbl) {
-        s_async_bpm_rephase = false;
-        return;
-    }
-
-    bool rephase = s_async_bpm_rephase;
-    s_async_bpm_rephase = false;
-
-    char buf[16];
-    if (!valid) {
-        ui_set_label_if_changed(s_bpm_lbl, "- BPM");
-        bpm_beat_sync_locked(0, false);
-        return;
-    }
-
-    snprintf(buf, sizeof(buf), "%u BPM", (unsigned)bpm);
-    ui_set_label_if_changed(s_bpm_lbl, buf);
-
-    if (rephase || s_bpm_beat_bpm != bpm || !s_bpm_beat_timer) {
-        bpm_beat_sync_locked(bpm, true);
+    if (s_tempo_bpm_lbl) {
+        snprintf(buf, sizeof(buf), "%u", (unsigned)bpm);
+        ui_set_label_if_changed(s_tempo_bpm_lbl, buf);
     }
 }
 
@@ -785,6 +763,9 @@ static void refresh_preset_label_locked(void)
         text[sizeof(text) - 1] = '\0';
     } else if (s_tuner_view) {
         strncpy(text, "Tuner", sizeof(text) - 1);
+        text[sizeof(text) - 1] = '\0';
+    } else if (s_tempo_view) {
+        strncpy(text, "Tempo", sizeof(text) - 1);
         text[sizeof(text) - 1] = '\0';
     } else {
         strncpy(text, "-", sizeof(text) - 1);
@@ -1058,6 +1039,11 @@ static bool chain_slot_is_fx(chain_slot_t slot)
 
 static void show_content_for_chain(chain_slot_t slot)
 {
+    if (s_tempo_view) {
+        s_tempo_view = false;
+        nano_state_tempo_exit();
+        layout_chrome_for_tuner(false);
+    }
     s_tuner_view = false;
     fx_model_picker_close();
 
@@ -1069,6 +1055,9 @@ static void show_content_for_chain(chain_slot_t slot)
     }
     if (s_tuner_panel) {
         lv_obj_add_flag(s_tuner_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_tempo_panel) {
+        lv_obj_add_flag(s_tempo_panel, LV_OBJ_FLAG_HIDDEN);
     }
 
     lv_obj_t *shown = NULL;
@@ -1144,6 +1133,13 @@ static void layout_chrome_for_tuner(bool tuner_on)
 
 static void show_tuner_view(bool on)
 {
+    if (on && s_tempo_view) {
+        s_tempo_view = false;
+        nano_state_tempo_exit();
+        if (s_tempo_panel) {
+            lv_obj_add_flag(s_tempo_panel, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
     s_tuner_view = on;
     if (on) {
         fx_model_picker_close();
@@ -1161,6 +1157,9 @@ static void show_tuner_view(bool on)
     if (s_fx_panel) {
         lv_obj_add_flag(s_fx_panel, LV_OBJ_FLAG_HIDDEN);
     }
+    if (s_tempo_panel) {
+        lv_obj_add_flag(s_tempo_panel, LV_OBJ_FLAG_HIDDEN);
+    }
     if (s_tuner_panel) {
         if (on) {
             lv_obj_remove_flag(s_tuner_panel, LV_OBJ_FLAG_HIDDEN);
@@ -1177,6 +1176,87 @@ static void show_tuner_view(bool on)
     }
 }
 
+static void show_tempo_view(bool on, bool write_pedal)
+{
+    if (on && s_tuner_view) {
+        s_tuner_view = false;
+        if (s_tuner_hdr_btn) {
+            lv_obj_remove_state(s_tuner_hdr_btn, LV_STATE_CHECKED);
+        }
+        if (s_tuner_panel) {
+            lv_obj_add_flag(s_tuner_panel, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    bool was_on = s_tempo_view;
+    if (on == was_on) {
+        return;
+    }
+
+    s_tempo_view = on;
+    if (on) {
+        fx_model_picker_close();
+    }
+
+    if (s_amp_panel) {
+        lv_obj_add_flag(s_amp_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_fx_panel) {
+        lv_obj_add_flag(s_fx_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_tuner_panel) {
+        lv_obj_add_flag(s_tuner_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    if (s_tempo_panel) {
+        if (on) {
+            lv_obj_remove_flag(s_tempo_panel, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(s_tempo_panel);
+            layout_chrome_for_tuner(true);
+            sync_header_model_locked(nano_fx_get());
+            refresh_preset_label_locked();
+            if (s_tempo_tap_btn) {
+                if (s_ble_connected) {
+                    lv_obj_remove_state(s_tempo_tap_btn, LV_STATE_DISABLED);
+                } else {
+                    lv_obj_add_state(s_tempo_tap_btn, LV_STATE_DISABLED);
+                }
+            }
+            ui_bring_chrome_to_front();
+            if (s_ui_bpm_cache_valid) {
+                apply_bpm_locked(s_ui_bpm_cache, true);
+            }
+            if (write_pedal) {
+                nano_state_tempo_enter();
+            }
+            update_chain_blocks_locked(nano_state_get_amp(), nano_fx_get());
+        } else {
+            lv_obj_add_flag(s_tempo_panel, LV_OBJ_FLAG_HIDDEN);
+            if (write_pedal) {
+                nano_state_tempo_exit();
+            }
+            layout_chrome_for_tuner(false);
+            show_content_for_chain(s_chain_selected);
+            update_chain_blocks_locked(nano_state_get_amp(), nano_fx_get());
+        }
+    }
+}
+
+static void async_apply_tempo_mode_cb(void *arg)
+{
+    (void)arg;
+    if (!s_async_tempo_mode_pending) {
+        return;
+    }
+    s_async_tempo_mode_pending = false;
+    bool on = s_async_tempo_mode;
+    if (on && !s_tempo_view) {
+        show_tempo_view(true, false);
+    } else if (!on && s_tempo_view) {
+        show_tempo_view(false, false);
+    }
+}
+
 static void update_chain_blocks_locked(const nano_amp_t *amp, const nano_fx_state_t *fx)
 {
     for (int i = 0; i < CHAIN_BLOCK_COUNT; i++) {
@@ -1185,7 +1265,7 @@ static void update_chain_blocks_locked(const nano_amp_t *amp, const nano_fx_stat
             continue;
         }
 
-        bool selected = ((chain_slot_t)i == s_chain_selected) && !s_tuner_view;
+        bool selected = ((chain_slot_t)i == s_chain_selected) && !s_tuner_view && !s_tempo_view;
         bool active = false;
         ui_icon_kind_t icon = UI_ICON_UTILITY;
         lv_color_t accent = lv_color_hex(0x808080);
@@ -1287,6 +1367,9 @@ static void chain_block_btn_event_cb(lv_event_t *e)
 
     chain_slot_t slot = (chain_slot_t)idx;
     s_chain_selected = slot;
+    if (s_tuner_view || s_tempo_view) {
+        layout_chrome_for_tuner(false);
+    }
     s_tuner_view = false;
 
     if (chain_slot_is_fx(slot)) {
@@ -2726,6 +2809,76 @@ static void build_tuner_panel(lv_obj_t *parent)
     lv_obj_center(btn_label);
 }
 
+static void build_tempo_panel(lv_obj_t *parent)
+{
+    lv_obj_set_style_bg_opa(parent, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(parent, 0, 0);
+    lv_obj_set_flex_flow(parent, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(parent, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(parent, 0, 0);
+    lv_obj_set_style_pad_top(parent, 0, 0);
+    lv_obj_set_style_pad_bottom(parent, 20, 0);
+    lv_obj_set_size(parent, LV_PCT(100), LV_PCT(100));
+
+    lv_obj_t *body = lv_obj_create(parent);
+    lv_obj_set_width(body, LV_PCT(100));
+    lv_obj_set_flex_grow(body, 1);
+    lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(body, 0, 0);
+    lv_obj_set_style_pad_all(body, 0, 0);
+    lv_obj_set_style_pad_row(body, 16, 0);
+    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(body, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(body, LV_OBJ_FLAG_CLICKABLE);
+
+    s_tempo_bpm_lbl = lv_label_create(body);
+    lv_label_set_text(s_tempo_bpm_lbl, "-");
+    lv_obj_set_style_text_color(s_tempo_bpm_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(s_tempo_bpm_lbl, UI_FONT_TUNER_NOTE, 0);
+
+    lv_obj_t *bpm_unit = lv_label_create(body);
+    lv_label_set_text(bpm_unit, "BPM");
+    lv_obj_set_style_text_color(bpm_unit, lv_color_hex(0x909090), 0);
+    lv_obj_set_style_text_font(bpm_unit, UI_FONT_LG, 0);
+
+    lv_obj_t *scope_row = lv_obj_create(body);
+    lv_obj_set_width(scope_row, LV_SIZE_CONTENT);
+    lv_obj_set_height(scope_row, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(scope_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(scope_row, 0, 0);
+    lv_obj_set_style_pad_all(scope_row, 0, 0);
+    lv_obj_set_style_pad_column(scope_row, 12, 0);
+    lv_obj_set_flex_flow(scope_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(scope_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    ui_passive_container(scope_row);
+
+    s_tempo_scope_lbl = lv_label_create(scope_row);
+    lv_label_set_text(s_tempo_scope_lbl, "Global tempo");
+    lv_obj_set_style_text_color(s_tempo_scope_lbl, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_text_font(s_tempo_scope_lbl, UI_FONT_MD, 0);
+
+    s_tempo_scope_sw = lv_switch_create(scope_row);
+    lv_obj_add_state(s_tempo_scope_sw, LV_STATE_CHECKED);
+    lv_obj_add_event_cb(s_tempo_scope_sw, tempo_scope_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    s_tempo_tap_btn = lv_button_create(parent);
+    lv_obj_set_size(s_tempo_tap_btn, 220, 72);
+    lv_obj_add_event_cb(s_tempo_tap_btn, tempo_tap_btn_event_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_state(s_tempo_tap_btn, LV_STATE_DISABLED);
+    lv_obj_t *tap_lbl = lv_label_create(s_tempo_tap_btn);
+    lv_label_set_text(tap_lbl, "TAP");
+    lv_obj_set_style_text_font(tap_lbl, UI_FONT_LG, 0);
+    lv_obj_center(tap_lbl);
+
+    uint16_t bpm = nano_state_get_bpm();
+    if (bpm >= NANO_BPM_MIN) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%u", (unsigned)bpm);
+        lv_label_set_text(s_tempo_bpm_lbl, buf);
+    }
+}
+
 static void set_slider_enabled_locked(bool enabled)
 {
     for (int i = 0; i < KNOB_COUNT; i++) {
@@ -2942,19 +3095,9 @@ static void build_header_bar(lv_obj_t *screen)
     lv_obj_set_style_pad_all(bpm_row, 0, 0);
     lv_obj_set_flex_flow(bpm_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(bpm_row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(bpm_row, BPM_DOT_GAP, 0);
-    ui_passive_container(bpm_row);
-
-    s_bpm_dot = lv_obj_create(bpm_row);
-    lv_obj_set_size(s_bpm_dot, BPM_DOT_SIZE, BPM_DOT_SIZE);
-    lv_obj_set_style_radius(s_bpm_dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(s_bpm_dot, lv_color_hex(BPM_DOT_COLOR), 0);
-    lv_obj_set_style_bg_opa(s_bpm_dot, LV_OPA_20, 0);
-    lv_obj_set_style_border_width(s_bpm_dot, 0, 0);
-    lv_obj_set_style_pad_all(s_bpm_dot, 0, 0);
-    lv_obj_clear_flag(s_bpm_dot, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_bpm_dot, LV_OBJ_FLAG_HIDDEN);
-    ui_passive_container(s_bpm_dot);
+    lv_obj_clear_flag(bpm_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(bpm_row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(bpm_row, bpm_hdr_btn_event_cb, LV_EVENT_CLICKED, NULL);
 
     s_bpm_lbl = lv_label_create(bpm_row);
     lv_label_set_text(s_bpm_lbl, "- BPM");
@@ -2963,6 +3106,7 @@ static void build_header_bar(lv_obj_t *screen)
     lv_obj_set_width(s_bpm_lbl, LV_SIZE_CONTENT);
     lv_label_set_long_mode(s_bpm_lbl, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_align(s_bpm_lbl, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_clear_flag(s_bpm_lbl, LV_OBJ_FLAG_CLICKABLE);
 
     s_ble_icon = lv_label_create(right);
     lv_label_set_text(s_ble_icon, LV_SYMBOL_BLUETOOTH);
@@ -3179,6 +3323,10 @@ static void build_ui(void)
     s_tuner_panel = make_content_panel(s_content_root);
     build_tuner_panel(s_tuner_panel);
 
+    s_tempo_panel = make_content_panel(s_content_root);
+    build_tempo_panel(s_tempo_panel);
+    lv_obj_add_flag(s_tempo_panel, LV_OBJ_FLAG_HIDDEN);
+
     show_content_for_chain(CHAIN_AMP);
     ui_bring_chrome_to_front();
 
@@ -3373,14 +3521,13 @@ void nano_ui_set_bpm(uint16_t bpm, bool valid)
     s_async_bpm = bpm;
     s_async_bpm_valid = valid;
     s_async_bpm_pending = true;
-    s_async_bpm_rephase = false;
     s_ui_dispatch_mask |= UI_DISP_BPM;
     ui_request_dispatch();
 }
 
 void nano_ui_bpm_tap(uint16_t bpm)
 {
-    if (bpm < 20 || bpm > 400) {
+    if (bpm < NANO_BPM_MIN || bpm > NANO_BPM_MAX) {
         return;
     }
 
@@ -3389,8 +3536,15 @@ void nano_ui_bpm_tap(uint16_t bpm)
     s_async_bpm = bpm;
     s_async_bpm_valid = true;
     s_async_bpm_pending = true;
-    s_async_bpm_rephase = true;
     s_ui_dispatch_mask |= UI_DISP_BPM;
+    ui_request_dispatch();
+}
+
+void nano_ui_set_tempo_mode(bool active)
+{
+    s_async_tempo_mode = active;
+    s_async_tempo_mode_pending = true;
+    s_ui_dispatch_mask |= UI_DISP_TEMPO;
     ui_request_dispatch();
 }
 
