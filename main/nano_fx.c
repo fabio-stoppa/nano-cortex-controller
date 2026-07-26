@@ -55,6 +55,12 @@ static esp_timer_handle_t s_refresh_gap_timer;
 static esp_timer_handle_t s_begin_refresh_timer;
 static int64_t s_block_on_asserted_us[NANO_FX_BLOCK_COUNT];
 static int64_t s_block_model_write_us[NANO_FX_BLOCK_COUNT];
+/** Protects local Gate ON/OFF against stale live-poll until assert window ends. */
+static int64_t s_gate_assert_us;
+static int s_gate_assert_on; /* -1 idle, 0 off, 1 on */
+/** Protects local Gate amount against stale field-53 until assert window ends. */
+static int64_t s_gate_amount_assert_us;
+static int s_gate_amount_assert_pct; /* -1 idle, else 0..100 */
 /** Model last selected via BLE write; preset/inference must not override. */
 static const nano_fx_model_def_t *s_block_trusted_model[NANO_FX_BLOCK_COUNT];
 
@@ -1204,6 +1210,58 @@ static bool extract_model_field(const uint8_t *data, size_t len, uint32_t field_
 static void try_apply_catalog_model(nano_fx_block_t *block);
 
 static bool extract_field_varint(const uint8_t *data, size_t len, uint32_t field_num, uint32_t *out_val);
+static bool extract_field_fixed32_float(const uint8_t *data, size_t len, uint32_t field_num, float *out_val);
+
+/** Scan raw dump for gate amount (field 53 fixed32) even if earlier fields are truncated. */
+static bool scan_gate_amount_field53(const uint8_t *data, size_t len, float *out_val)
+{
+    /* Tag for field 53 wire5 = (53<<3)|5 = 429 = AD 03 */
+    if (!data || !out_val || len < 6) {
+        return false;
+    }
+    for (size_t i = 0; i + 6 <= len; i++) {
+        if (data[i] != 0xAD || data[i + 1] != 0x03) {
+            continue;
+        }
+        union {
+            uint32_t u;
+            float f;
+        } u;
+        u.u = (uint32_t)data[i + 2] | ((uint32_t)data[i + 3] << 8) | ((uint32_t)data[i + 4] << 16) |
+              ((uint32_t)data[i + 5] << 24);
+        if (!isfinite(u.f) || u.f < 0.0f || u.f > 1.0f) {
+            continue;
+        }
+        *out_val = u.f;
+        return true;
+    }
+    return false;
+}
+
+/** Scan raw dump for gate bypass (field 54 varint 0/1) even if earlier fields are truncated. */
+static bool scan_gate_bypass_field54(const uint8_t *data, size_t len, uint32_t *out_val)
+{
+    /* Tag for field 54 wire0 = (54<<3)|0 = 432 = B0 03 */
+    if (!data || !out_val || len < 3) {
+        return false;
+    }
+    for (size_t i = 0; i + 3 <= len; i++) {
+        if (data[i] != 0xB0 || data[i + 1] != 0x03) {
+            continue;
+        }
+        uint32_t val = 0;
+        size_t next = 0;
+        if (!nano_read_varint(data, len, i + 2, &val, &next)) {
+            continue;
+        }
+        if (val > 1U) {
+            continue;
+        }
+        *out_val = val;
+        return true;
+    }
+    return false;
+}
 
 static bool is_reverb_model(const nano_fx_model_def_t *m)
 {
@@ -1564,6 +1622,73 @@ static bool extract_field_varint(const uint8_t *data, size_t len, uint32_t field
     return false;
 }
 
+static bool extract_field_fixed32_float(const uint8_t *data, size_t len, uint32_t field_num, float *out_val)
+{
+    size_t i = 0;
+    bool found = false;
+    float last = 0.0f;
+    while (i < len) {
+        uint32_t tag = 0;
+        size_t next = 0;
+        if (!nano_read_varint(data, len, i, &tag, &next)) {
+            break;
+        }
+        i = next;
+
+        uint32_t field = tag >> 3;
+        uint32_t wire = tag & 0x07;
+
+        if (field == field_num && wire == 5) {
+            if (i + 4 > len) {
+                break;
+            }
+            union {
+                uint32_t u;
+                float f;
+            } u;
+            u.u = (uint32_t)data[i] | ((uint32_t)data[i + 1] << 8) | ((uint32_t)data[i + 2] << 16) |
+                  ((uint32_t)data[i + 3] << 24);
+            last = u.f;
+            found = true;
+            i += 4;
+            continue;
+        }
+
+        if (wire == 0) {
+            uint32_t skip = 0;
+            if (!nano_read_varint(data, len, i, &skip, &next)) {
+                break;
+            }
+            i = next;
+        } else if (wire == 1) {
+            if (i + 8 > len) {
+                break;
+            }
+            i += 8;
+        } else if (wire == 2) {
+            uint32_t flen = 0;
+            if (!nano_read_varint(data, len, i, &flen, &next)) {
+                break;
+            }
+            i = next + flen;
+            if (i > len) {
+                break;
+            }
+        } else if (wire == 5) {
+            if (i + 4 > len) {
+                break;
+            }
+            i += 4;
+        } else {
+            break;
+        }
+    }
+    if (found && out_val) {
+        *out_val = last;
+    }
+    return found;
+}
+
 static void ensure_refresh_timers(void)
 {
     if (!s_refresh_timeout_timer) {
@@ -1708,6 +1833,10 @@ void nano_fx_reset(void)
     memset(s_block_on_asserted_us, 0, sizeof(s_block_on_asserted_us));
     memset(s_block_model_write_us, 0, sizeof(s_block_model_write_us));
     memset(s_block_trusted_model, 0, sizeof(s_block_trusted_model));
+    s_gate_assert_us = 0;
+    s_gate_assert_on = -1;
+    s_gate_amount_assert_us = 0;
+    s_gate_amount_assert_pct = -1;
     s_refresh_q_len = 0;
     s_refresh_q_head = 0;
     s_refresh_active = false;
@@ -1734,13 +1863,6 @@ bool nano_fx_parse_preset(const uint8_t *data, size_t len, nano_fx_state_t *out)
     }
 
     bool any = false;
-
-    uint32_t gate_field = 0;
-    if (extract_field_varint(data, len, 54, &gate_field)) {
-        out->gate.on = gate_field == 0;
-        out->gate.valid = true;
-        any = true;
-    }
 
     const uint8_t *bypass_raw = NULL;
     size_t bypass_len = 0;
@@ -1818,6 +1940,86 @@ bool nano_fx_parse_preset(const uint8_t *data, size_t len, nano_fx_state_t *out)
         }
     }
 
+    /* Gate can be present even when FX model fields are missing. */
+    uint32_t amp_probe = 0;
+    bool has_amp = extract_field_varint(data, len, 3, &amp_probe);
+    if (any || has_amp) {
+        /*
+         * Field 54 = inverted bypass (0=ON, 1=OFF). Truncated dumps often stop
+         * mid-f34 before a sequential walk reaches f53/f54 — salvage-scan the
+         * raw buffer so gate state still syncs. Proto3 omits default 0 (ON): if
+         * we found amount (f53) in the gate region but no f54, treat as ON.
+         */
+        uint32_t gate_field = 0;
+        bool has_f54 = extract_field_varint(data, len, 54, &gate_field);
+        const char *f54_src = has_f54 ? "walk" : "none";
+        if (!has_f54 && scan_gate_bypass_field54(data, len, &gate_field)) {
+            has_f54 = true;
+            f54_src = "scan";
+        }
+
+        /* Amount: field 53 fixed32 in [0,1] → raw 0..255 → percent. */
+        float gate_norm = 0.0f;
+        bool have_amt = false;
+        uint32_t amt_raw = 0;
+        const char *amt_src = "none";
+
+        if (extract_field_fixed32_float(data, len, 53, &gate_norm) && isfinite(gate_norm) &&
+            gate_norm >= 0.0f && gate_norm <= 1.0f) {
+            amt_src = "walk";
+        } else if (scan_gate_amount_field53(data, len, &gate_norm)) {
+            amt_src = "scan";
+        } else {
+            gate_norm = -1.0f;
+        }
+        if (gate_norm >= 0.0f && gate_norm <= 1.0f) {
+            int raw = (int)lroundf(gate_norm * 255.0f);
+            if (raw < 0) {
+                raw = 0;
+            }
+            if (raw > 255) {
+                raw = 255;
+            }
+            /* Placeholder ~0.1 in some dumps is not a real amount. */
+            if (raw > 32 || gate_norm >= 0.15f) {
+                amt_raw = (uint32_t)raw;
+                out->gate.reduction_pct = (uint8_t)((amt_raw * 100U + 127U) / 255U);
+                have_amt = true;
+            } else {
+                amt_src = "none";
+            }
+        }
+        if (have_amt) {
+            if (out->gate.reduction_pct > 100) {
+                out->gate.reduction_pct = 100;
+            }
+            out->gate.reduction_valid = true;
+            out->gate.valid = true;
+            any = true;
+        }
+
+        if (has_f54) {
+            out->gate.on = gate_field == 0;
+            out->gate.on_known = true;
+            out->gate.valid = true;
+            any = true;
+        } else if (have_amt) {
+            /* Reached gate region (f53 present); omitted f54 = enabled. */
+            out->gate.on = true;
+            out->gate.on_known = true;
+            out->gate.valid = true;
+            f54_src = "omit";
+            any = true;
+        }
+
+        ESP_LOGI(TAG, "Gate parse: dump=%u f54=%s/%u on_known=%d amt=%s/%u%% (src=%s raw=%u)",
+                 (unsigned)len, (has_f54 || have_amt) ? f54_src : "no",
+                 has_f54 ? (unsigned)gate_field : 0u, (int)out->gate.on_known,
+                 out->gate.reduction_valid ? "yes" : "no",
+                 out->gate.reduction_valid ? (unsigned)out->gate.reduction_pct : 0u, amt_src,
+                 have_amt ? (unsigned)amt_raw : 0u);
+    }
+
     out->valid = any;
     return any;
 }
@@ -1870,10 +2072,62 @@ void nano_fx_sync_from_preset(const uint8_t *data, size_t len)
     }
 
     if (parsed.gate.valid) {
-        s_fx.gate = parsed.gate;
-        if (s_fx.gate.reduction_pct == 0) {
-            s_fx.gate.reduction_pct = 50;
+        if (parsed.gate.on_known) {
+            bool remote_on = parsed.gate.on;
+            bool accept_on = true;
+            if (s_gate_assert_on >= 0 && s_gate_assert_us != 0) {
+                int64_t now = esp_timer_get_time();
+                if (now - s_gate_assert_us <= FX_ENABLE_ASSERT_US) {
+                    bool want_on = s_gate_assert_on != 0;
+                    if (remote_on != want_on) {
+                        accept_on = false;
+                    } else {
+                        s_gate_assert_on = -1;
+                        s_gate_assert_us = 0;
+                    }
+                } else {
+                    s_gate_assert_on = -1;
+                    s_gate_assert_us = 0;
+                }
+            }
+            if (accept_on) {
+                s_fx.gate.on = remote_on;
+                s_fx.gate.on_known = true;
+            }
         }
+
+        if (parsed.gate.reduction_valid) {
+            bool accept_amt = true;
+            if (s_gate_amount_assert_pct >= 0 && s_gate_amount_assert_us != 0) {
+                int64_t now = esp_timer_get_time();
+                if (now - s_gate_amount_assert_us <= FX_ENABLE_ASSERT_US) {
+                    if ((int)parsed.gate.reduction_pct != s_gate_amount_assert_pct) {
+                        accept_amt = false;
+                    } else {
+                        s_gate_amount_assert_pct = -1;
+                        s_gate_amount_assert_us = 0;
+                    }
+                } else {
+                    s_gate_amount_assert_pct = -1;
+                    s_gate_amount_assert_us = 0;
+                }
+            }
+            if (accept_amt) {
+                s_fx.gate.reduction_pct = parsed.gate.reduction_pct;
+                s_fx.gate.reduction_valid = true;
+            }
+        } else if (!s_fx.gate.reduction_valid) {
+            if (s_fx.gate.reduction_pct == 0) {
+                s_fx.gate.reduction_pct = 50;
+            }
+        }
+
+        s_fx.gate.valid = true;
+        ESP_LOGI(TAG, "Gate sync: %s%s amount=%u%%%s",
+                 s_fx.gate.on_known ? (s_fx.gate.on ? "ON" : "OFF") : "?",
+                 s_fx.gate.on_known ? "" : " (bypass unknown)",
+                 (unsigned)s_fx.gate.reduction_pct,
+                 parsed.gate.reduction_valid ? " (from dump)" : "");
     }
 
     for (int i = 0; i < NANO_FX_BLOCK_COUNT; i++) {
@@ -2081,6 +2335,7 @@ bool nano_fx_feed_c305(const uint8_t *data, size_t len)
 bool nano_fx_write_gate_enabled(bool enabled)
 {
     s_fx.gate.on = enabled;
+    s_fx.gate.on_known = true;
     s_fx.gate.valid = true;
     s_fx.valid = true;
 
@@ -2091,7 +2346,12 @@ bool nano_fx_write_gate_enabled(bool enabled)
     }
     ESP_LOGI(TAG, "Gate %s", enabled ? "ON" : "OFF");
     nano_ui_set_fx(&s_fx);
-    return nano_ble_write_c304(enabled ? "Gate ON" : "Gate OFF", buf, n) == ESP_OK;
+    if (nano_ble_write_c304(enabled ? "Gate ON" : "Gate OFF", buf, n) != ESP_OK) {
+        return false;
+    }
+    s_gate_assert_us = esp_timer_get_time();
+    s_gate_assert_on = enabled ? 1 : 0;
+    return true;
 }
 
 bool nano_fx_write_gate_reduction(uint8_t pct)
@@ -2100,7 +2360,7 @@ bool nano_fx_write_gate_reduction(uint8_t pct)
         pct = 100;
     }
     s_fx.gate.reduction_pct = pct;
-    s_fx.gate.valid = true;
+    s_fx.gate.reduction_valid = true;
     s_fx.valid = true;
 
     uint8_t buf[20];
@@ -2110,9 +2370,19 @@ bool nano_fx_write_gate_reduction(uint8_t pct)
     }
 
     char label[24];
-    snprintf(label, sizeof(label), "Gate reduction %u%%", pct);
+    snprintf(label, sizeof(label), "Gate amount %u%%", pct);
     nano_ui_set_fx(&s_fx);
-    return nano_ble_write_c304(label, buf, n) == ESP_OK;
+    if (nano_ble_write_c304(label, buf, n) != ESP_OK) {
+        return false;
+    }
+    s_gate_amount_assert_us = esp_timer_get_time();
+    s_gate_amount_assert_pct = (int)pct;
+    /* Amount writes must not let a stale poll flip bypass while the user is editing. */
+    if (s_gate_assert_on < 0) {
+        s_gate_assert_us = s_gate_amount_assert_us;
+        s_gate_assert_on = s_fx.gate.on ? 1 : 0;
+    }
+    return true;
 }
 
 static bool catalog_index_allowed(nano_fx_block_id_t block, size_t idx)

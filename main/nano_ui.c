@@ -2080,7 +2080,7 @@ static void param_cell_apply_gate_on(lv_obj_t *cell, bool force_send)
     lv_slider_set_value(s_gate_on.slider, val, LV_ANIM_OFF);
     lv_label_set_text(s_gate_on.value, val ? "On" : "Off");
 
-    if (s_gate_on_drag) {
+    if (s_gate_on_drag || force_send) {
         try_send_gate_on_locked(val != 0, force_send);
     }
 }
@@ -2311,7 +2311,9 @@ static void param_cell_event_cb(lv_event_t *e)
             return;
         }
         if (code == LV_EVENT_RELEASED) {
-            if (param_gesture_should_apply_on_release()) {
+            /* Binary half-tap: apply even without a drag (ADJUST) gesture. */
+            param_gesture_mode_t mode = param_gesture_update();
+            if (mode != PARAM_GESTURE_SCROLL) {
                 param_cell_apply_gate_on(cell, true);
             }
             s_gate_on_drag = 0;
@@ -2340,7 +2342,9 @@ static void param_cell_event_cb(lv_event_t *e)
             return;
         }
         if (code == LV_EVENT_RELEASED) {
+            /* Same as amp/fx params: arm drag so apply_gate can write on tap. */
             if (param_gesture_should_apply_on_release()) {
+                s_gate_drag = 1;
                 param_cell_apply_gate(cell, true);
             }
             s_gate_drag = 0;
@@ -2528,39 +2532,39 @@ static void apply_fx_locked(const nano_fx_state_t *fx)
     }
 
     if (s_gate_on.col || s_gate.col) {
-        bool gate_on = fx && fx->gate.valid && fx->gate.on;
-        if (!s_gate_style_valid || gate_on != s_gate_style_on) {
-            s_gate_style_on = gate_on;
+        /* Keep gate cells at full opacity — ON/Off is shown by the switch itself.
+         * Dimming both cells with bypass made AMOUNT drags look like they were
+         * toggling gate state whenever a live poll flipped gate.on. */
+        if (!s_gate_style_valid) {
             s_gate_style_valid = true;
-            lv_opa_t opa = gate_on ? LV_OPA_COVER : LV_OPA_40;
-            lv_color_t name_color = gate_on ? lv_color_hex(0xB0B0B0) : lv_color_hex(0x606060);
+            s_gate_style_on = true;
             if (s_gate_on.col) {
-                lv_obj_set_style_opa(s_gate_on.col, opa, 0);
+                lv_obj_set_style_opa(s_gate_on.col, LV_OPA_COVER, 0);
             }
             if (s_gate.col) {
-                lv_obj_set_style_opa(s_gate.col, opa, 0);
+                lv_obj_set_style_opa(s_gate.col, LV_OPA_COVER, 0);
             }
             if (s_gate_on.name) {
-                lv_obj_set_style_text_color(s_gate_on.name, name_color, 0);
+                lv_obj_set_style_text_color(s_gate_on.name, lv_color_hex(0xB0B0B0), 0);
             }
             if (s_gate.name) {
-                lv_obj_set_style_text_color(s_gate.name, name_color, 0);
+                lv_obj_set_style_text_color(s_gate.name, lv_color_hex(0xB0B0B0), 0);
             }
         }
         if (s_gate_on.value && s_gate_on.slider) {
-            if (!fx || !fx->gate.valid) {
-                if (s_gate_on_drag == 0) {
+            if (!fx || !fx->gate.valid || !fx->gate.on_known) {
+                if (s_gate_on_drag == 0 && s_gate_drag == 0) {
                     lv_slider_set_value(s_gate_on.slider, 0, LV_ANIM_OFF);
                     lv_label_set_text(s_gate_on.value, "-");
                 }
-            } else if (s_gate_on_drag == 0) {
+            } else if (s_gate_on_drag == 0 && s_gate_drag == 0) {
                 int on = fx->gate.on ? 1 : 0;
                 ui_set_slider_if_changed(s_gate_on.slider, on);
                 ui_set_label_if_changed(s_gate_on.value, on ? "On" : "Off");
             }
         }
         if (s_gate.value && s_gate.slider) {
-            if (!fx || !fx->gate.valid) {
+            if (!fx || !fx->gate.valid || !fx->gate.reduction_valid) {
                 if (s_gate_drag == 0) {
                     lv_slider_set_value(s_gate.slider, 50, LV_ANIM_OFF);
                     lv_label_set_text(s_gate.value, "-");
@@ -3169,25 +3173,25 @@ static void make_gate_slider_cell(gate_cell_ui_t *cell, lv_obj_t *parent, const 
 
 static void make_gate_on_cell(lv_obj_t *parent)
 {
-    make_gate_slider_cell(&s_gate_on, parent, "ON", PARAM_CELL_GATE_ON_TAG, 0, 1);
+    make_gate_slider_cell(&s_gate_on, parent, "INPUT GATE", PARAM_CELL_GATE_ON_TAG, 0, 1);
 }
 
 static void make_gate_cell(lv_obj_t *parent)
 {
-    make_gate_slider_cell(&s_gate, parent, "LEVEL", PARAM_CELL_GATE_TAG, 0, 100);
+    make_gate_slider_cell(&s_gate, parent, "GATE AMNT", PARAM_CELL_GATE_TAG, 0, 100);
 }
 
 static void build_amp_panel(lv_obj_t *parent)
 {
     s_amp_params_row = create_pedal_params_grid(parent);
 
+    make_gate_on_cell(s_amp_params_row);
+    make_gate_cell(s_amp_params_row);
     make_knob_column(s_amp_params_row, &s_knobs[0], "GAIN", 0);
     make_knob_column(s_amp_params_row, &s_knobs[1], "LEVEL", 1);
     make_knob_column(s_amp_params_row, &s_knobs[2], "BASS", 2);
     make_knob_column(s_amp_params_row, &s_knobs[3], "MID", 3);
     make_knob_column(s_amp_params_row, &s_knobs[4], "TREBLE", 4);
-    make_gate_on_cell(s_amp_params_row);
-    make_gate_cell(s_amp_params_row);
 }
 
 static void build_chain_bar(lv_obj_t *parent, bool vertical, lv_coord_t tab_h, lv_coord_t tab_extra)

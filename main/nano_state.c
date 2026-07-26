@@ -20,7 +20,7 @@
 static const char *TAG = "nano_state";
 
 #define STATE_BUF_MAX (48 * 1024)
-#define PARSE_DEBOUNCE_US (600 * 1000)
+#define PARSE_DEBOUNCE_US (1200 * 1000)
 #define STATE_REQUEST_DELAY_US (2200 * 1000)
 #define REFRESH_DEBOUNCE_US (800 * 1000)
 #define REFRESH_MIN_INTERVAL_US (1500 * 1000)
@@ -317,6 +317,7 @@ static void append_state_payload(const uint8_t *data, size_t len)
     memcpy(s_state_buf + s_state_len, payload, plen);
     s_state_len += plen;
     s_state_rx_since_us = esp_timer_get_time();
+    ESP_LOGI(TAG, "State chunk +%u → %u bytes", (unsigned)plen, (unsigned)s_state_len);
 }
 
 static void finish_state_capture(void)
@@ -834,6 +835,24 @@ void nano_state_feed_c305(const uint8_t *data, size_t len)
         }
         if (data[1] == 0xC1) {
             ESP_LOGI(TAG, "BPM hunt: C1 state dump chunk len=%u", (unsigned)len);
+        }
+        append_state_payload(data, len);
+        schedule_parse();
+        return;
+    }
+
+    /*
+     * Segmented current-state continuations (desktop decoder):
+     *  - byte1 high-bit continuation frames
+     *  - additional FE/FD/CE/D0 segments after the first chunk
+     */
+    if (s_mode == NANO_RX_CURRENT && len >= 3 &&
+        ((data[1] & 0x80) != 0 || data[0] == 0xFE || data[0] == 0xFD || data[0] == 0xCE ||
+         data[0] == 0xD0)) {
+        if (tuner_live) {
+            ESP_LOGD(TAG, "C305 dropped (state continuation) while tuner live len=%u",
+                     (unsigned)len);
+            return;
         }
         append_state_payload(data, len);
         schedule_parse();

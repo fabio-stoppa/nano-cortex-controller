@@ -53,6 +53,10 @@ typedef struct {
 typedef struct {
     bool on;
     bool valid;
+    /** True when ON/OFF came from field 54 or a full dump (safe to apply). */
+    bool on_known;
+    /** True when reduction_pct came from preset field 53 or a local write. */
+    bool reduction_valid;
     uint8_t reduction_pct;
 } nano_gate_t;
 

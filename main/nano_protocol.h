@@ -38,7 +38,7 @@ size_t nano_capture_select_payload(uint8_t slot, uint8_t *buf, size_t cap);
 /** Port of setGateEnabled() toggle pattern: 0A C0 08 01 18 <id> 20 <val> 1F 00 00 00 */
 size_t nano_global_toggle_payload(uint8_t id, uint8_t value, uint8_t *buf, size_t cap);
 
-/** Gate reduction knob (id 0x0B), encoded varint = pct + 108. */
+/** Gate amount (id 0x0B). UI 0..100% maps to device raw 0..255 (matches AMOUNT LED ring). */
 size_t nano_gate_reduction_payload(uint8_t pct, uint8_t *buf, size_t cap);
 
 /** FX block param refresh: 08 C0 08 03 18 <refreshSlot> 89 00 00 00 */

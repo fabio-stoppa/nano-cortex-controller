@@ -149,8 +149,12 @@ size_t nano_gate_reduction_payload(uint8_t pct, uint8_t *buf, size_t cap)
     if (cap < 16) {
         return 0;
     }
+    if (pct > 100) {
+        pct = 100;
+    }
 
-    uint32_t encoded = (uint32_t)pct + 108U;
+    /* Hardware AMOUNT ring is 0..255. The old web-editor +108 offset only spans ~42..82%. */
+    uint32_t encoded = ((uint32_t)pct * 255U + 50U) / 100U;
     uint8_t value_bytes[5];
     size_t vb_len = encode_varint(encoded, value_bytes, sizeof(value_bytes));
     if (vb_len == 0) {
