@@ -1940,16 +1940,14 @@ bool nano_fx_parse_preset(const uint8_t *data, size_t len, nano_fx_state_t *out)
         }
     }
 
-    /* Gate can be present even when FX model fields are missing. */
-    uint32_t amp_probe = 0;
-    bool has_amp = extract_field_varint(data, len, 3, &amp_probe);
-    if (any || has_amp) {
-        /*
-         * Field 54 = inverted bypass (0=ON, 1=OFF). Truncated dumps often stop
-         * mid-f34 before a sequential walk reaches f53/f54 — salvage-scan the
-         * raw buffer so gate state still syncs. Proto3 omits default 0 (ON): if
-         * we found amount (f53) in the gate region but no f54, treat as ON.
-         */
+    /*
+     * Gate always salvage-scanned — not gated on amp/FX models. Truncated dumps
+     * often stop mid-f34 before a sequential walk reaches f53/f54; short C305
+     * tails after a mid-dump gap may contain only those fields.
+     * Field 54 = inverted bypass (0=ON, 1=OFF). Proto3 omits default 0 (ON): if
+     * we found amount (f53) in the gate region but no f54, treat as ON.
+     */
+    {
         uint32_t gate_field = 0;
         bool has_f54 = extract_field_varint(data, len, 54, &gate_field);
         const char *f54_src = has_f54 ? "walk" : "none";
@@ -2024,6 +2022,99 @@ bool nano_fx_parse_preset(const uint8_t *data, size_t len, nano_fx_state_t *out)
     return any;
 }
 
+bool nano_fx_dump_has_gate_fields(const uint8_t *data, size_t len)
+{
+    float amt = 0.0f;
+    uint32_t bypass = 0;
+    return scan_gate_amount_field53(data, len, &amt) || scan_gate_bypass_field54(data, len, &bypass);
+}
+
+static void apply_gate_from_parsed(const nano_fx_state_t *parsed)
+{
+    if (!parsed || !parsed->gate.valid) {
+        return;
+    }
+
+    if (parsed->gate.on_known) {
+        bool remote_on = parsed->gate.on;
+        bool accept_on = true;
+        if (s_gate_assert_on >= 0 && s_gate_assert_us != 0) {
+            int64_t now = esp_timer_get_time();
+            if (now - s_gate_assert_us <= FX_ENABLE_ASSERT_US) {
+                bool want_on = s_gate_assert_on != 0;
+                if (remote_on != want_on) {
+                    accept_on = false;
+                } else {
+                    s_gate_assert_on = -1;
+                    s_gate_assert_us = 0;
+                }
+            } else {
+                s_gate_assert_on = -1;
+                s_gate_assert_us = 0;
+            }
+        }
+        if (accept_on) {
+            s_fx.gate.on = remote_on;
+            s_fx.gate.on_known = true;
+        }
+    }
+
+    if (parsed->gate.reduction_valid) {
+        bool accept_amt = true;
+        if (s_gate_amount_assert_pct >= 0 && s_gate_amount_assert_us != 0) {
+            int64_t now = esp_timer_get_time();
+            if (now - s_gate_amount_assert_us <= FX_ENABLE_ASSERT_US) {
+                if ((int)parsed->gate.reduction_pct != s_gate_amount_assert_pct) {
+                    accept_amt = false;
+                } else {
+                    s_gate_amount_assert_pct = -1;
+                    s_gate_amount_assert_us = 0;
+                }
+            } else {
+                s_gate_amount_assert_pct = -1;
+                s_gate_amount_assert_us = 0;
+            }
+        }
+        if (accept_amt) {
+            s_fx.gate.reduction_pct = parsed->gate.reduction_pct;
+            s_fx.gate.reduction_valid = true;
+        }
+    } else if (!s_fx.gate.reduction_valid) {
+        if (s_fx.gate.reduction_pct == 0) {
+            s_fx.gate.reduction_pct = 50;
+        }
+    }
+
+    s_fx.gate.valid = true;
+    s_fx.valid = true;
+    ESP_LOGI(TAG, "Gate sync: %s%s amount=%u%%%s",
+             s_fx.gate.on_known ? (s_fx.gate.on ? "ON" : "OFF") : "?",
+             s_fx.gate.on_known ? "" : " (bypass unknown)",
+             (unsigned)s_fx.gate.reduction_pct,
+             parsed->gate.reduction_valid ? " (from dump)" : "");
+}
+
+bool nano_fx_try_apply_gate_bytes(const uint8_t *data, size_t len)
+{
+    if (!data || len < 6 || !nano_fx_dump_has_gate_fields(data, len)) {
+        return false;
+    }
+
+    nano_fx_state_t parsed;
+    memset(&parsed, 0, sizeof(parsed));
+    for (int i = 0; i < NANO_FX_BLOCK_COUNT; i++) {
+        parsed.blocks[i].id = (nano_fx_block_id_t)i;
+    }
+
+    if (!nano_fx_parse_preset(data, len, &parsed) || !parsed.gate.valid) {
+        return false;
+    }
+
+    apply_gate_from_parsed(&parsed);
+    nano_ui_set_fx(&s_fx);
+    return true;
+}
+
 void nano_fx_begin_param_refresh(void)
 {
     ensure_refresh_timers();
@@ -2072,62 +2163,7 @@ void nano_fx_sync_from_preset(const uint8_t *data, size_t len)
     }
 
     if (parsed.gate.valid) {
-        if (parsed.gate.on_known) {
-            bool remote_on = parsed.gate.on;
-            bool accept_on = true;
-            if (s_gate_assert_on >= 0 && s_gate_assert_us != 0) {
-                int64_t now = esp_timer_get_time();
-                if (now - s_gate_assert_us <= FX_ENABLE_ASSERT_US) {
-                    bool want_on = s_gate_assert_on != 0;
-                    if (remote_on != want_on) {
-                        accept_on = false;
-                    } else {
-                        s_gate_assert_on = -1;
-                        s_gate_assert_us = 0;
-                    }
-                } else {
-                    s_gate_assert_on = -1;
-                    s_gate_assert_us = 0;
-                }
-            }
-            if (accept_on) {
-                s_fx.gate.on = remote_on;
-                s_fx.gate.on_known = true;
-            }
-        }
-
-        if (parsed.gate.reduction_valid) {
-            bool accept_amt = true;
-            if (s_gate_amount_assert_pct >= 0 && s_gate_amount_assert_us != 0) {
-                int64_t now = esp_timer_get_time();
-                if (now - s_gate_amount_assert_us <= FX_ENABLE_ASSERT_US) {
-                    if ((int)parsed.gate.reduction_pct != s_gate_amount_assert_pct) {
-                        accept_amt = false;
-                    } else {
-                        s_gate_amount_assert_pct = -1;
-                        s_gate_amount_assert_us = 0;
-                    }
-                } else {
-                    s_gate_amount_assert_pct = -1;
-                    s_gate_amount_assert_us = 0;
-                }
-            }
-            if (accept_amt) {
-                s_fx.gate.reduction_pct = parsed.gate.reduction_pct;
-                s_fx.gate.reduction_valid = true;
-            }
-        } else if (!s_fx.gate.reduction_valid) {
-            if (s_fx.gate.reduction_pct == 0) {
-                s_fx.gate.reduction_pct = 50;
-            }
-        }
-
-        s_fx.gate.valid = true;
-        ESP_LOGI(TAG, "Gate sync: %s%s amount=%u%%%s",
-                 s_fx.gate.on_known ? (s_fx.gate.on ? "ON" : "OFF") : "?",
-                 s_fx.gate.on_known ? "" : " (bypass unknown)",
-                 (unsigned)s_fx.gate.reduction_pct,
-                 parsed.gate.reduction_valid ? " (from dump)" : "");
+        apply_gate_from_parsed(&parsed);
     }
 
     for (int i = 0; i < NANO_FX_BLOCK_COUNT; i++) {

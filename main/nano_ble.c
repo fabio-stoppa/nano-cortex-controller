@@ -37,7 +37,8 @@ static const char *TAG = "nano_ble";
 
 #define C305_QUEUE_LEN 48
 #define C305_LIVE_QUEUE_LEN 1
-#define C305_PKT_MAX 256
+/* Preset dumps often exceed one ATT MTU; 256 silently chopped the gate f53/f54 tail. */
+#define C305_PKT_MAX 512
 #define C305_TASK_STACK 4096
 /* Keep below LVGL (prio 6) so continuous pitch cannot starve the display. */
 #define C305_TASK_PRIO 1
@@ -690,7 +691,7 @@ static bool c305_queue_init(void)
         return false;
     }
 
-    ESP_LOGI(TAG, "C305 RX worker ready (queue=%d live=%d) build=2026-07-26i", C305_QUEUE_LEN,
+    ESP_LOGI(TAG, "C305 RX worker ready (queue=%d live=%d) build=2026-07-26k", C305_QUEUE_LEN,
              C305_LIVE_QUEUE_LEN);
     return true;
 }
@@ -815,6 +816,9 @@ static void on_gatt_notify(uint16_t handle, const uint8_t *data, uint16_t len)
         .handle = handle,
         .len = len > C305_PKT_MAX ? C305_PKT_MAX : len,
     };
+    if (len > C305_PKT_MAX) {
+        ESP_LOGW(TAG, "C305 notify truncated %u → %u bytes", (unsigned)len, (unsigned)C305_PKT_MAX);
+    }
     memcpy(item.data, data, item.len);
 
     /*

@@ -93,6 +93,15 @@ void nano_fx_begin_param_refresh(void);
 /** Parse preset blob into internal FX state and start param refresh. */
 void nano_fx_sync_from_preset(const uint8_t *data, size_t len);
 
+/** True when raw dump bytes contain gate amount (f53) and/or bypass (f54) tags. */
+bool nano_fx_dump_has_gate_fields(const uint8_t *data, size_t len);
+
+/**
+ * Salvage gate ON/OFF + amount from any blob that contains f53/f54 tags
+ * (full preset dump or a late high-bit C305 tail after a mid-dump gap).
+ */
+bool nano_fx_try_apply_gate_bytes(const uint8_t *data, size_t len);
+
 /** Feed C305; returns true if consumed (FX param refresh response). */
 bool nano_fx_feed_c305(const uint8_t *data, size_t len);
 

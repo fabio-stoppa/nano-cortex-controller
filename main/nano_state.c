@@ -29,6 +29,10 @@ static const char *TAG = "nano_state";
 #define TUNER_FAST_SYNC_US (400 * 1000)
 #define TUNER_WATCH_POLL_US (5000 * 1000)
 #define STATE_RX_TIMEOUT_US (5000 * 1000)
+/** Max times we defer finish while waiting for a gate tail after mid-f34 truncation. */
+#define STATE_INCOMPLETE_DEFER_MAX 2
+/** Re-request current state when INITIAL/ROUTINE dump still lacks gate fields. */
+#define STATE_GATE_RETRY_MAX 2
 #define STATE_PROBE_LABEL_MAX 24
 #define PARSE_TASK_STACK 8192
 #define TAP_TIMEOUT_US (2000 * 1000)
@@ -74,6 +78,9 @@ static uint16_t s_last_bpm;
 static bool s_tempo_mode_active;
 static int64_t s_tempo_ignore_exit_echo_us;
 static char s_state_probe_label[STATE_PROBE_LABEL_MAX];
+static char s_incomplete_probe_label[STATE_PROBE_LABEL_MAX];
+static unsigned s_incomplete_defer_count;
+static unsigned s_gate_retry_count;
 static TaskHandle_t s_parse_task;
 static int64_t s_tap_times[TAP_HISTORY_MAX];
 static unsigned s_tap_count;
@@ -81,6 +88,7 @@ static unsigned s_tap_count;
 static void parse_state_buffer(void);
 static void resolve_pending_level_from_dump(void);
 static void on_tempo_notify(uint16_t bpm, bool tap_marker);
+static void schedule_parse(void);
 
 void nano_state_on_bpm_found(uint16_t bpm)
 {
@@ -338,6 +346,59 @@ static void finish_state_capture(void)
     s_state_len = 0;
     s_mode = NANO_RX_IDLE;
     s_state_rx_since_us = 0;
+    s_incomplete_defer_count = 0;
+    s_incomplete_probe_label[0] = '\0';
+}
+
+/**
+ * True when a length-delimited field claims more bytes than remain — typical
+ * mid-f34 truncation that leaves gate f53/f54 in a later MTU tail.
+ */
+static bool state_dump_truncated(const uint8_t *data, size_t len)
+{
+    if (!data || len < 3) {
+        return false;
+    }
+
+    size_t i = 0;
+    while (i < len) {
+        uint32_t tag = 0;
+        size_t next = 0;
+        if (!nano_read_varint(data, len, i, &tag, &next)) {
+            return i > 0;
+        }
+        i = next;
+        uint32_t wire = tag & 0x07;
+        if (wire == 0) {
+            if (!nano_read_varint(data, len, i, NULL, &next)) {
+                return true;
+            }
+            i = next;
+        } else if (wire == 1) {
+            if (i + 8 > len) {
+                return true;
+            }
+            i += 8;
+        } else if (wire == 2) {
+            uint32_t flen = 0;
+            if (!nano_read_varint(data, len, i, &flen, &next)) {
+                return true;
+            }
+            i = next;
+            if (i + (size_t)flen > len) {
+                return true;
+            }
+            i += (size_t)flen;
+        } else if (wire == 5) {
+            if (i + 4 > len) {
+                return true;
+            }
+            i += 4;
+        } else {
+            return true;
+        }
+    }
+    return false;
 }
 
 static void abort_stale_state_rx(const char *why)
@@ -346,6 +407,16 @@ static void abort_stale_state_rx(const char *why)
         return;
     }
     ESP_LOGW(TAG, "State RX aborted (%s, had %u bytes)", why, (unsigned)s_state_len);
+    /* One last parse so a delayed gate tail still applies before we drop RX. */
+    if (s_state_len > 0) {
+        if (s_incomplete_probe_label[0]) {
+            strncpy(s_state_probe_label, s_incomplete_probe_label, sizeof(s_state_probe_label) - 1);
+            s_state_probe_label[sizeof(s_state_probe_label) - 1] = '\0';
+        }
+        s_incomplete_defer_count = STATE_INCOMPLETE_DEFER_MAX;
+        parse_state_buffer();
+        return;
+    }
     finish_state_capture();
 }
 
@@ -435,6 +506,9 @@ static void parse_state_buffer(void)
     if (s_state_probe_label[0]) {
         strncpy(label, s_state_probe_label, sizeof(label) - 1);
         label[sizeof(label) - 1] = '\0';
+    } else if (s_incomplete_probe_label[0]) {
+        strncpy(label, s_incomplete_probe_label, sizeof(label) - 1);
+        label[sizeof(label) - 1] = '\0';
     } else {
         strncpy(label, "ROUTINE", sizeof(label) - 1);
         label[sizeof(label) - 1] = '\0';
@@ -446,6 +520,11 @@ static void parse_state_buffer(void)
     if (strcmp(label, "INITIAL") == 0) {
         nano_log_proto_fields(TAG, label, s_state_buf, buf_len);
     }
+
+    bool truncated = state_dump_truncated(s_state_buf, buf_len);
+    bool has_gate = nano_fx_dump_has_gate_fields(s_state_buf, buf_len);
+    bool wait_for_gate = truncated && !has_gate && s_mode == NANO_RX_CURRENT &&
+                         s_incomplete_defer_count < STATE_INCOMPLETE_DEFER_MAX;
 
     nano_amp_t live_amp = s_amp;
     uint8_t live_dirty = s_amp_live_dirty;
@@ -493,9 +572,24 @@ static void parse_state_buffer(void)
         resolve_pending_level_from_dump();
         nano_log_amp(TAG, &s_amp);
         nano_ui_set_amp(&s_amp);
-        start_live_poll();
+        if (!wait_for_gate) {
+            start_live_poll();
+        }
     } else {
         ESP_LOGW(TAG, "Could not find amp fields 3–7 in state blob");
+    }
+
+    if (wait_for_gate) {
+        s_incomplete_defer_count++;
+        strncpy(s_incomplete_probe_label, label, sizeof(s_incomplete_probe_label) - 1);
+        s_incomplete_probe_label[sizeof(s_incomplete_probe_label) - 1] = '\0';
+        ESP_LOGI(TAG,
+                 "Incomplete state dump (%u bytes, no gate tail) — waiting (%u/%u)",
+                 (unsigned)buf_len, s_incomplete_defer_count, STATE_INCOMPLETE_DEFER_MAX);
+        /* Apply whatever FX/gate we already have; keep RX open for late 0x80 tails. */
+        nano_fx_sync_from_preset(s_state_buf, buf_len);
+        schedule_parse();
+        return;
     }
 
     finish_state_capture();
@@ -533,6 +627,18 @@ static void parse_state_buffer(void)
         if (strcmp(label, "INITIAL") == 0 && !s_bpm_known) {
             ESP_LOGW(TAG, "BPM still unknown after INITIAL (FE nested f56 should supply it)");
         }
+    }
+
+    if (!nano_fx_dump_has_gate_fields(s_state_buf, buf_len) &&
+        s_gate_retry_count < STATE_GATE_RETRY_MAX &&
+        (strcmp(label, "INITIAL") == 0 || strcmp(label, "ROUTINE") == 0 ||
+         strcmp(label, "PRESET") == 0)) {
+        s_gate_retry_count++;
+        ESP_LOGI(TAG, "Gate fields absent after parse — retry %u/%u", s_gate_retry_count,
+                 STATE_GATE_RETRY_MAX);
+        request_current_state_now("Gate sync retry");
+    } else if (nano_fx_dump_has_gate_fields(s_state_buf, buf_len)) {
+        s_gate_retry_count = 0;
     }
 
     maybe_retry_tuner_sync();
@@ -853,6 +959,9 @@ static void reset_amp_sync(void)
     s_last_refresh_us = 0;
     s_last_sniff_us = 0;
     s_state_probe_label[0] = '\0';
+    s_incomplete_probe_label[0] = '\0';
+    s_incomplete_defer_count = 0;
+    s_gate_retry_count = 0;
     s_tuner_watch_running = false;
     s_pending_tuner_sync = false;
     s_state_rx_since_us = 0;
@@ -960,6 +1069,8 @@ void nano_state_feed_c305(const uint8_t *data, size_t len)
             s_state_len = 0;
             s_mode = NANO_RX_CURRENT;
             s_state_rx_since_us = esp_timer_get_time();
+            s_incomplete_defer_count = 0;
+            s_incomplete_probe_label[0] = '\0';
         }
         if (data[1] == 0xC1) {
             ESP_LOGI(TAG, "BPM hunt: C1 state dump chunk len=%u", (unsigned)len);
@@ -1024,6 +1135,15 @@ void nano_state_feed_c305(const uint8_t *data, size_t len)
     }
 
     if (nano_fx_feed_c305(data, len)) {
+        return;
+    }
+
+    /* Late dump tails (byte1 high-bit, often 0x80) carry gate f53/f54 after a
+     * mid-f34 gap. When RX already closed, salvage gate directly from the payload. */
+    if (len > 2 && nano_fx_try_apply_gate_bytes(data + 2, len - 2)) {
+        return;
+    }
+    if (nano_fx_try_apply_gate_bytes(data, len)) {
         return;
     }
 
