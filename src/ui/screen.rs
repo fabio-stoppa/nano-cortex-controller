@@ -15,12 +15,33 @@ use std::time::Duration;
 
 use esp_idf_svc::sys as sys;
 use esp_idf_svc::sys::{
-    esp_err_t, lv_color_t, lv_event_t, lv_obj_t, lv_point_t, lv_style_t, lv_timer_t, nano_amp_t,
-    nano_fx_block_t, nano_fx_model_def_t, nano_fx_state_t, nano_tuner_t, ESP_ERR_NO_MEM, ESP_FAIL,
-    ESP_OK,
+    esp_err_t, lv_color_t, lv_event_t, lv_obj_t, lv_point_t, lv_style_t, lv_timer_t, ESP_ERR_NO_MEM,
+    ESP_FAIL, ESP_OK,
 };
 use log::{error, info};
+use nano_wire::ffi::NanoAmpC;
 
+use crate::fx::{
+    nano_fx_allowed_model_count, nano_fx_block_model_text, nano_fx_category_label,
+    nano_fx_display_to_slider, nano_fx_format_param, nano_fx_get, nano_fx_get_allowed_model,
+    nano_fx_model_category, nano_fx_model_chain_acronym, nano_fx_param_enum_count,
+    nano_fx_param_is_enum, nano_fx_slider_max, nano_fx_slider_min, nano_fx_slider_to_display,
+    nano_fx_write_block_enabled, nano_fx_write_block_model, nano_fx_write_gate_enabled,
+    nano_fx_write_gate_reduction, nano_fx_write_param_display,
+};
+use crate::fx::types::{
+    NanoFxBlock, NanoFxModelDef, NanoFxState, NANO_FX_CAT_BASS_OD, NANO_FX_CAT_COMPRESSOR,
+    NANO_FX_CAT_DELAY, NANO_FX_CAT_FILTER, NANO_FX_CAT_GUITAR_OD, NANO_FX_CAT_MODULATION,
+    NANO_FX_CAT_NONE, NANO_FX_CAT_PITCH, NANO_FX_CAT_REVERB, NANO_FX_CAT_UTILITY, NANO_FX_CAT_WAH,
+    NANO_FX_MAX_PARAMS, NANO_FX_POST1, NANO_FX_POST2, NANO_FX_POST3, NANO_FX_PRE1, NANO_FX_PRE2,
+};
+use crate::state::{
+    nano_state_get_amp, nano_state_get_bpm, nano_state_tempo_enter, nano_state_tempo_exit,
+    nano_state_tempo_tap, nano_state_write_amp_knob, nano_state_write_capture_slot,
+    nano_state_write_capture_volume,
+};
+use crate::tuner::types::NanoTunerC;
+use crate::tuner::{nano_tuner_cents_f, nano_tuner_get, nano_tuner_set_active, nano_tuner_snapshot};
 use crate::ui::icons;
 use crate::ui::lvgl as lv;
 
@@ -99,7 +120,6 @@ const TUNER_COLOR_OK: u32 = 0x3DCC7A;
 const TUNER_COLOR_IDLE: u32 = 0x606060;
 const TUNER_COLOR_NEEDLE: u32 = 0xFFFFFF;
 
-const NANO_FX_MAX_PARAMS: usize = 24;
 const NANO_PRESET_NAME_MAX: usize = 48;
 const NANO_AMP_CAPTURE_NAME_MAX: usize = 40;
 const NANO_AMP_CAPTURE_COUNT: u8 = 25;
@@ -195,9 +215,9 @@ struct Ui {
     last_sent: [u8; KNOB_COUNT],
     last_send_us: [i64; KNOB_COUNT],
 
-    async_amp: nano_amp_t,
+    async_amp: NanoAmpC,
     async_amp_have: bool,
-    async_tuner: nano_tuner_t,
+    async_tuner: NanoTunerC,
     async_tuner_pending: bool,
     async_ble_pending: bool,
     async_ble_connected: bool,
@@ -265,7 +285,7 @@ struct Ui {
     fx_last_sent: [i32; NANO_FX_MAX_PARAMS],
     fx_last_send_us: [i64; NANO_FX_MAX_PARAMS],
 
-    async_fx: nano_fx_state_t,
+    async_fx: NanoFxState,
     async_fx_pending: bool,
     async_bpm: u16,
     async_bpm_valid: bool,
@@ -278,9 +298,9 @@ struct Ui {
     ui_preset_cache: [u8; NANO_PRESET_NAME_MAX],
     ui_preset_cache_valid: bool,
     async_preset_pending: bool,
-    ui_amp_cache: nano_amp_t,
+    ui_amp_cache: NanoAmpC,
     ui_amp_cache_valid: bool,
-    ui_fx_cache: nano_fx_state_t,
+    ui_fx_cache: NanoFxState,
     ui_fx_cache_valid: bool,
 
     pedal_params_scroll_row: *mut lv_obj_t,
@@ -334,12 +354,12 @@ fn now_us() -> i64 {
     unsafe { sys::esp_timer_get_time() }
 }
 
-fn fx_state() -> *const nano_fx_state_t {
-    unsafe { sys::nano_fx_get() }
+fn fx_state() -> *const NanoFxState {
+    unsafe { nano_fx_get() }
 }
 
-fn amp_state() -> *const nano_amp_t {
-    unsafe { sys::nano_state_get_amp() }
+fn amp_state() -> *const NanoAmpC {
+    unsafe { nano_state_get_amp() }
 }
 
 fn pct(raw: u8) -> u32 {
@@ -455,11 +475,11 @@ unsafe extern "C" fn tuner_btn_event_cb(e: *mut lv_event_t) {
         return;
     }
 
-    let t = unsafe { sys::nano_tuner_get() };
+    let t = unsafe { nano_tuner_get() };
     let Some(t) = (unsafe { t.as_ref() }) else {
         return;
     };
-    unsafe { sys::nano_tuner_set_active(!t.active) };
+    unsafe { nano_tuner_set_active(!t.active) };
 }
 
 unsafe extern "C" fn bpm_hdr_btn_event_cb(e: *mut lv_event_t) {
@@ -475,7 +495,7 @@ unsafe extern "C" fn tempo_tap_btn_event_cb(e: *mut lv_event_t) {
     if lv::event_code(e) != lv::EVENT_CLICKED || !ui().ble_connected {
         return;
     }
-    unsafe { sys::nano_state_tempo_tap() };
+    unsafe { nano_state_tempo_tap() };
 }
 
 unsafe extern "C" fn tempo_scope_event_cb(e: *mut lv_event_t) {
@@ -505,7 +525,7 @@ unsafe extern "C" fn tempo_scope_event_cb(e: *mut lv_event_t) {
     );
 }
 
-fn apply_tuner_locked(tuner: *const nano_tuner_t) {
+fn apply_tuner_locked(tuner: *const NanoTunerC) {
     let u = ui();
     if u.tuner_note.is_null() {
         return;
@@ -527,7 +547,7 @@ fn apply_tuner_locked(tuner: *const nano_tuner_t) {
     let t = tuner.unwrap();
     if t.has_pitch {
         set_label_if_changed(u.tuner_note, note_label(t.note));
-        let cf = unsafe { sys::nano_tuner_cents_f() };
+        let cf = unsafe { nano_tuner_cents_f() };
         set_label_if_changed(u.tuner_cents, &format!("{cf:+.1} cents"));
         paint_tuner_meter_locked(cf, true);
     } else {
@@ -570,15 +590,15 @@ fn paint_tuner_live_locked() {
         return;
     }
 
-    let mut t = nano_tuner_t::default();
-    unsafe { sys::nano_tuner_snapshot(&mut t) };
+    let mut t = NanoTunerC::default();
+    unsafe { nano_tuner_snapshot(&mut t) };
     if !t.active {
         return;
     }
 
     if t.has_pitch {
         set_label_if_changed(u.tuner_note, note_label(t.note));
-        let cf = unsafe { sys::nano_tuner_cents_f() };
+        let cf = unsafe { nano_tuner_cents_f() };
         set_label_if_changed(u.tuner_cents, &format!("{cf:+.1} cents"));
         paint_tuner_meter_locked(cf, true);
     } else {
@@ -603,7 +623,7 @@ fn refresh_ble_icon_locked() {
         return;
     }
 
-    if unsafe { sys::nano_ble_scanning() } {
+    if unsafe { crate::ble::nano_ble_scanning() } {
         u.ble_blink_on = !u.ble_blink_on;
         lv::set_style_opa(
             u.ble_icon,
@@ -642,7 +662,7 @@ fn async_apply_ble_cb() {
         let t = u.async_tuner;
         apply_tuner_locked(&t);
     } else {
-        apply_tuner_locked(unsafe { sys::nano_tuner_get() });
+        apply_tuner_locked(unsafe { nano_tuner_get() });
     }
     if u.async_fx_pending {
         let fx = u.async_fx;
@@ -714,8 +734,8 @@ pub unsafe extern "C" fn nano_ui_dispatch_if_pending() {
 unsafe extern "C" fn ui_dispatch_timer_cb(_timer: *mut lv_timer_t) {
     unsafe { nano_ui_dispatch_if_pending() };
 
-    let mut t = nano_tuner_t::default();
-    unsafe { sys::nano_tuner_snapshot(&mut t) };
+    let mut t = NanoTunerC::default();
+    unsafe { nano_tuner_snapshot(&mut t) };
     if t.active && !ui().tuner_view {
         show_tuner_view(true);
         apply_tuner_locked(&t);
@@ -843,14 +863,14 @@ fn async_apply_bpm_cb() {
 
 /* ------------------------------------------------------------ chain rail */
 
-fn category_to_icon(cat: sys::nano_fx_category_t) -> IconKind {
+fn category_to_icon(cat: u32) -> IconKind {
     match cat {
-        sys::nano_fx_category_t_NANO_FX_CAT_GUITAR_OD => IconKind::GuitarOd,
-        sys::nano_fx_category_t_NANO_FX_CAT_BASS_OD => IconKind::BassOd,
-        sys::nano_fx_category_t_NANO_FX_CAT_COMPRESSOR => IconKind::Compressor,
-        sys::nano_fx_category_t_NANO_FX_CAT_PITCH => IconKind::Pitch,
-        sys::nano_fx_category_t_NANO_FX_CAT_FILTER => IconKind::Filter,
-        sys::nano_fx_category_t_NANO_FX_CAT_WAH => IconKind::Wah,
+        NANO_FX_CAT_GUITAR_OD => IconKind::GuitarOd,
+        NANO_FX_CAT_BASS_OD => IconKind::BassOd,
+        NANO_FX_CAT_COMPRESSOR => IconKind::Compressor,
+        NANO_FX_CAT_PITCH => IconKind::Pitch,
+        NANO_FX_CAT_FILTER => IconKind::Filter,
+        NANO_FX_CAT_WAH => IconKind::Wah,
         _ => IconKind::Utility,
     }
 }
@@ -1020,12 +1040,12 @@ fn chain_style_block(idx: usize, selected: bool, active: bool, accent: lv_color_
 
 fn chain_slot_to_fx_block(slot: usize) -> u32 {
     match slot {
-        CHAIN_PRE1 => sys::nano_fx_block_id_t_NANO_FX_PRE1,
-        CHAIN_PRE2 => sys::nano_fx_block_id_t_NANO_FX_PRE2,
-        CHAIN_PFX1 => sys::nano_fx_block_id_t_NANO_FX_POST1,
-        CHAIN_PFX2 => sys::nano_fx_block_id_t_NANO_FX_POST2,
-        CHAIN_PFX3 => sys::nano_fx_block_id_t_NANO_FX_POST3,
-        _ => sys::nano_fx_block_id_t_NANO_FX_PRE1,
+        CHAIN_PRE1 => NANO_FX_PRE1,
+        CHAIN_PRE2 => NANO_FX_PRE2,
+        CHAIN_PFX1 => NANO_FX_POST1,
+        CHAIN_PFX2 => NANO_FX_POST2,
+        CHAIN_PFX3 => NANO_FX_POST3,
+        _ => NANO_FX_PRE1,
     }
 }
 
@@ -1037,7 +1057,7 @@ fn show_content_for_chain(slot: usize) {
     let u = ui();
     if u.tempo_view {
         u.tempo_view = false;
-        unsafe { sys::nano_state_tempo_exit() };
+        unsafe { nano_state_tempo_exit() };
         layout_chrome_for_tuner(false);
     }
     u.tuner_view = false;
@@ -1115,7 +1135,7 @@ fn show_tuner_view(on: bool) {
     let u = ui();
     if on && u.tempo_view {
         u.tempo_view = false;
-        unsafe { sys::nano_state_tempo_exit() };
+        unsafe { nano_state_tempo_exit() };
         if !u.tempo_panel.is_null() {
             lv::add_flag(u.tempo_panel, lv::FLAG_HIDDEN);
         }
@@ -1199,13 +1219,13 @@ fn show_tempo_view(on: bool, write_pedal: bool) {
             apply_bpm_locked(u.ui_bpm_cache, true);
         }
         if write_pedal {
-            unsafe { sys::nano_state_tempo_enter() };
+            unsafe { nano_state_tempo_enter() };
         }
         update_chain_blocks_locked(amp_state(), fx_state());
     } else {
         lv::add_flag(u.tempo_panel, lv::FLAG_HIDDEN);
         if write_pedal {
-            unsafe { sys::nano_state_tempo_exit() };
+            unsafe { nano_state_tempo_exit() };
         }
         layout_chrome_for_tuner(false);
         show_content_for_chain(u.chain_selected);
@@ -1227,7 +1247,7 @@ fn async_apply_tempo_mode_cb() {
     }
 }
 
-fn update_chain_blocks_locked(amp: *const nano_amp_t, fx: *const nano_fx_state_t) {
+fn update_chain_blocks_locked(amp: *const NanoAmpC, fx: *const NanoFxState) {
     let amp = unsafe { amp.as_ref() };
     let fx = unsafe { fx.as_ref() };
 
@@ -1238,41 +1258,41 @@ fn update_chain_blocks_locked(amp: *const nano_amp_t, fx: *const nano_fx_state_t
 
         let u = ui();
         let selected = i == u.chain_selected && !u.tuner_view && !u.tempo_view;
-        let mut active = false;
-        let mut icon = IconKind::Utility;
-        let mut accent = lv::color_hex(0x808080);
-        let mut block_label = String::from("-");
 
-        if i == CHAIN_AMP {
-            icon = IconKind::Amp;
-            accent = icon_kind_color(IconKind::Amp);
-            active = amp.map(|a| a.valid).unwrap_or(false);
-            block_label = "AMP".to_string();
+        let (active, accent, block_label) = if i == CHAIN_AMP {
+            (
+                amp.map(|a| a.valid).unwrap_or(false),
+                icon_kind_color(IconKind::Amp),
+                "AMP".to_string(),
+            )
         } else {
             let bid = chain_slot_to_fx_block(i);
             let b = fx.map(|f| &f.blocks[bid as usize]);
             let cat = match b {
-                Some(b) if !b.model.is_null() => unsafe { sys::nano_fx_model_category(b.model) },
-                _ => sys::nano_fx_category_t_NANO_FX_CAT_NONE,
+                Some(b) if !b.model.is_null() => unsafe { nano_fx_model_category(b.model) },
+                _ => NANO_FX_CAT_NONE,
             };
-            icon = category_to_icon(cat);
-            accent = icon_kind_color(icon);
-            active = b.map(|b| b.valid && b.on).unwrap_or(false);
-            match b {
+            let icon = category_to_icon(cat);
+            let label = match b {
                 Some(b) if b.valid => {
                     let mut buf = [0u8; CHAIN_LABEL_MAX];
                     unsafe {
-                        sys::nano_fx_model_chain_acronym(
-                            b as *const nano_fx_block_t,
+                        nano_fx_model_chain_acronym(
+                            b as *const NanoFxBlock,
                             buf.as_mut_ptr() as *mut c_char,
                             buf.len(),
                         )
                     };
-                    block_label = c_buf_str(&buf).to_string();
+                    c_buf_str(&buf).to_string()
                 }
-                _ => block_label = icon_kind_glyph(icon).to_string(),
-            }
-        }
+                _ => icon_kind_glyph(icon).to_string(),
+            };
+            (
+                b.map(|b| b.valid && b.on).unwrap_or(false),
+                icon_kind_color(icon),
+                label,
+            )
+        };
 
         let label_color = if selected {
             if active {
@@ -1304,7 +1324,7 @@ fn chain_toggle_slot(slot: usize) {
         return;
     };
     let bid = chain_slot_to_fx_block(slot);
-    unsafe { sys::nano_fx_write_block_enabled(bid, !fx.blocks[bid as usize].on) };
+    unsafe { nano_fx_write_block_enabled(bid, !fx.blocks[bid as usize].on) };
 }
 
 unsafe extern "C" fn chain_block_btn_event_cb(e: *mut lv_event_t) {
@@ -1378,7 +1398,7 @@ fn try_send_gate_locked(pct_val: u8, force_send: bool) {
         return;
     }
 
-    if unsafe { sys::nano_fx_write_gate_reduction(pct_val) } {
+    if unsafe { nano_fx_write_gate_reduction(pct_val) } {
         u.gate_last_sent = pct_val as i32;
         u.gate_last_send_us = now;
     }
@@ -1398,7 +1418,7 @@ fn try_send_cap_vol_locked(raw: u8, force_send: bool) {
         return;
     }
 
-    if unsafe { sys::nano_state_write_capture_volume(raw) } {
+    if unsafe { nano_state_write_capture_volume(raw) } {
         u.cap_vol_last_sent = raw as i32;
         u.cap_vol_last_send_us = now;
     }
@@ -1415,7 +1435,7 @@ fn try_send_gate_on_locked(on: bool, force_send: bool) {
         return;
     }
 
-    if unsafe { sys::nano_fx_write_gate_enabled(on) } {
+    if unsafe { nano_fx_write_gate_enabled(on) } {
         u.gate_on_last_sent = sent;
         u.gate_on_last_send_us = now;
     }
@@ -1435,7 +1455,7 @@ fn try_send_knob_locked(idx: usize, raw: u8, force: bool) {
         return;
     }
 
-    if unsafe { sys::nano_state_write_amp_knob(idx as sys::nano_knob_t, raw) } {
+    if nano_state_write_amp_knob(idx as u32, raw) {
         u.last_sent[idx] = raw;
         u.last_send_us[idx] = now;
     }
@@ -1464,8 +1484,8 @@ fn try_send_fx_param_locked(idx: usize, slider_val: i32, force: bool) {
         return;
     }
 
-    let display = unsafe { sys::nano_fx_slider_to_display(pname, slider_val) };
-    if unsafe { sys::nano_fx_write_param_display(u.fx_selected, idx as u8, display) } {
+    let display = unsafe { nano_fx_slider_to_display(pname, slider_val) };
+    if unsafe { nano_fx_write_param_display(u.fx_selected, idx as u8, display) } {
         u.fx_last_sent[idx] = slider_val;
         u.fx_last_send_us[idx] = now;
     }
@@ -1474,8 +1494,8 @@ fn try_send_fx_param_locked(idx: usize, slider_val: i32, force: bool) {
 /* ----------------------------------------------------------- model picker */
 
 fn fx_block_matches_model(
-    block: Option<&nano_fx_block_t>,
-    model: *const nano_fx_model_def_t,
+    block: Option<&NanoFxBlock>,
+    model: *const NanoFxModelDef,
 ) -> bool {
     let Some(block) = block else {
         return false;
@@ -1509,11 +1529,11 @@ unsafe extern "C" fn fx_model_picker_tile_event_cb(e: *mut lv_event_t) {
     let u = ui();
     if u.ble_connected {
         if u.header_picker_mode == HEADER_PICKER_AMP {
-            unsafe { sys::nano_state_write_capture_slot(idx as u8) };
+            unsafe { nano_state_write_capture_slot(idx as u8) };
         } else {
-            let model = unsafe { sys::nano_fx_get_allowed_model(u.fx_selected, idx) };
+            let model = unsafe { nano_fx_get_allowed_model(u.fx_selected, idx) };
             if !model.is_null() {
-                unsafe { sys::nano_fx_write_block_model(u.fx_selected, model) };
+                unsafe { nano_fx_write_block_model(u.fx_selected, model) };
             }
         }
     }
@@ -1686,17 +1706,17 @@ fn fx_model_picker_populate() {
         return;
     }
 
-    const CAT_ORDER: [sys::nano_fx_category_t; 10] = [
-        sys::nano_fx_category_t_NANO_FX_CAT_GUITAR_OD,
-        sys::nano_fx_category_t_NANO_FX_CAT_BASS_OD,
-        sys::nano_fx_category_t_NANO_FX_CAT_WAH,
-        sys::nano_fx_category_t_NANO_FX_CAT_FILTER,
-        sys::nano_fx_category_t_NANO_FX_CAT_COMPRESSOR,
-        sys::nano_fx_category_t_NANO_FX_CAT_PITCH,
-        sys::nano_fx_category_t_NANO_FX_CAT_MODULATION,
-        sys::nano_fx_category_t_NANO_FX_CAT_DELAY,
-        sys::nano_fx_category_t_NANO_FX_CAT_REVERB,
-        sys::nano_fx_category_t_NANO_FX_CAT_UTILITY,
+    const CAT_ORDER: [u32; 10] = [
+        NANO_FX_CAT_GUITAR_OD,
+        NANO_FX_CAT_BASS_OD,
+        NANO_FX_CAT_WAH,
+        NANO_FX_CAT_FILTER,
+        NANO_FX_CAT_COMPRESSOR,
+        NANO_FX_CAT_PITCH,
+        NANO_FX_CAT_MODULATION,
+        NANO_FX_CAT_DELAY,
+        NANO_FX_CAT_REVERB,
+        NANO_FX_CAT_UTILITY,
     ];
 
     lv::obj_clean(grid);
@@ -1704,11 +1724,11 @@ fn fx_model_picker_populate() {
 
     let fx = unsafe { fx_state().as_ref() };
     let cur = fx.map(|f| &f.blocks[u.fx_selected as usize]);
-    let count = unsafe { sys::nano_fx_allowed_model_count(u.fx_selected) };
+    let count = unsafe { nano_fx_allowed_model_count(u.fx_selected) };
 
     let (grid_w, tile_w) = picker_grid_tile_width(grid);
 
-    let allowed = |i: usize| unsafe { sys::nano_fx_get_allowed_model(u.fx_selected, i) };
+    let allowed = |i: usize| unsafe { nano_fx_get_allowed_model(u.fx_selected, i) };
     let mut first = true;
 
     for cat in CAT_ORDER {
@@ -1716,7 +1736,7 @@ fn fx_model_picker_populate() {
             let m = allowed(i);
             !m.is_null()
                 && !unsafe { (*m).name }.is_null()
-                && unsafe { sys::nano_fx_model_category(m) } == cat
+                && unsafe { nano_fx_model_category(m) } == cat
         });
         if !has_models {
             continue;
@@ -1725,7 +1745,7 @@ fn fx_model_picker_populate() {
         picker_section_header(
             grid,
             grid_w,
-            c_str(unsafe { sys::nano_fx_category_label(cat) }),
+            c_str(unsafe { nano_fx_category_label(cat) }),
             first,
         );
         first = false;
@@ -1735,7 +1755,7 @@ fn fx_model_picker_populate() {
             let model = allowed(i);
             if model.is_null()
                 || unsafe { (*model).name }.is_null()
-                || unsafe { sys::nano_fx_model_category(model) } != cat
+                || unsafe { nano_fx_model_category(model) } != cat
             {
                 continue;
             }
@@ -2158,8 +2178,8 @@ fn param_cell_apply_slider(
             let block = &fx.blocks[u.fx_selected as usize];
             if !block.model.is_null() && idx < block.param_count as usize {
                 let pname = unsafe { (*block.model).param_names.add(idx).read() };
-                if unsafe { sys::nano_fx_param_is_enum(pname) }
-                    && unsafe { sys::nano_fx_param_enum_count(pname) } == 2
+                if unsafe { nano_fx_param_is_enum(pname) }
+                    && unsafe { nano_fx_param_enum_count(pname) } == 2
                 {
                     binary_half = true;
                 }
@@ -2183,11 +2203,11 @@ fn param_cell_apply_slider(
         if !block.model.is_null() && idx < block.param_count as usize {
             let pname = unsafe { (*block.model).param_names.add(idx).read() };
             let mut tmp = *block;
-            tmp.params[idx].display = unsafe { sys::nano_fx_slider_to_display(pname, val) };
+            tmp.params[idx].display = unsafe { nano_fx_slider_to_display(pname, val) };
             tmp.params[idx].valid = true;
             let mut buf = [0u8; 24];
             unsafe {
-                sys::nano_fx_format_param(
+                nano_fx_format_param(
                     &tmp,
                     idx as u8,
                     buf.as_mut_ptr() as *mut c_char,
@@ -2438,7 +2458,7 @@ unsafe extern "C" fn param_cell_event_cb(e: *mut lv_event_t) {
 
 /* ----------------------------------------------------------------- header */
 
-fn sync_header_model_locked(fx: *const nano_fx_state_t) {
+fn sync_header_model_locked(fx: *const NanoFxState) {
     let u = ui();
     if u.fx_model_btn.is_null() || u.fx_model_btn_lbl.is_null() {
         return;
@@ -2488,8 +2508,8 @@ fn sync_header_model_locked(fx: *const nano_fx_state_t) {
             if block.valid {
                 let mut buf = [0u8; 56];
                 unsafe {
-                    sys::nano_fx_block_model_text(
-                        block as *const nano_fx_block_t,
+                    nano_fx_block_model_text(
+                        block as *const NanoFxBlock,
                         buf.as_mut_ptr() as *mut c_char,
                         buf.len(),
                     )
@@ -2513,7 +2533,7 @@ fn sync_header_model_locked(fx: *const nano_fx_state_t) {
 
 /* -------------------------------------------------------------- FX panel */
 
-fn apply_fx_param_locked(i: usize, block: &nano_fx_block_t) {
+fn apply_fx_param_locked(i: usize, block: &NanoFxBlock) {
     if i >= NANO_FX_MAX_PARAMS || block.model.is_null() {
         return;
     }
@@ -2537,14 +2557,14 @@ fn apply_fx_param_locked(i: usize, block: &nano_fx_block_t) {
     let display = if block.params[i].valid {
         block.params[i].display
     } else {
-        let mid = (unsafe { sys::nano_fx_slider_min(pname) }
-            + unsafe { sys::nano_fx_slider_max(pname) })
+        let mid = (unsafe { nano_fx_slider_min(pname) }
+            + unsafe { nano_fx_slider_max(pname) })
             / 2;
-        unsafe { sys::nano_fx_slider_to_display(pname, mid) }
+        unsafe { nano_fx_slider_to_display(pname, mid) }
     };
 
-    let smin = unsafe { sys::nano_fx_slider_min(pname) };
-    let smax = unsafe { sys::nano_fx_slider_max(pname) };
+    let smin = unsafe { nano_fx_slider_min(pname) };
+    let smax = unsafe { nano_fx_slider_max(pname) };
     if lv::slider_get_min_value(param.slider) != smin
         || lv::slider_get_max_value(param.slider) != smax
     {
@@ -2552,7 +2572,7 @@ fn apply_fx_param_locked(i: usize, block: &nano_fx_block_t) {
     }
 
     if i as i32 != u.fx_drag_param {
-        let slider_val = unsafe { sys::nano_fx_display_to_slider(pname, display) };
+        let slider_val = unsafe { nano_fx_display_to_slider(pname, display) };
         set_slider_if_changed(param.slider, slider_val);
 
         let mut tmp = *block;
@@ -2562,7 +2582,7 @@ fn apply_fx_param_locked(i: usize, block: &nano_fx_block_t) {
         }
         let mut buf = [0u8; 24];
         unsafe {
-            sys::nano_fx_format_param(&tmp, i as u8, buf.as_mut_ptr() as *mut c_char, buf.len())
+            nano_fx_format_param(&tmp, i as u8, buf.as_mut_ptr() as *mut c_char, buf.len())
         };
         set_label_if_changed(param.value, c_buf_str(&buf));
         u.fx_last_sent[i] = slider_val;
@@ -2574,7 +2594,7 @@ fn apply_fx_param_locked(i: usize, block: &nano_fx_block_t) {
     );
 }
 
-fn apply_fx_locked(fx: *const nano_fx_state_t) {
+fn apply_fx_locked(fx: *const NanoFxState) {
     let u = ui();
     u.fx_ui_sync = true;
 
@@ -2770,7 +2790,7 @@ unsafe extern "C" fn fx_build_timer_cb(timer: *mut lv_timer_t) {
 
     lv::timer_delete(timer);
     u.fx_build_timer = ptr::null_mut();
-    apply_fx_locked(fx as *const nano_fx_state_t);
+    apply_fx_locked(fx as *const NanoFxState);
 }
 
 fn ensure_fx_params_up_to(count: usize) {
@@ -2980,7 +3000,7 @@ fn build_tempo_panel(parent: *mut lv_obj_t) {
     lv::set_style_text_font(tap_lbl, lv::font_lg(), 0);
     lv::center(tap_lbl);
 
-    let bpm = unsafe { sys::nano_state_get_bpm() };
+    let bpm = unsafe { nano_state_get_bpm() };
     if bpm >= NANO_BPM_MIN {
         lv::label_set_text(u.tempo_bpm_lbl, &format!("{bpm}"));
     }
@@ -3447,7 +3467,7 @@ fn build_ui() {
         ui().ble_icon_timer = lv::timer_create(Some(ble_icon_timer_cb), 400, ptr::null_mut());
     }
     refresh_ble_icon_locked();
-    apply_tuner_locked(unsafe { sys::nano_tuner_get() });
+    apply_tuner_locked(unsafe { nano_tuner_get() });
     apply_fx_locked(fx_state());
     update_chain_blocks_locked(amp_state(), fx_state());
 }
@@ -3460,7 +3480,7 @@ unsafe extern "C" fn ui_build_timer_cb(timer: *mut lv_timer_t) {
 
 /* ---------------------------------------------------------------- amp tab */
 
-fn apply_amp_locked(amp: *const nano_amp_t) {
+fn apply_amp_locked(amp: *const NanoAmpC) {
     let u = ui();
     u.ui_sync = true;
 
@@ -3537,7 +3557,7 @@ fn apply_amp_locked(amp: *const nano_amp_t) {
         u.amp_chrome_slot = amp.capture_slot;
         u.amp_chrome_name.copy_from_slice(name_bytes);
         u.amp_chrome_name[NANO_AMP_CAPTURE_NAME_MAX - 1] = 0;
-        update_chain_blocks_locked(amp as *const nano_amp_t, fx_state());
+        update_chain_blocks_locked(amp as *const NanoAmpC, fx_state());
         refresh_preset_label_locked();
         if u.chain_selected == CHAIN_AMP && !u.tuner_view {
             sync_header_model_locked(fx_state());
@@ -3595,7 +3615,7 @@ pub unsafe extern "C" fn nano_ui_start() -> esp_err_t {
 
 /// Refresh on-screen amp values (safe from any task).
 #[no_mangle]
-pub unsafe extern "C" fn nano_ui_set_amp(amp: *const nano_amp_t) {
+pub unsafe extern "C" fn nano_ui_set_amp(amp: *const NanoAmpC) {
     let u = ui();
     match unsafe { amp.as_ref() }.filter(|a| a.valid) {
         Some(amp) => {
@@ -3631,7 +3651,7 @@ pub unsafe extern "C" fn nano_ui_set_ble_connected(connected: bool) {
 
 /// Refresh tuner tab (note/cents/status).
 #[no_mangle]
-pub unsafe extern "C" fn nano_ui_set_tuner(tuner: *const nano_tuner_t) {
+pub unsafe extern "C" fn nano_ui_set_tuner(tuner: *const NanoTunerC) {
     let u = ui();
     let Some(tuner) = (unsafe { tuner.as_ref() }) else {
         return;
@@ -3718,7 +3738,7 @@ pub unsafe extern "C" fn nano_ui_set_tempo_mode(active: bool) {
 
 /// Refresh gate + FX tabs.
 #[no_mangle]
-pub unsafe extern "C" fn nano_ui_set_fx(fx: *const nano_fx_state_t) {
+pub unsafe extern "C" fn nano_ui_set_fx(fx: *const NanoFxState) {
     let u = ui();
     match unsafe { fx.as_ref() } {
         Some(fx) => {

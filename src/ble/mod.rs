@@ -1,7 +1,5 @@
-//! BLE GATT client for the Nano Cortex, exported with the C ABI declared in
-//! `components/nano/nano_ble.h` so the remaining C modules keep working.
+//! BLE GATT client for the Nano Cortex.
 
-pub mod c_deps;
 pub mod client;
 
 pub use client::{

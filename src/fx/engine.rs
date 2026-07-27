@@ -16,14 +16,14 @@ use log::{debug, info, warn};
 use nano_wire::builders;
 use nano_wire::varint::read_varint;
 
-use super::c_deps as c;
-use super::c_deps::TAG;
 use super::catalog::catalog;
 use super::models::*;
 use super::params::{clampf, format_param, normalized_to_display};
 use super::shared::Shared;
 use super::types::*;
+use super::util::c_str;
 
+const TAG: &str = "nano_fx";
 const FX_REFRESH_TIMEOUT_US: u64 = 900 * 1000;
 const FX_REFRESH_GAP_US: u64 = 80 * 1000;
 const FX_ENABLE_ASSERT_US: i64 = 3000 * 1000;
@@ -391,7 +391,7 @@ fn apply_model(block: &mut NanoFxBlock, model: Option<&'static NanoFxModelDef>) 
     if let Some(model) = model {
         block.param_count = model.param_count;
         for i in 0..(model.param_count as usize).min(NANO_FX_MAX_PARAMS) {
-            let name = c::c_str(unsafe { *model.param_names.add(i) });
+            let name = c_str(unsafe { *model.param_names.add(i) });
             block.params[i].display = normalized_to_display(name, 0.5);
             block.params[i].normalized = 0.5;
             block.params[i].valid = false;
@@ -456,14 +456,14 @@ fn upgrade_block_model(block: &mut NanoFxBlock, model: &'static NanoFxModelDef, 
         .min(NANO_FX_MAX_PARAMS);
 
     for i in 0..n {
-        let name = c::c_str(unsafe { *model.param_names.add(i) });
+        let name = c_str(unsafe { *model.param_names.add(i) });
         block.params[i].normalized = clampf(floats[i], 0.0, 1.0);
         block.params[i].display = normalized_to_display(name, block.params[i].normalized);
         block.params[i].valid = true;
     }
 
     for i in n..(model.param_count as usize).min(NANO_FX_MAX_PARAMS) {
-        let name = c::c_str(unsafe { *model.param_names.add(i) });
+        let name = c_str(unsafe { *model.param_names.add(i) });
         block.params[i].display = normalized_to_display(name, 0.5);
         block.params[i].normalized = 0.5;
         block.params[i].valid = false;
@@ -772,7 +772,7 @@ fn send_next_refresh() {
 
         let mut buf = [0u8; 16];
         let n = builders::fx_param_refresh_payload(SLOT_CFG[idx].refresh_slot, &mut buf);
-        if n == 0 || !c::ble_connected() {
+        if n == 0 || !crate::ble::nano_ble_connected() {
             s.refresh_active = false;
             continue;
         }
@@ -780,7 +780,11 @@ fn send_next_refresh() {
         let label = BLOCK_LABELS[idx];
         let model_text = clip(&block_model_text(&s.fx.blocks[idx]), 31);
         info!(target: TAG, "Refreshing params: {label} ({model_text})");
-        c::ble_write_c304(&c_label(&clip(&format!("{label} param refresh"), 31)), &buf[..n]);
+        let _ = crate::ble::nano_ble_write_c304(
+            (c_label(&clip(&format!("{label} param refresh"), 31))).as_ptr(),
+            buf[..n].as_ptr(),
+            buf[..n].len(),
+        );
 
         unsafe {
             esp_timer_stop(s.refresh_timeout_timer);
@@ -792,7 +796,7 @@ fn send_next_refresh() {
     s.refresh_active = false;
     s.refresh_q_len = 0;
     s.refresh_q_head = 0;
-    c::ui_set_fx(&s.fx);
+    unsafe { crate::ui::screen::nano_ui_set_fx(&s.fx) };
 }
 
 fn run_begin_param_refresh() {
@@ -814,7 +818,7 @@ fn run_begin_param_refresh() {
 
     if s.refresh_q_len == 0 {
         info!(target: TAG, "No active FX blocks to refresh");
-        c::ui_set_fx(&s.fx);
+        unsafe { crate::ui::screen::nano_ui_set_fx(&s.fx) };
         return;
     }
 
@@ -1178,7 +1182,7 @@ pub unsafe extern "C" fn nano_fx_try_apply_gate_bytes(data: *const u8, len: usiz
     }
 
     apply_gate_from_parsed(&parsed);
-    c::ui_set_fx(&fx().fx);
+    unsafe { crate::ui::screen::nano_ui_set_fx(&fx().fx) };
     true
 }
 
@@ -1271,7 +1275,7 @@ fn sync_from_preset(data: &[u8]) {
     }
 
     s.fx.valid = true;
-    c::ui_set_fx(&s.fx);
+    unsafe { crate::ui::screen::nano_ui_set_fx(&s.fx) };
     nano_fx_begin_param_refresh();
 }
 
@@ -1365,7 +1369,7 @@ fn feed_c305(data: &[u8]) -> bool {
     for i in 0..n {
         block.params[i].normalized = clampf(floats[i], 0.0, 1.0);
         let name = model_ref(block.model)
-            .map(|model| c::c_str(unsafe { *model.param_names.add(i) }))
+            .map(|model| c_str(unsafe { *model.param_names.add(i) }))
             .unwrap_or("");
         block.params[i].display = if name.is_empty() {
             block.params[i].normalized * 100.0
@@ -1379,7 +1383,7 @@ fn feed_c305(data: &[u8]) -> bool {
     info!(target: TAG, "{label} params loaded ({float_count} values)");
 
     if block.on && !block.has_model_id {
-        c::state_request_preset_refresh(c"FX model sync");
+        unsafe { crate::state::nano_state_request_preset_refresh(c"FX model sync".as_ptr()) };
     }
 
     s.refresh_active = false;
@@ -1387,7 +1391,7 @@ fn feed_c305(data: &[u8]) -> bool {
         esp_timer_stop(s.refresh_timeout_timer);
         esp_timer_start_once(s.refresh_gap_timer, FX_REFRESH_GAP_US);
     }
-    c::ui_set_fx(&s.fx);
+    unsafe { crate::ui::screen::nano_ui_set_fx(&s.fx) };
     true
 }
 
@@ -1403,15 +1407,16 @@ pub extern "C" fn nano_fx_write_gate_enabled(enabled: bool) -> bool {
 
     let mut buf = [0u8; 16];
     let n = builders::global_toggle_payload(0x09, if enabled { 0x00 } else { 0x01 }, &mut buf);
-    if n == 0 || !c::ble_connected() {
+    if n == 0 || !crate::ble::nano_ble_connected() {
         return false;
     }
     info!(target: TAG, "Gate {}", if enabled { "ON" } else { "OFF" });
-    c::ui_set_fx(&s.fx);
-    if !c::ble_write_c304(
-        if enabled { c"Gate ON" } else { c"Gate OFF" },
-        &buf[..n],
-    ) {
+    unsafe { crate::ui::screen::nano_ui_set_fx(&s.fx) };
+    if crate::ble::nano_ble_write_c304(
+        (if enabled { c"Gate ON" } else { c"Gate OFF" }).as_ptr(),
+        buf[..n].as_ptr(),
+        buf[..n].len(),
+    ) != ESP_OK {
         return false;
     }
     s.gate_assert_us = now_us();
@@ -1429,12 +1434,16 @@ pub extern "C" fn nano_fx_write_gate_reduction(pct: u8) -> bool {
 
     let mut buf = [0u8; 20];
     let n = builders::gate_reduction_payload(pct, &mut buf);
-    if n == 0 || !c::ble_connected() {
+    if n == 0 || !crate::ble::nano_ble_connected() {
         return false;
     }
 
-    c::ui_set_fx(&s.fx);
-    if !c::ble_write_c304(&c_label(&format!("Gate amount {pct}%")), &buf[..n]) {
+    unsafe { crate::ui::screen::nano_ui_set_fx(&s.fx) };
+    if crate::ble::nano_ble_write_c304(
+        c_label(&format!("Gate amount {pct}%")).as_ptr(),
+        buf[..n].as_ptr(),
+        buf[..n].len(),
+    ) != ESP_OK {
         return false;
     }
     s.gate_amount_assert_us = now_us();
@@ -1460,7 +1469,7 @@ pub unsafe extern "C" fn nano_fx_write_block_model(
         return false;
     }
 
-    if !c::ble_connected() {
+    if !crate::ble::nano_ble_connected() {
         return false;
     }
 
@@ -1476,7 +1485,11 @@ pub unsafe extern "C" fn nano_fx_write_block_model(
         55,
     );
     info!(target: TAG, "{label}");
-    if !c::ble_write_c304(&c_label(&label), &buf[..n]) {
+    if crate::ble::nano_ble_write_c304(
+        c_label(&label).as_ptr(),
+        buf[..n].as_ptr(),
+        buf[..n].len(),
+    ) != ESP_OK {
         return false;
     }
 
@@ -1496,15 +1509,16 @@ pub unsafe extern "C" fn nano_fx_write_block_model(
         if en_n > 0 {
             s.fx.blocks[idx].on = true;
             s.block_on_asserted_us[idx] = now_us();
-            c::ble_write_c304(
-                &c_label(&clip(&format!("{} ON", BLOCK_LABELS[idx]), 31)),
-                &en_buf[..en_n],
+            let _ = crate::ble::nano_ble_write_c304(
+                (c_label(&clip(&format!("{} ON", BLOCK_LABELS[idx]), 31))).as_ptr(),
+                en_buf[..en_n].as_ptr(),
+                en_buf[..en_n].len(),
             );
         }
     }
 
     enqueue_param_refresh(block);
-    c::ui_set_fx(&s.fx);
+    unsafe { crate::ui::screen::nano_ui_set_fx(&s.fx) };
     true
 }
 
@@ -1526,7 +1540,7 @@ pub extern "C" fn nano_fx_write_block_enabled(block: u32, enabled: bool) -> bool
         if enabled { 0x00 } else { 0x01 },
         &mut buf,
     );
-    if n == 0 || !c::ble_connected() {
+    if n == 0 || !crate::ble::nano_ble_connected() {
         return false;
     }
 
@@ -1539,9 +1553,13 @@ pub extern "C" fn nano_fx_write_block_enabled(block: u32, enabled: bool) -> bool
         31,
     );
     info!(target: TAG, "{label}");
-    c::ui_set_fx(&s.fx);
+    unsafe { crate::ui::screen::nano_ui_set_fx(&s.fx) };
 
-    if !c::ble_write_c304(&c_label(&label), &buf[..n]) {
+    if crate::ble::nano_ble_write_c304(
+        c_label(&label).as_ptr(),
+        buf[..n].as_ptr(),
+        buf[..n].len(),
+    ) != ESP_OK {
         return false;
     }
 
@@ -1574,7 +1592,7 @@ pub extern "C" fn nano_fx_write_param_normalized(
         return false;
     }
 
-    let name = c::c_str(unsafe { *model.param_names.add(param_index as usize) });
+    let name = c_str(unsafe { *model.param_names.add(param_index as usize) });
     let normalized = clampf(normalized, 0.0, 1.0);
     let param = &mut s.fx.blocks[idx].params[param_index as usize];
     param.normalized = normalized;
@@ -1584,13 +1602,17 @@ pub extern "C" fn nano_fx_write_param_normalized(
 
     let mut buf = [0u8; 24];
     let n = builders::fx_param_payload(SLOT_CFG[idx].model_slot, param_index, normalized, &mut buf);
-    if n == 0 || !c::ble_connected() {
+    if n == 0 || !crate::ble::nano_ble_connected() {
         return false;
     }
 
     let value = clip(&format_param(&s.fx.blocks[idx], param_index), 15);
     let label = clip(&format!("{} {name}={value}", BLOCK_LABELS[idx]), 47);
-    c::ble_write_c304(&c_label(&label), &buf[..n])
+    crate::ble::nano_ble_write_c304(
+        c_label(&label).as_ptr(),
+        buf[..n].as_ptr(),
+        buf[..n].len(),
+    ) == ESP_OK
 }
 
 #[no_mangle]
@@ -1612,7 +1634,7 @@ pub extern "C" fn nano_fx_write_param_display(
         return false;
     }
 
-    let name = c::c_str(unsafe { *model.param_names.add(param_index as usize) });
+    let name = c_str(unsafe { *model.param_names.add(param_index as usize) });
     let normalized = super::params::display_to_normalized(name, display_value);
     nano_fx_write_param_normalized(block, param_index, normalized)
 }

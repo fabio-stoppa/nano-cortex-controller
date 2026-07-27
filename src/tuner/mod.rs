@@ -1,7 +1,5 @@
-//! Tuner (pitch + mute/bypass route), exported with the C ABI declared in
-//! `components/nano/nano_tuner.h` so the remaining C modules keep working.
+//! Tuner (pitch + mute/bypass route).
 
-pub mod c_deps;
 pub mod engine;
 pub mod types;
 

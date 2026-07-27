@@ -1,7 +1,5 @@
-//! Preset / amp state machine, exported with the C ABI declared in
-//! `components/nano/nano_state.h` so the remaining C modules keep working.
+//! Preset / amp state machine.
 
-pub mod c_deps;
 pub mod machine;
 
 pub use machine::{

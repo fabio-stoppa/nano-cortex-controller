@@ -1,5 +1,4 @@
-//! Factory capture catalog + bank helpers, exported with the C ABI declared in
-//! `components/nano/nano_amp.h` (port of `components/nano/nano_amp_catalog.c`).
+//! Factory capture catalog + bank helpers.
 
 use core::ffi::c_char;
 

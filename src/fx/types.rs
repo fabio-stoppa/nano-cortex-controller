@@ -1,7 +1,4 @@
-//! `#[repr(C)]` mirrors of the structs and enums in `components/nano/nano_fx.h`.
-//!
-//! The C UI reads these by pointer, so field order and padding must match the
-//! header exactly.
+//! `#[repr(C)]` FX / gate state types shared across the Rust firmware modules.
 
 use core::ffi::c_char;
 use core::ptr;
@@ -117,6 +114,7 @@ impl NanoGate {
 
 /// Mirror of `nano_fx_block_t`.
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct NanoFxBlock {
     pub id: u32,
     pub on: bool,
@@ -154,6 +152,7 @@ impl NanoFxBlock {
 
 /// Mirror of `nano_fx_state_t`.
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct NanoFxState {
     pub gate: NanoGate,
     pub blocks: [NanoFxBlock; NANO_FX_BLOCK_COUNT],
@@ -184,35 +183,3 @@ impl NanoFxState {
         state
     }
 }
-
-/// The C UI reads these by pointer, so hold them against the bindgen view of
-/// `nano_fx.h`: any header drift has to break the build, not the display.
-const _: () = {
-    use core::mem::{align_of, offset_of, size_of};
-    use esp_idf_svc::sys as sys;
-
-    assert!(size_of::<NanoFxModelDef>() == size_of::<sys::nano_fx_model_def_t>());
-    assert!(align_of::<NanoFxModelDef>() == align_of::<sys::nano_fx_model_def_t>());
-    assert!(
-        offset_of!(NanoFxModelDef, param_names)
-            == offset_of!(sys::nano_fx_model_def_t, param_names)
-    );
-
-    assert!(size_of::<NanoFxParam>() == size_of::<sys::nano_fx_param_t>());
-    assert!(size_of::<NanoGate>() == size_of::<sys::nano_gate_t>());
-
-    assert!(size_of::<NanoFxBlock>() == size_of::<sys::nano_fx_block_t>());
-    assert!(align_of::<NanoFxBlock>() == align_of::<sys::nano_fx_block_t>());
-    assert!(offset_of!(NanoFxBlock, model) == offset_of!(sys::nano_fx_block_t, model));
-    assert!(offset_of!(NanoFxBlock, params) == offset_of!(sys::nano_fx_block_t, params));
-    assert!(
-        offset_of!(NanoFxBlock, has_model_id) == offset_of!(sys::nano_fx_block_t, has_model_id)
-    );
-
-    assert!(size_of::<NanoFxState>() == size_of::<sys::nano_fx_state_t>());
-    assert!(offset_of!(NanoFxState, blocks) == offset_of!(sys::nano_fx_state_t, blocks));
-    assert!(offset_of!(NanoFxState, valid) == offset_of!(sys::nano_fx_state_t, valid));
-
-    assert!(NANO_FX_BLOCK_COUNT == sys::NANO_FX_BLOCK_COUNT as usize);
-    assert!(NANO_FX_MAX_PARAMS == sys::NANO_FX_MAX_PARAMS as usize);
-};

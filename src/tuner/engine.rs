@@ -16,10 +16,9 @@ use log::{debug, info};
 use nano_wire::builders;
 use nano_wire::varint::read_varint;
 
-use super::c_deps as c;
-use super::c_deps::TAG;
 use super::types::*;
 
+const TAG: &str = "nano_tuner";
 const PITCH_MAGIC0: u8 = 0x23;
 const PITCH_MAGIC1: u8 = 0x2D;
 const RX_IGNORE_ACTIVE_US: i64 = 400 * 1000;
@@ -147,10 +146,10 @@ fn mark_tuner_live_from_c305() {
     }
 
     s.tuner.active = true;
-    c::ble_flush_c305_backlog();
+    crate::ble::nano_ble_flush_c305_backlog();
     tuner_publish();
     push_ui();
-    c::state_tuner_watch_update(true);
+    crate::state::nano_state_tuner_watch_update(true);
     info!(target: TAG, "live-path 2026-07-26h armed (age meter, no C306, LVGL low)");
 }
 
@@ -324,7 +323,7 @@ fn apply_tuner_mode_c305(active: bool, route: u32) {
             push_ui();
         }
         if active {
-            c::state_tuner_watch_update(true);
+            crate::state::nano_state_tuner_watch_update(true);
         }
         return;
     }
@@ -350,7 +349,7 @@ fn apply_tuner_mode_c305(active: bool, route: u32) {
         info!(target: TAG, "Tuner OFF (C305)");
     } else if active && !prev_active {
         s.ignore_active_until_us = 0;
-        c::ble_flush_c305_backlog();
+        crate::ble::nano_ble_flush_c305_backlog();
         if s.tuner.route != NANO_TUNER_ROUTE_UNKNOWN {
             info!(target: TAG, "Tuner ON — route: {}", route_name(s.tuner.route));
         } else {
@@ -362,10 +361,10 @@ fn apply_tuner_mode_c305(active: bool, route: u32) {
 
     tuner_publish();
     push_ui();
-    c::state_tuner_watch_update(s.tuner.active);
+    crate::state::nano_state_tuner_watch_update(s.tuner.active);
 
     if !active {
-        c::state_request_tuner_sync();
+        crate::state::nano_state_request_tuner_sync();
     }
 }
 
@@ -423,7 +422,7 @@ fn expire_stale_pitch() {
 
 fn push_ui() {
     tuner_publish();
-    c::ui_set_tuner(&tn().tuner);
+    unsafe { crate::ui::screen::nano_ui_set_tuner(&tn().tuner) };
 }
 
 fn rx_active_blocked() -> bool {
@@ -1026,7 +1025,7 @@ pub extern "C" fn nano_tuner_reset() {
     clear_gain_2d_route_state();
     tuner_publish();
     push_ui();
-    c::state_tuner_watch_update(false);
+    crate::state::nano_state_tuner_watch_update(false);
 }
 
 #[no_mangle]
@@ -1172,7 +1171,7 @@ pub extern "C" fn nano_tuner_sync_from_state(active: bool, route: u32) {
         s.tuner.route = route;
         info!(target: TAG, "Tuner route -> {} (preset state)", route_name(route));
         push_ui();
-        c::state_tuner_watch_update(true);
+        crate::state::nano_state_tuner_watch_update(true);
         return;
     }
 
@@ -1192,7 +1191,7 @@ pub extern "C" fn nano_tuner_sync_from_state(active: bool, route: u32) {
                 if active { "ON" } else { "OFF" }
             );
         }
-        c::state_tuner_watch_update(s.tuner.active);
+        crate::state::nano_state_tuner_watch_update(s.tuner.active);
         return;
     }
 
@@ -1241,13 +1240,13 @@ pub extern "C" fn nano_tuner_sync_from_state(active: bool, route: u32) {
         push_ui();
     }
 
-    c::state_tuner_watch_update(s.tuner.active);
+    crate::state::nano_state_tuner_watch_update(s.tuner.active);
 }
 
 /// Enable or disable tuner (confirmed C304 packets from sniff).
 #[no_mangle]
 pub extern "C" fn nano_tuner_set_active(active: bool) -> bool {
-    if !c::ble_connected() {
+    if !crate::ble::nano_ble_connected() {
         return false;
     }
 
@@ -1259,8 +1258,19 @@ pub extern "C" fn nano_tuner_set_active(active: bool) -> bool {
         if n2d == 0 {
             return false;
         }
-        c::log_bytes(c"Tuner ON (tx)", &buf[..n2d]);
-        if !c::ble_write_c304(c"Tuner ON", &buf[..n2d]) {
+        unsafe {
+            nano_wire::ffi::nano_log_bytes(
+                c"nano_tuner".as_ptr(),
+                c"Tuner ON (tx)".as_ptr(),
+                buf[..n2d].as_ptr(),
+                n2d,
+            )
+        };
+        if crate::ble::nano_ble_write_c304(
+            c"Tuner ON".as_ptr(),
+            buf[..n2d].as_ptr(),
+            buf[..n2d].len(),
+        ) != ESP_OK {
             return false;
         }
         let s = tn();
@@ -1268,10 +1278,10 @@ pub extern "C" fn nano_tuner_set_active(active: bool) -> bool {
         s.tuner.has_pitch = false;
         s.tuner.route = NANO_TUNER_ROUTE_MUTE;
         note_c305_authority(true);
-        c::ble_flush_c305_backlog();
+        crate::ble::nano_ble_flush_c305_backlog();
         tuner_publish();
         push_ui();
-        c::state_tuner_watch_update(true);
+        crate::state::nano_state_tuner_watch_update(true);
         return true;
     }
 
@@ -1279,8 +1289,19 @@ pub extern "C" fn nano_tuner_set_active(active: bool) -> bool {
     if n == 0 {
         return false;
     }
-    c::log_bytes(c"Tuner OFF (tx)", &buf[..n]);
-    if !c::ble_write_c304(c"Tuner OFF", &buf[..n]) {
+    unsafe {
+        nano_wire::ffi::nano_log_bytes(
+            c"nano_tuner".as_ptr(),
+            c"Tuner OFF (tx)".as_ptr(),
+            buf[..n].as_ptr(),
+            n,
+        )
+    };
+    if crate::ble::nano_ble_write_c304(
+        c"Tuner OFF".as_ptr(),
+        buf[..n].as_ptr(),
+        buf[..n].len(),
+    ) != ESP_OK {
         return false;
     }
 
@@ -1293,7 +1314,7 @@ pub extern "C" fn nano_tuner_set_active(active: bool) -> bool {
     s.ignore_active_until_us = now_us() + RX_IGNORE_ACTIVE_US;
     note_c305_authority(false);
     push_ui();
-    c::state_tuner_watch_update(false);
-    c::state_request_tuner_sync();
+    crate::state::nano_state_tuner_watch_update(false);
+    crate::state::nano_state_request_tuner_sync();
     true
 }

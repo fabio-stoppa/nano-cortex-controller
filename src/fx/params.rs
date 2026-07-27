@@ -3,9 +3,9 @@
 
 use core::ffi::{c_char, c_int, CStr};
 
-use super::c_deps::{c_str, write_c_buf};
 use super::shared::Shared;
 use super::types::NanoFxBlock;
+use super::util::{c_str, write_c_buf};
 
 /// Display range for a param: `(min, max, step, is_pct)`.
 pub struct Range {

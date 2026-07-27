@@ -1,7 +1,7 @@
 //! Preset / amp state machine (port of `components/nano/nano_state.c`).
 //!
 //! Owns the C305 reassembly buffers, the debounce/refresh/poll timers and the
-//! Tempo Mode helpers, exported with the C ABI declared in `nano_state.h`.
+//! Tempo Mode helpers and preset/amp state machine.
 
 use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_void, CStr};
@@ -13,10 +13,70 @@ use std::ffi::CString;
 use esp_idf_svc::sys::*;
 use log::{debug, error, info, warn};
 
-use super::c_deps as c;
-use super::c_deps::{NanoAmpC, NanoPresetCatalogC, BPM_MAX, BPM_MIN, PRESET_COUNT, PRESET_NAME_MAX};
+use nano_wire::ffi::{NanoAmpC, NanoPresetCatalogC};
+use nano_wire::types::{AMP_CAPTURE_NAME_MAX, BPM_MAX, BPM_MIN, PRESET_COUNT, PRESET_NAME_MAX};
 
-const TAG: &str = c::TAG;
+const TAG: &str = "nano_state";
+
+fn tag_ptr() -> *const c_char {
+    c"nano_state".as_ptr()
+}
+
+const fn amp_zero() -> NanoAmpC {
+    NanoAmpC {
+        gain: 0,
+        level: 0,
+        bass: 0,
+        mid: 0,
+        treble: 0,
+        capture_volume: 0,
+        capture_slot: 0,
+        capture_name: [0; AMP_CAPTURE_NAME_MAX],
+        have_capture_slot: false,
+        have_capture_name: false,
+        have_capture_volume: false,
+        valid: false,
+    }
+}
+
+fn amp_copy(a: &NanoAmpC) -> NanoAmpC {
+    NanoAmpC {
+        gain: a.gain,
+        level: a.level,
+        bass: a.bass,
+        mid: a.mid,
+        treble: a.treble,
+        capture_volume: a.capture_volume,
+        capture_slot: a.capture_slot,
+        capture_name: a.capture_name,
+        have_capture_slot: a.have_capture_slot,
+        have_capture_name: a.have_capture_name,
+        have_capture_volume: a.have_capture_volume,
+        valid: a.valid,
+    }
+}
+
+const fn preset_catalog_zero() -> NanoPresetCatalogC {
+    NanoPresetCatalogC {
+        names: [[0; PRESET_NAME_MAX]; PRESET_COUNT],
+        count: 0,
+        valid: false,
+    }
+}
+
+fn c_bytes_to_string(bytes: &[u8]) -> String {
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
+}
+
+fn is_tuner_active() -> bool {
+    let tuner = crate::tuner::nano_tuner_get();
+    !tuner.is_null() && unsafe { (*tuner).active }
+}
+
+fn ble_write_c304(label: &CStr, data: &[u8]) -> bool {
+    crate::ble::nano_ble_write_c304(label.as_ptr(), data.as_ptr(), data.len()) == ESP_OK
+}
 
 const STATE_BUF_MAX: usize = 48 * 1024;
 const PARSE_DEBOUNCE_US: u64 = 1200 * 1000;
@@ -40,7 +100,7 @@ const TAP_HISTORY_MAX: usize = 4;
 const TEMPO_DEFAULT_BPM: f32 = 120.0;
 const TEMPO_EXIT_ECHO_IGNORE_US: i64 = 800 * 1000;
 
-/// `nano_rx_mode_t` (`nano_state.h`).
+/// Receive-path mode while syncing / applying pedal traffic.
 pub const NANO_RX_IDLE: u32 = 0;
 pub const NANO_RX_METADATA: u32 = 1;
 pub const NANO_RX_CURRENT: u32 = 2;
@@ -122,7 +182,7 @@ impl State {
     const fn new() -> Self {
         Self {
             mode: NANO_RX_IDLE,
-            amp: c::amp_zero(),
+            amp: amp_zero(),
             cap_vol_kept: 128,
             cap_vol_kept_valid: false,
             master_write_us: 0,
@@ -134,7 +194,7 @@ impl State {
             state_len: 0,
             fe_len: 0,
             last_bpm_hunt_len: 0,
-            preset_catalog: c::preset_catalog_zero(),
+            preset_catalog: preset_catalog_zero(),
             parse_timer: ptr::null_mut(),
             sync_timer: ptr::null_mut(),
             refresh_timer: ptr::null_mut(),
@@ -230,11 +290,11 @@ fn tempo_bpm_f() -> f32 {
 
 fn write_tempo_tap_bpm(bpm_f: f32, label: &CStr) -> bool {
     let mut buf = [0u8; 24];
-    let n = unsafe { c::nano_bpm_tap_payload(bpm_f, buf.as_mut_ptr(), buf.len()) };
+    let n = unsafe { nano_wire::ffi::nano_bpm_tap_payload(bpm_f, buf.as_mut_ptr(), buf.len()) };
     if n == 0 {
         return false;
     }
-    c::ble_write_c304(label, &buf[..n])
+    ble_write_c304(label, &buf[..n])
 }
 
 fn on_tempo_notify(bpm: u16, tap_marker: bool) {
@@ -250,14 +310,14 @@ fn on_tempo_notify(bpm: u16, tap_marker: bool) {
         // Tap / keep-alive while in Tempo Mode — open UI + phase-lock blinker.
         info!(target: TAG, "Tempo Mode notify TAP @ {bpm} BPM");
         s.tempo_mode_active = true;
-        c::ui_set_tempo_mode(true);
-        c::ui_bpm_tap(bpm);
+        unsafe { crate::ui::screen::nano_ui_set_tempo_mode(true) };
+        unsafe { crate::ui::screen::nano_ui_bpm_tap(bpm) };
         return;
     }
 
     if now_us() < s.tempo_ignore_exit_echo_us {
         info!(target: TAG, "Tempo Mode notify EXIT @ {bpm} BPM (ignored echo)");
-        c::ui_set_bpm(bpm, true);
+        unsafe { crate::ui::screen::nano_ui_set_bpm(bpm, true) };
         return;
     }
 
@@ -270,13 +330,13 @@ fn on_tempo_notify(bpm: u16, tap_marker: bool) {
         info!(target: TAG, "Tempo Mode notify EXIT @ {bpm} BPM");
         s.tempo_mode_active = false;
         s.tap_count = 0;
-        c::ui_set_bpm(bpm, true);
-        c::ui_set_tempo_mode(false);
+        unsafe { crate::ui::screen::nano_ui_set_bpm(bpm, true) };
+        unsafe { crate::ui::screen::nano_ui_set_tempo_mode(false) };
     } else {
         info!(target: TAG, "Tempo Mode notify ENTER @ {bpm} BPM");
         s.tempo_mode_active = true;
-        c::ui_set_tempo_mode(true);
-        c::ui_bpm_tap(bpm);
+        unsafe { crate::ui::screen::nano_ui_set_tempo_mode(true) };
+        unsafe { crate::ui::screen::nano_ui_bpm_tap(bpm) };
     }
 }
 
@@ -318,7 +378,7 @@ fn finish_fe_capture() {
     if s.fe_len > 0 {
         let fe = fe_slice();
         if unsafe {
-            c::nano_parse_fe_preset_catalog(fe.as_ptr(), fe.len(), &mut s.preset_catalog)
+            nano_wire::ffi::nano_parse_fe_preset_catalog(fe.as_ptr(), fe.len(), &mut s.preset_catalog)
         } {
             info!(
                 target: TAG,
@@ -332,11 +392,11 @@ fn finish_fe_capture() {
         }
 
         let mut fe_bpm: u16 = 0;
-        if unsafe { c::nano_parse_bpm(fe.as_ptr(), fe.len(), &mut fe_bpm) } {
+        if unsafe { nano_wire::ffi::nano_parse_bpm(fe.as_ptr(), fe.len(), &mut fe_bpm) } {
             info!(target: TAG, "BPM {fe_bpm} (field 56 in FE metadata)");
             nano_state_on_bpm_found(fe_bpm);
         } else {
-            c::log_bpm_raw_scan(c"FE metadata", fe);
+            unsafe { nano_wire::ffi::nano_log_bpm_raw_scan(tag_ptr(), c"FE metadata".as_ptr(), fe.as_ptr(), fe.len()) };
         }
     }
     s.fe_len = 0;
@@ -348,7 +408,7 @@ fn update_preset_label_locked(state: &[u8]) {
     let mut direct = [0u8; PRESET_NAME_MAX];
 
     let have_direct = unsafe {
-        c::nano_proto_first_string(
+        nano_wire::ffi::nano_proto_first_string(
             state.as_ptr(),
             state.len(),
             2,
@@ -357,10 +417,10 @@ fn update_preset_label_locked(state: &[u8]) {
         )
     };
     if have_direct && direct[0] != 0 {
-        label = c::c_bytes_to_string(&direct);
+        label = c_bytes_to_string(&direct);
     } else {
         let mut slot: u32 = 0;
-        if unsafe { c::nano_proto_field_varint(state.as_ptr(), state.len(), 1, &mut slot) } {
+        if unsafe { nano_wire::ffi::nano_proto_field_varint(state.as_ptr(), state.len(), 1, &mut slot) } {
             let mut idx: u32 = 0;
             if slot >= 1 && slot <= PRESET_COUNT as u32 {
                 idx = slot;
@@ -370,7 +430,7 @@ fn update_preset_label_locked(state: &[u8]) {
             if idx > 0 {
                 let name = &s.preset_catalog.names[(idx - 1) as usize];
                 if s.preset_catalog.valid && name[0] != 0 {
-                    label = c::c_bytes_to_string(name);
+                    label = c_bytes_to_string(name);
                 } else {
                     label = format!("Preset {idx}");
                 }
@@ -378,7 +438,7 @@ fn update_preset_label_locked(state: &[u8]) {
         }
     }
 
-    c::ui_set_preset_name(&c_label(&label));
+    unsafe { crate::ui::screen::nano_ui_set_preset_name(c_label(&label).as_ptr()) };
 }
 
 fn append_state_payload(data: &[u8]) {
@@ -419,13 +479,13 @@ fn state_dump_truncated(data: &[u8]) -> bool {
     while i < len {
         let mut tag: u32 = 0;
         let mut next: usize = 0;
-        if !unsafe { c::nano_read_varint(data.as_ptr(), len, i, &mut tag, &mut next) } {
+        if !unsafe { nano_wire::ffi::nano_read_varint(data.as_ptr(), len, i, &mut tag, &mut next) } {
             return i > 0;
         }
         i = next;
         let wire = tag & 0x07;
         if wire == 0 {
-            if !unsafe { c::nano_read_varint(data.as_ptr(), len, i, ptr::null_mut(), &mut next) } {
+            if !unsafe { nano_wire::ffi::nano_read_varint(data.as_ptr(), len, i, ptr::null_mut(), &mut next) } {
                 return true;
             }
             i = next;
@@ -436,7 +496,7 @@ fn state_dump_truncated(data: &[u8]) -> bool {
             i += 8;
         } else if wire == 2 {
             let mut flen: u32 = 0;
-            if !unsafe { c::nano_read_varint(data.as_ptr(), len, i, &mut flen, &mut next) } {
+            if !unsafe { nano_wire::ffi::nano_read_varint(data.as_ptr(), len, i, &mut flen, &mut next) } {
                 return true;
             }
             i = next;
@@ -515,7 +575,7 @@ fn send_state_request(label: &str, from_initial_sync: bool) {
     let s = st();
 
     // Preset FE streams stomp the live pitch mailbox — never poll while tuning.
-    if !from_initial_sync && c::tuner_active() {
+    if !from_initial_sync && is_tuner_active() {
         if label.contains("Tuner") {
             s.pending_tuner_sync = true;
         }
@@ -546,7 +606,7 @@ fn send_state_request(label: &str, from_initial_sync: bool) {
     let mut buf = [0u8; 32];
     nano_rx_mode_set(NANO_RX_CURRENT);
     s.state_rx_since_us = now_us();
-    let n = unsafe { c::nano_request_current_state(buf.as_mut_ptr(), buf.len()) };
+    let n = unsafe { nano_wire::ffi::nano_request_current_state(buf.as_mut_ptr(), buf.len()) };
     if n > 0 {
         info!(target: TAG, "Sending preset state request");
         let label = if label.is_empty() {
@@ -554,7 +614,7 @@ fn send_state_request(label: &str, from_initial_sync: bool) {
         } else {
             label
         };
-        c::ble_write_c304(&c_label(label), &buf[..n]);
+        ble_write_c304(&c_label(label), &buf[..n]);
     }
 }
 
@@ -581,20 +641,20 @@ fn parse_state_buffer() {
     let buf = state_slice(buf_len);
     info!(target: TAG, "Parsing preset state ({buf_len} bytes) [{label}]");
     if label == "INITIAL" {
-        c::log_proto_fields(&c_label(&label), buf);
+        unsafe { nano_wire::ffi::nano_log_proto_fields(tag_ptr(), c_label(&label).as_ptr(), buf.as_ptr(), buf.len()) };
     }
 
     let truncated = state_dump_truncated(buf);
-    let has_gate = c::fx_dump_has_gate_fields(buf);
+    let has_gate = unsafe { crate::fx::nano_fx_dump_has_gate_fields(buf.as_ptr(), buf.len()) };
     let wait_for_gate = truncated
         && !has_gate
         && s.mode == NANO_RX_CURRENT
         && s.incomplete_defer_count < STATE_INCOMPLETE_DEFER_MAX;
 
-    let live_amp = c::amp_copy(&s.amp);
+    let live_amp = amp_copy(&s.amp);
     let live_dirty = s.amp_live_dirty;
     let cap_dirty = s.cap_vol_live_dirty;
-    if unsafe { c::nano_parse_amp(buf.as_ptr(), buf.len(), &mut s.amp) } {
+    if unsafe { nano_wire::ffi::nano_parse_amp(buf.as_ptr(), buf.len(), &mut s.amp) } {
         /*
          * Field 44 often sits in the missing mid-dump gap. Keep a previously
          * known capture volume (notify / write / earlier full dump); only seed
@@ -629,8 +689,8 @@ fn parse_state_buffer() {
         s.amp_live_dirty = 0;
         s.cap_vol_live_dirty = false;
         resolve_pending_level_from_dump();
-        c::log_amp(&s.amp);
-        c::ui_set_amp(&s.amp);
+        unsafe { nano_wire::ffi::nano_log_amp(tag_ptr(), &s.amp) };
+        unsafe { crate::ui::screen::nano_ui_set_amp(&s.amp as *const _) };
         if !wait_for_gate {
             start_live_poll();
         }
@@ -647,7 +707,7 @@ fn parse_state_buffer() {
             s.incomplete_defer_count, STATE_INCOMPLETE_DEFER_MAX
         );
         // Apply whatever FX/gate we already have; keep RX open for late 0x80 tails.
-        c::fx_sync_from_preset(buf);
+        unsafe { crate::fx::nano_fx_sync_from_preset(buf.as_ptr(), buf.len()) };
         schedule_parse();
         return;
     }
@@ -655,34 +715,34 @@ fn parse_state_buffer() {
     finish_state_capture();
 
     let mut tuner_active = false;
-    let mut tuner_route: u32 = c::NANO_TUNER_ROUTE_UNKNOWN;
+    let mut tuner_route: u32 = crate::tuner::NANO_TUNER_ROUTE_UNKNOWN;
     if unsafe {
-        c::nano_parse_tuner_state(buf.as_ptr(), buf.len(), &mut tuner_active, &mut tuner_route)
+        nano_wire::ffi::nano_parse_tuner_state(buf.as_ptr(), buf.len(), &mut tuner_active, &mut tuner_route)
     } {
-        if label == "ROUTE" || label == "TUNER" || tuner_active || c::tuner_active() {
-            c::log_tuner_state_fields(buf);
+        if label == "ROUTE" || label == "TUNER" || tuner_active || is_tuner_active() {
+            unsafe { nano_wire::ffi::nano_log_tuner_state_fields(tag_ptr(), buf.as_ptr(), buf.len()) };
         }
-        c::tuner_sync_from_state(tuner_active, tuner_route);
+        crate::tuner::nano_tuner_sync_from_state(tuner_active, tuner_route);
     } else {
-        if label == "ROUTE" || label == "TUNER" || c::tuner_active() {
-            c::log_tuner_state_fields(buf);
+        if label == "ROUTE" || label == "TUNER" || is_tuner_active() {
+            unsafe { nano_wire::ffi::nano_log_tuner_state_fields(tag_ptr(), buf.as_ptr(), buf.len()) };
         }
-        nano_state_tuner_watch_update(c::tuner_active());
+        nano_state_tuner_watch_update(is_tuner_active());
     }
 
-    c::fx_sync_from_preset(buf);
+    unsafe { crate::fx::nano_fx_sync_from_preset(buf.as_ptr(), buf.len()) };
 
     update_preset_label_locked(buf);
 
     let mut bpm: u16 = 0;
-    if unsafe { c::nano_parse_bpm(buf.as_ptr(), buf.len(), &mut bpm) } {
+    if unsafe { nano_wire::ffi::nano_parse_bpm(buf.as_ptr(), buf.len(), &mut bpm) } {
         info!(target: TAG, "BPM {bpm} (field 56) [{label}]");
         nano_state_on_bpm_found(bpm);
     } else {
         // Short dumps omit f56 — keep last live tap-tempo BPM instead of clearing.
         info!(target: TAG, "BPM field 56 absent len={buf_len} [{label}]");
         if label == "INITIAL" || buf_len != s.last_bpm_hunt_len {
-            c::log_bpm_hunt(buf);
+            unsafe { nano_wire::ffi::nano_log_bpm_hunt(tag_ptr(), buf.as_ptr(), buf.len()) };
             s.last_bpm_hunt_len = buf_len;
         }
         if label == "INITIAL" && !s.bpm_known {
@@ -693,7 +753,7 @@ fn parse_state_buffer() {
         }
     }
 
-    if !c::fx_dump_has_gate_fields(buf)
+    if !unsafe { crate::fx::nano_fx_dump_has_gate_fields(buf.as_ptr(), buf.len()) }
         && s.gate_retry_count < STATE_GATE_RETRY_MAX
         && (label == "INITIAL" || label == "ROUTINE" || label == "PRESET")
     {
@@ -703,7 +763,7 @@ fn parse_state_buffer() {
             "Gate fields absent after parse — retry {}/{}", s.gate_retry_count, STATE_GATE_RETRY_MAX
         );
         request_current_state_now("Gate sync retry");
-    } else if c::fx_dump_has_gate_fields(buf) {
+    } else if unsafe { crate::fx::nano_fx_dump_has_gate_fields(buf.as_ptr(), buf.len()) } {
         s.gate_retry_count = 0;
     }
 
@@ -765,7 +825,7 @@ unsafe extern "C" fn refresh_timer_cb(_arg: *mut c_void) {
 
 unsafe extern "C" fn poll_timer_cb(_arg: *mut c_void) {
     let s = st();
-    if c::tuner_active() {
+    if is_tuner_active() {
         return;
     }
     if s.mode == NANO_RX_IDLE && s.amp.valid {
@@ -775,7 +835,7 @@ unsafe extern "C" fn poll_timer_cb(_arg: *mut c_void) {
 
 unsafe extern "C" fn tuner_fast_sync_timer_cb(_arg: *mut c_void) {
     let s = st();
-    if c::tuner_active() {
+    if is_tuner_active() {
         s.pending_tuner_sync = true;
         return;
     }
@@ -790,7 +850,7 @@ unsafe extern "C" fn tuner_fast_sync_timer_cb(_arg: *mut c_void) {
 
 unsafe extern "C" fn tuner_watch_poll_cb(_arg: *mut c_void) {
     let s = st();
-    if c::tuner_active() {
+    if is_tuner_active() {
         nano_state_tuner_watch_update(true);
         return;
     }
@@ -913,7 +973,17 @@ fn sniff_unknown_c305(data: &[u8]) {
         data.first().copied().unwrap_or(0),
         data.get(1).copied().unwrap_or(0)
     );
-    c::log_bytes_full(c"BPM hunt C305", &data[..data.len().min(64)]);
+    {
+        let hunt = &data[..data.len().min(64)];
+        unsafe {
+            nano_wire::ffi::nano_log_bytes_full(
+                tag_ptr(),
+                c"BPM hunt C305".as_ptr(),
+                hunt.as_ptr(),
+                hunt.len(),
+            )
+        };
+    }
 }
 
 /* --------------------------------------------------------- live amp path */
@@ -937,7 +1007,7 @@ fn apply_knob_update(knob_id: u8, raw: u8, source: &str) -> bool {
         target: TAG,
         "Amp {} -> raw {raw} ({source})", KNOB_NAMES[knob_id as usize]
     );
-    c::ui_set_amp(&s.amp);
+    unsafe { crate::ui::screen::nano_ui_set_amp(&s.amp as *const _) };
     true
 }
 
@@ -970,7 +1040,7 @@ fn try_inline_amp_update(data: &[u8]) -> bool {
     let mut knob_id: u8 = 0;
     let mut raw: u8 = 0;
 
-    if unsafe { c::nano_try_parse_capture_volume_notify(data.as_ptr(), data.len(), &mut raw) } {
+    if unsafe { nano_wire::ffi::nano_try_parse_capture_volume_notify(data.as_ptr(), data.len(), &mut raw) } {
         if s.amp.valid && s.amp.have_capture_volume && s.amp.capture_volume == raw {
             return true;
         }
@@ -983,12 +1053,12 @@ fn try_inline_amp_update(data: &[u8]) -> bool {
             s.cap_vol_live_dirty = true;
         }
         debug!(target: TAG, "Capture volume -> raw {raw} (notify)");
-        c::ui_set_amp(&s.amp);
+        unsafe { crate::ui::screen::nano_ui_set_amp(&s.amp as *const _) };
         return true;
     }
 
     if unsafe {
-        c::nano_try_parse_amp_hw_notify(data.as_ptr(), data.len(), &mut knob_id, &mut raw)
+        nano_wire::ffi::nano_try_parse_amp_hw_notify(data.as_ptr(), data.len(), &mut knob_id, &mut raw)
     } {
         if knob_id == NANO_KNOB_LEVEL {
             on_shared_level_notify(raw);
@@ -1004,7 +1074,7 @@ fn try_inline_amp_update(data: &[u8]) -> bool {
     }
 
     if unsafe {
-        c::nano_try_parse_amp_knob_notify(data.as_ptr(), data.len(), &mut knob_id, &mut raw)
+        nano_wire::ffi::nano_try_parse_amp_knob_notify(data.as_ptr(), data.len(), &mut knob_id, &mut raw)
     } {
         if knob_id == NANO_KNOB_LEVEL {
             on_shared_level_notify(raw);
@@ -1037,7 +1107,7 @@ fn reset_amp_sync() {
     s.tap_count = 0;
     s.tempo_mode_active = false;
     s.tempo_ignore_exit_echo_us = 0;
-    s.amp = c::amp_zero();
+    s.amp = amp_zero();
     s.amp_live_dirty = 0;
     s.cap_vol_live_dirty = false;
     s.cap_vol_kept = 128;
@@ -1063,14 +1133,14 @@ fn reset_amp_sync() {
 #[no_mangle]
 pub extern "C" fn nano_state_reset() {
     reset_amp_sync();
-    c::tuner_reset();
-    c::fx_reset();
+    crate::tuner::nano_tuner_reset();
+    crate::fx::nano_fx_reset();
     let s = st();
     s.tempo_mode_active = false;
     s.tempo_ignore_exit_echo_us = 0;
     s.tap_count = 0;
-    c::ui_set_bpm(0, false);
-    c::ui_set_tempo_mode(false);
+    unsafe { crate::ui::screen::nano_ui_set_bpm(0, false) };
+    unsafe { crate::ui::screen::nano_ui_set_tempo_mode(false) };
 }
 
 #[no_mangle]
@@ -1102,9 +1172,9 @@ fn feed_c305(data: &[u8]) {
 
     check_state_rx_timeout();
 
-    let tuner_live = c::tuner_active();
+    let tuner_live = is_tuner_active();
     if tuner_live {
-        c::tuner_note_c305_rx();
+        crate::tuner::nano_tuner_note_c305_rx();
     }
 
     /*
@@ -1112,7 +1182,7 @@ fn feed_c305(data: &[u8]) {
      * Natural mid-range 22/01 often uses len=0x10 — do NOT treat that as preset ACK.
      */
     if len >= 5 && data[1] == 0xC0 && data[2] == 0x08 && data[3] == 0x01 && data[4] == 0x22 {
-        if c::tuner_feed_c305(data) {
+        if unsafe { crate::tuner::nano_tuner_feed_c305(data.as_ptr(), data.len()) } {
             return;
         }
     }
@@ -1206,7 +1276,7 @@ fn feed_c305(data: &[u8]) {
     let mut live_bpm: u16 = 0;
     let mut tap_marker = false;
     if unsafe {
-        c::nano_try_parse_bpm_notify_ex(data.as_ptr(), len, &mut live_bpm, &mut tap_marker)
+        nano_wire::ffi::nano_try_parse_bpm_notify_ex(data.as_ptr(), len, &mut live_bpm, &mut tap_marker)
     } {
         on_tempo_notify(live_bpm, tap_marker);
         return;
@@ -1216,20 +1286,23 @@ fn feed_c305(data: &[u8]) {
         return;
     }
 
-    if c::tuner_feed_c305(data) {
+    if unsafe { crate::tuner::nano_tuner_feed_c305(data.as_ptr(), data.len()) } {
         return;
     }
 
-    if c::fx_feed_c305(data) {
+    if unsafe { crate::fx::nano_fx_feed_c305(data.as_ptr(), data.len()) } {
         return;
     }
 
     /* Late dump tails (byte1 high-bit, often 0x80) carry gate f53/f54 after a
      * mid-f34 gap. When RX already closed, salvage gate directly from the payload. */
-    if len > 2 && c::fx_try_apply_gate_bytes(&data[2..]) {
-        return;
+    if len > 2 {
+        let tail = &data[2..];
+        if unsafe { crate::fx::nano_fx_try_apply_gate_bytes(tail.as_ptr(), tail.len()) } {
+            return;
+        }
     }
-    if c::fx_try_apply_gate_bytes(data) {
+    if unsafe { crate::fx::nano_fx_try_apply_gate_bytes(data.as_ptr(), data.len()) } {
         return;
     }
 
@@ -1241,7 +1314,17 @@ fn feed_c305(data: &[u8]) {
             target: TAG,
             "BPM hunt: other C305 while mode={} len={len} lead={:02X}", s.mode, data[0]
         );
-        c::log_bytes_full(c"BPM hunt other C305", &data[..len.min(48)]);
+        {
+            let hunt = &data[..len.min(48)];
+            unsafe {
+                nano_wire::ffi::nano_log_bytes_full(
+                    tag_ptr(),
+                    c"BPM hunt other C305".as_ptr(),
+                    hunt.as_ptr(),
+                    hunt.len(),
+                )
+            };
+        }
     }
 }
 
@@ -1268,7 +1351,7 @@ pub extern "C" fn nano_state_get_amp() -> *const NanoAmpC {
 #[no_mangle]
 pub extern "C" fn nano_state_write_amp_knob(knob: u32, raw: u8) -> bool {
     let s = st();
-    if knob > NANO_KNOB_TREBLE as u32 || !c::ble_connected() {
+    if knob > NANO_KNOB_TREBLE as u32 || !crate::ble::nano_ble_connected() {
         return false;
     }
     let knob_id = knob as u8;
@@ -1284,21 +1367,21 @@ pub extern "C" fn nano_state_write_amp_knob(knob: u32, raw: u8) -> bool {
     }
 
     let mut buf = [0u8; 32];
-    let n = unsafe { c::nano_amp_knob_payload(knob, raw, buf.as_mut_ptr(), buf.len()) };
+    let n = unsafe { nano_wire::ffi::nano_amp_knob_payload(knob, raw, buf.as_mut_ptr(), buf.len()) };
     if n == 0 {
         return false;
     }
 
     let name = KNOB_NAMES[knob_id as usize];
     debug!(target: TAG, "Amp {name} -> raw {raw} (touch)");
-    c::ble_write_c304(&c_label(&format!("Amp {name} = {raw}")), &buf[..n])
+    ble_write_c304(&c_label(&format!("Amp {name} = {raw}")), &buf[..n])
 }
 
 /// Capture volume (field 44 / write id 0x0A), raw 0..255.
 #[no_mangle]
 pub extern "C" fn nano_state_write_capture_volume(raw: u8) -> bool {
     let s = st();
-    if !c::ble_connected() {
+    if !crate::ble::nano_ble_connected() {
         return false;
     }
 
@@ -1312,27 +1395,27 @@ pub extern "C" fn nano_state_write_capture_volume(raw: u8) -> bool {
     }
 
     let mut buf = [0u8; 32];
-    let n = unsafe { c::nano_capture_volume_payload(raw, buf.as_mut_ptr(), buf.len()) };
+    let n = unsafe { nano_wire::ffi::nano_capture_volume_payload(raw, buf.as_mut_ptr(), buf.len()) };
     if n == 0 {
         return false;
     }
 
     debug!(target: TAG, "Capture volume -> raw {raw} (touch)");
-    c::ui_set_amp(&s.amp);
-    c::ble_write_c304(c"Capture volume", &buf[..n])
+    unsafe { crate::ui::screen::nano_ui_set_amp(&s.amp as *const _) };
+    ble_write_c304(c"Capture volume", &buf[..n])
 }
 
 /// Select factory/user capture slot 1..25 and refresh preset state.
 #[no_mangle]
 pub extern "C" fn nano_state_write_capture_slot(slot: u8) -> bool {
     let s = st();
-    if !(1..=25).contains(&slot) || !c::ble_connected() {
+    if !(1..=25).contains(&slot) || !crate::ble::nano_ble_connected() {
         return false;
     }
 
     s.amp.capture_slot = slot;
     s.amp.have_capture_slot = true;
-    if let Some(name) = c::amp_capture_name(slot) {
+    if let Some(name) = crate::amp::capture_name(slot).map(|name| name.to_owned()) {
         let dst = &mut s.amp.capture_name;
         dst.fill(0);
         let bytes = name.as_bytes();
@@ -1341,17 +1424,17 @@ pub extern "C" fn nano_state_write_capture_slot(slot: u8) -> bool {
         s.amp.have_capture_name = true;
     }
     s.amp.valid = true;
-    c::ui_set_amp(&s.amp);
+    unsafe { crate::ui::screen::nano_ui_set_amp(&s.amp as *const _) };
 
     let mut buf = [0u8; 16];
-    let n = unsafe { c::nano_capture_select_payload(slot, buf.as_mut_ptr(), buf.len()) };
+    let n = unsafe { nano_wire::ffi::nano_capture_select_payload(slot, buf.as_mut_ptr(), buf.len()) };
     if n == 0 {
         return false;
     }
 
     let label = format!("Capture slot {slot}");
     info!(target: TAG, "{label}");
-    if !c::ble_write_c304(&c_label(&label), &buf[..n]) {
+    if !ble_write_c304(&c_label(&label), &buf[..n]) {
         return false;
     }
 
@@ -1382,15 +1465,15 @@ pub extern "C" fn nano_state_begin_sync() {
         }
     }
     s.fe_len = 0;
-    s.preset_catalog = c::preset_catalog_zero();
+    s.preset_catalog = preset_catalog_zero();
 
     ensure_timers();
 
     nano_rx_mode_set(NANO_RX_METADATA);
 
-    let n = unsafe { c::nano_fe_metadata_request(buf.as_mut_ptr(), buf.len()) };
+    let n = unsafe { nano_wire::ffi::nano_fe_metadata_request(buf.as_mut_ptr(), buf.len()) };
     if n > 0 {
-        c::ble_write_c304(c"FE metadata request", &buf[..n]);
+        ble_write_c304(c"FE metadata request", &buf[..n]);
     }
 
     unsafe {
@@ -1490,7 +1573,7 @@ pub extern "C" fn nano_state_on_bpm_found(bpm: u16) {
     }
     s.bpm_known = true;
     s.last_bpm = bpm;
-    c::ui_set_bpm(bpm, true);
+    unsafe { crate::ui::screen::nano_ui_set_bpm(bpm, true) };
 }
 
 /// Last known BPM (0 if unknown).
@@ -1514,7 +1597,7 @@ pub extern "C" fn nano_state_tempo_active() -> bool {
 #[no_mangle]
 pub extern "C" fn nano_state_tempo_enter() -> bool {
     let s = st();
-    if !c::ble_connected() {
+    if !crate::ble::nano_ble_connected() {
         return false;
     }
     s.tap_count = 0;
@@ -1527,7 +1610,7 @@ pub extern "C" fn nano_state_tempo_enter() -> bool {
         s.last_bpm = bpm;
         s.tempo_mode_active = true;
         // Number only — blinker phase-locks on the pedal echo/notify.
-        c::ui_set_bpm(bpm, true);
+        unsafe { crate::ui::screen::nano_ui_set_bpm(bpm, true) };
     }
     ok
 }
@@ -1539,17 +1622,17 @@ pub extern "C" fn nano_state_tempo_exit() -> bool {
     s.tap_count = 0;
     s.tempo_mode_active = false;
     s.tempo_ignore_exit_echo_us = now_us() + TEMPO_EXIT_ECHO_IGNORE_US;
-    if !c::ble_connected() {
+    if !crate::ble::nano_ble_connected() {
         return false;
     }
     let bpm_f = tempo_bpm_f();
     let mut buf = [0u8; 24];
-    let n = unsafe { c::nano_bpm_exit_payload(bpm_f, buf.as_mut_ptr(), buf.len()) };
+    let n = unsafe { nano_wire::ffi::nano_bpm_exit_payload(bpm_f, buf.as_mut_ptr(), buf.len()) };
     if n == 0 {
         return false;
     }
     info!(target: TAG, "Tempo Mode exit @ {bpm_f:.0} BPM");
-    c::ble_write_c304(c"Tempo Mode exit", &buf[..n])
+    ble_write_c304(c"Tempo Mode exit", &buf[..n])
 }
 
 /// TAP button: send C304 tap frame. From the 2nd interval onward average BPM
@@ -1557,7 +1640,7 @@ pub extern "C" fn nano_state_tempo_exit() -> bool {
 #[no_mangle]
 pub extern "C" fn nano_state_tempo_tap() -> bool {
     let s = st();
-    if !c::ble_connected() {
+    if !crate::ble::nano_ble_connected() {
         return false;
     }
 
@@ -1600,6 +1683,6 @@ pub extern "C" fn nano_state_tempo_tap() -> bool {
     s.last_bpm = bpm;
     s.tempo_mode_active = true;
     // Update readout now; phase-lock on C305 echo so we match the Nano LED.
-    c::ui_set_bpm(bpm, true);
+    unsafe { crate::ui::screen::nano_ui_set_bpm(bpm, true) };
     true
 }

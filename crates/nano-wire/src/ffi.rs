@@ -1,4 +1,5 @@
-//! C ABI matching `nano_protocol.h` / `nano_proto.h` for the existing C call sites.
+//! C ABI for protocol builders / parsers (legacy call shape kept for
+//! `#[no_mangle]` exports used across firmware modules).
 
 use core::slice;
 
@@ -53,6 +54,7 @@ use crate::types::{Amp, Knob, TunerRoute, AMP_CAPTURE_NAME_MAX, PRESET_COUNT, PR
 use crate::varint;
 
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct NanoAmpC {
     pub gain: u8,
     pub level: u8,

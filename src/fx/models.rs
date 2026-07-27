@@ -4,9 +4,9 @@
 use core::ffi::{c_char, CStr};
 use core::ptr;
 
-use super::c_deps::{c_str, write_c_buf};
 use super::catalog::catalog;
 use super::types::*;
+use super::util::{c_str, write_c_buf};
 
 pub const BLOCK_LABELS: [&str; NANO_FX_BLOCK_COUNT] = [
     "Pre FX 1",
@@ -627,7 +627,7 @@ pub extern "C" fn nano_fx_get_allowed_model(block: u32, index: usize) -> *const 
     ptr::null()
 }
 
-/// Not in `nano_fx.h`, but the C port exported it — keep the symbol available.
+/// Extra export kept from the C port for callers that keyed models by name.
 #[no_mangle]
 pub unsafe extern "C" fn nano_fx_find_model(id: *const u8, id_len: u8) -> *const NanoFxModelDef {
     if id.is_null() || id_len == 0 {

@@ -21,7 +21,7 @@ fn check(err: esp_err_t, what: &str) {
 }
 
 fn main() {
-    // Keep C-ABI symbols in the final binary for components/nano.
+    // Keep C-ABI symbols in the final binary for cross-module callers.
     nano_wire::ffi::ensure_linked();
     ble::ensure_linked();
     state::ensure_linked();
@@ -40,16 +40,14 @@ fn main() {
     info!("firmware build 2026-07-26-rust7 (nano-wire + BLE + state + FX + tuner + amp + UI in Rust)");
     info!("Nano Cortex firmware starting");
 
-    unsafe { check(sys::nano_ble_start(), "nano_ble_start") };
+    check(ble::nano_ble_start(), "nano_ble_start");
 
     loop {
         thread::sleep(Duration::from_secs(60));
-        unsafe {
-            if !sys::nano_ble_connected() {
-                info!("Waiting for Nano Cortex (power on, BT enabled, not paired elsewhere)");
-            } else if sys::nano_state_get_amp().is_null() {
-                info!("BLE connected — waiting for preset state parse");
-            }
+        if !ble::nano_ble_connected() {
+            info!("Waiting for Nano Cortex (power on, BT enabled, not paired elsewhere)");
+        } else if state::nano_state_get_amp().is_null() {
+            info!("BLE connected — waiting for preset state parse");
         }
     }
 }

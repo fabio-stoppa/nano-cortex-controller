@@ -1,7 +1,4 @@
-//! `#[repr(C)]` mirrors of the struct and enum in `components/nano/nano_tuner.h`.
-//!
-//! The C UI reads `nano_tuner_t` by pointer, so field order and padding must
-//! match the header exactly.
+//! `#[repr(C)]` tuner state types shared across the Rust firmware modules.
 
 /// `nano_tuner_route_t` — a C enum, i.e. `int`-sized on Xtensa.
 pub const NANO_TUNER_ROUTE_UNKNOWN: u32 = 0;

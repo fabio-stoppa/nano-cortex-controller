@@ -51,11 +51,13 @@ I (xxx) nano_state: STATE INITIAL — protobuf scan (... bytes, rust)
 ├── src/tuner/ src/amp/          # Tuner + factory capture catalog
 ├── src/ui/                      # LVGL UI
 ├── crates/nano-wire/            # Protocol builders + parsers (host-testable)
-├── components/nano/             # Headers + bt_cfg_helper.c shim
+├── components/nano/             # bt_cfg_helper.c shim only
 ├── components/waveshare_.../    # Vendored BSP (IDF 5.3 LCD callback patch)
 ├── sdkconfig.defaults
 └── partitions.csv               # 2 MB app partition
 ```
+
+The Waveshare BSP stays vendored: registry `1.0.7` uses `on_frame_buf_complete`, which ESP-IDF 5.3.2 does not provide. The local tree keeps `on_bounce_frame_finish`.
 
 Host-test the protocol crate:
 

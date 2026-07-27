@@ -1,13 +1,12 @@
-//! FX blocks + noise gate, exported with the C ABI declared in
-//! `components/nano/nano_fx.h` so the remaining C modules keep working.
+//! FX blocks + noise gate.
 
-pub mod c_deps;
 pub mod catalog;
 pub mod engine;
 pub mod models;
 pub mod params;
 pub mod shared;
 pub mod types;
+pub mod util;
 
 pub use catalog::{nano_fx_catalog, nano_fx_catalog_count};
 pub use engine::{

@@ -13,9 +13,26 @@ use std::ffi::CString;
 use esp_idf_svc::sys::*;
 use log::{debug, error, info, warn};
 
-use super::c_deps as c;
+const TAG: &str = "nano_ble";
 
-const TAG: &str = c::TAG;
+fn tag_ptr() -> *const c_char {
+    c"nano_ble".as_ptr()
+}
+
+fn is_tuner_active() -> bool {
+    let tuner = crate::tuner::nano_tuner_get();
+    !tuner.is_null() && unsafe { (*tuner).active }
+}
+
+fn parse_bpm(data: &[u8]) -> Option<u16> {
+    let mut bpm: u16 = 0;
+    let hit = unsafe {
+        nano_wire::ffi::nano_try_parse_bpm_notify(data.as_ptr(), data.len(), &mut bpm)
+            || nano_wire::ffi::nano_parse_bpm(data.as_ptr(), data.len(), &mut bpm)
+    };
+    hit.then_some(bpm)
+}
+
 const NAME_PREFIX: &[u8] = b"Neural DSP Nano Cortex";
 
 const C305_QUEUE_LEN: u32 = 48;
@@ -570,7 +587,7 @@ unsafe extern "C" fn c305_worker_task(_arg: *mut c_void) {
     let mut slot = MaybeUninit::<C305Item>::uninit();
 
     loop {
-        let tuner_live = c::tuner_active();
+        let tuner_live = is_tuner_active();
 
         // Prefer the live pitch/mode mailbox whenever it has a frame.
         let from_live = !s.live_queue.is_null()
@@ -609,7 +626,7 @@ unsafe extern "C" fn c305_worker_task(_arg: *mut c_void) {
         }
 
         let len = (item.len as usize).min(C305_PKT_MAX);
-        c::state_feed_c305(&item.data[..len]);
+        unsafe { crate::state::nano_state_feed_c305(item.data.as_ptr(), len) };
     }
 }
 
@@ -714,7 +731,7 @@ fn on_gatt_notify(s: &mut Ctx, handle: u16, data: *const u8, len: u16) {
     }
     let bytes = unsafe { slice::from_raw_parts(data, len as usize) };
 
-    let tuner_live = c::tuner_active();
+    let tuner_live = is_tuner_active();
     let is_c305 = s.c305_handle != INVALID_HANDLE && handle == s.c305_handle;
     let is_c306 = s.c306_handle != INVALID_HANDLE && handle == s.c306_handle;
 
@@ -737,7 +754,7 @@ fn on_gatt_notify(s: &mut Ctx, handle: u16, data: *const u8, len: u16) {
      * (48 × ~80 ms). Logging in this path also stalls Bluedroid the same way.
      */
     if is_c305 && c305_is_pitch(bytes) {
-        c::tuner_feed_pitch_fast(bytes);
+        unsafe { crate::tuner::nano_tuner_feed_pitch_fast(bytes.as_ptr(), bytes.len()) };
         return;
     }
 
@@ -746,7 +763,7 @@ fn on_gatt_notify(s: &mut Ctx, handle: u16, data: *const u8, len: u16) {
      * LEVELHUNT-style INFO logging stalled the worker, so the UI froze then caught
      * up seconds later. Apply live, skip the queue.
      */
-    if is_c305 && !tuner_live && c::state_try_amp_notify_fast(bytes) {
+    if is_c305 && !tuner_live && unsafe { crate::state::nano_state_try_amp_notify_fast(bytes.as_ptr(), bytes.len()) } {
         return;
     }
 
@@ -977,8 +994,8 @@ fn gattc_handler(
             {
                 s.notify_enabled = true;
                 info!(target: TAG, "GATT subscriptions enabled (C305/C306/…) — syncing");
-                c::ui_set_ble_connected(true);
-                c::state_begin_sync();
+                unsafe { crate::ui::screen::nano_ui_set_ble_connected(true) };
+                crate::state::nano_state_begin_sync();
             }
         }
 
@@ -1009,11 +1026,11 @@ fn gattc_handler(
                 };
                 let label =
                     CString::new(format!("GATT read h={}", read.handle)).unwrap_or_default();
-                c::log_bytes_full(&label, value);
-                c::log_bpm_raw_scan(&label, value);
-                if let Some(bpm) = c::parse_bpm(value) {
+                unsafe { nano_wire::ffi::nano_log_bytes_full(tag_ptr(), label.as_ptr(), value.as_ptr(), value.len()) };
+                unsafe { nano_wire::ffi::nano_log_bpm_raw_scan(tag_ptr(), label.as_ptr(), value.as_ptr(), value.len()) };
+                if let Some(bpm) = parse_bpm(value) {
                     info!(target: TAG, "BPM {bpm} (GATT read)");
-                    c::state_on_bpm_found(bpm);
+                    crate::state::nano_state_on_bpm_found(bpm);
                 }
             }
             s.bpm_read_next += 1;
@@ -1027,9 +1044,9 @@ fn gattc_handler(
             s.gattc_if = ESP_GATT_IF_NONE as esp_gatt_if_t;
             reset_handles(s);
             drain_rx_queue(s);
-            c::ui_set_ble_connected(false);
-            c::ui_clear_amp();
-            c::state_reset();
+            unsafe { crate::ui::screen::nano_ui_set_ble_connected(false) };
+            unsafe { crate::ui::screen::nano_ui_set_amp(core::ptr::null()) };
+            crate::state::nano_state_reset();
             unsafe { vTaskDelay(ms_to_ticks(2000)) };
             start_scan(s);
         }
@@ -1163,9 +1180,13 @@ pub extern "C" fn nano_ble_write_c304(
         return ESP_ERR_INVALID_ARG;
     }
 
-    c::log_bytes(label.unwrap_or(c"C304"), unsafe {
-        slice::from_raw_parts(data, len)
-    });
+    {
+        let bytes = unsafe { slice::from_raw_parts(data, len) };
+        let lbl = label.unwrap_or(c"C304");
+        unsafe {
+            nano_wire::ffi::nano_log_bytes(tag_ptr(), lbl.as_ptr(), bytes.as_ptr(), bytes.len())
+        };
+    }
 
     let err = unsafe {
         esp_ble_gattc_write_char(

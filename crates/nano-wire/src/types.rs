@@ -1,4 +1,4 @@
-//! Shared constants and value types (mirrors `nano_protocol.h` / `nano_proto.h`).
+//! Shared constants and value types for the Nano Cortex wire protocol.
 
 pub const BPM_MIN: u16 = 40;
 pub const BPM_MAX: u16 = 240;
