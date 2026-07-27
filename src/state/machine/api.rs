@@ -83,7 +83,11 @@ fn feed_c305(data: &[u8]) {
         if tuner_live {
             debug!(target: TAG, "C305 diverted (preset ACK) len={len}");
         } else {
-            debug!(target: TAG, "Preset change ACK");
+            info!(target: TAG, "Preset change ACK — requesting state");
+            set_label(&mut s.state_probe_label, "PRESET");
+            if s.mode == NANO_RX_IDLE {
+                request_current_state_now("Preset change");
+            }
         }
         return;
     }

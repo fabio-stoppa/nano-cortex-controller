@@ -23,7 +23,7 @@ use super::ctx::{
 };
 use super::timers::schedule_parse;
 
-const REFRESH_MIN_INTERVAL_US: i64 = 1500 * 1000;
+const REFRESH_MIN_INTERVAL_US: i64 = 400 * 1000;
 const LIVE_POLL_INTERVAL_US: u64 = 15000 * 1000;
 const STATE_RX_TIMEOUT_US: i64 = 5000 * 1000;
 /// Max times we defer finish while waiting for a gate tail after mid-f34 truncation.

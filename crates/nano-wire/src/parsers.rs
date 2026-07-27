@@ -460,6 +460,20 @@ fn try_parse_amp_gain_2d_notify(data: &[u8]) -> Option<u8> {
     None
 }
 
+/// True when the byte after a knob-style value marks a non-amp frame.
+///
+/// Amp knob writes continue with field 5 (`0x28`). FX model-select uses
+/// trailer `0x88`; float FX/tuner params use `0x2D`. Matching those as amp
+/// knobs paints gain (id 0) / EQ at a few % while presets reload.
+fn amp_knob_style_false_trailer(b: u8) -> bool {
+    matches!(b, 0x88 | 0x2D)
+}
+
+/// Trailer after `C0 08 01 18 <id> 20 <v>` that is not a hardware amp knob.
+fn amp_hw_knob_false_trailer(b: u8) -> bool {
+    matches!(b, 0x2D | 0x1F | 0x88 | 0x91)
+}
+
 pub fn try_parse_amp_knob_notify(data: &[u8]) -> Option<(u8, u8)> {
     if data.len() < 5 {
         return None;
@@ -467,7 +481,11 @@ pub fn try_parse_amp_knob_notify(data: &[u8]) -> Option<(u8, u8)> {
     let mut i = 0;
     while i + 4 < data.len() {
         if data[i] == 0xC0 && data[i + 1] == 0x18 && data[i + 2] <= 4 && data[i + 3] == 0x20 {
-            if let Some((val, _)) = read_varint(data, i + 4) {
+            if let Some((val, next)) = read_varint(data, i + 4) {
+                if next < data.len() && amp_knob_style_false_trailer(data[next]) {
+                    i += 1;
+                    continue;
+                }
                 return Some((data[i + 2], clamp_u8(val)));
             }
         }
@@ -516,6 +534,7 @@ pub fn try_parse_amp_hw_notify(data: &[u8]) -> Option<(u8, u8)> {
     if data.len() < 7 {
         return None;
     }
+    // Float gain: C0 08 01 20 <…> 2D <f32> 63 (not the bare integer shortcut).
     if let Some(raw) = try_parse_amp_gain_2d_notify(data) {
         return Some((0, raw));
     }
@@ -527,6 +546,9 @@ pub fn try_parse_amp_hw_notify(data: &[u8]) -> Option<(u8, u8)> {
             continue;
         }
         let p = i + 3;
+        // Explicit knob id: C0 08 01 18 <id<=4> 20 <val>
+        // Do NOT treat bare C0 08 01 20 <val> as gain — that prefix is shared
+        // with tuner/BPM/route frames and spuriously zeros gain on preset change.
         if p < data.len() && data[p] == 0x18 {
             if p + 3 >= data.len() || data[p + 2] != 0x20 {
                 i += 1;
@@ -537,19 +559,11 @@ pub fn try_parse_amp_hw_notify(data: &[u8]) -> Option<(u8, u8)> {
                 continue;
             };
             if let Some((val, next)) = read_varint(data, p + 3) {
-                if next < data.len() && data[next] == 0x2D {
+                if next < data.len() && amp_hw_knob_false_trailer(data[next]) {
                     i += 1;
                     continue;
                 }
                 return Some((mapped, clamp_u8(val)));
-            }
-        } else if p < data.len() && data[p] == 0x20 {
-            if let Some((val, next)) = read_varint(data, p + 1) {
-                if next < data.len() && data[next] == 0x2D {
-                    i += 1;
-                    continue;
-                }
-                return Some((0, clamp_u8(val)));
             }
         }
         i += 1;
@@ -803,6 +817,33 @@ mod tests {
         // C0 18 00 20 C8 01
         let data = [0xC0, 0x18, 0x00, 0x20, 0xC8, 0x01];
         assert_eq!(try_parse_amp_knob_notify(&data), Some((0, 200)));
+    }
+
+    #[test]
+    fn amp_knob_notify_ignores_fx_model_select() {
+        // Preset reload: C0 18 <slot<=4> 20 <id…> 88 — must not become gain/EQ
+        let gain_slot = [0xC0, 0x18, 0x00, 0x20, 0x05, 0x88];
+        assert_eq!(try_parse_amp_knob_notify(&gain_slot), None);
+        let mid_slot = [0xC0, 0x18, 0x03, 0x20, 0x05, 0x88];
+        assert_eq!(try_parse_amp_knob_notify(&mid_slot), None);
+        let with_trailer = [0xC0, 0x18, 0x00, 0x20, 0xC8, 0x01, 0x28, 0x00, 0x1A];
+        assert_eq!(try_parse_amp_knob_notify(&with_trailer), Some((0, 200)));
+    }
+
+    #[test]
+    fn amp_hw_notify_ignores_global_toggle() {
+        let data = [0x0A, 0xC0, 0x08, 0x01, 0x18, 0x03, 0x20, 0x01, 0x1F, 0x00, 0x00, 0x00];
+        assert_eq!(try_parse_amp_hw_notify(&data), None);
+    }
+
+    #[test]
+    fn amp_hw_notify_ignores_bare_c0_08_01_20() {
+        // Shared with tuner/BPM prefixes — must not paint gain at a few %.
+        let bare = [0x0A, 0xC0, 0x08, 0x01, 0x20, 0x05, 0x38, 0x01, 0x7F, 0x00, 0x00, 0x00];
+        assert_eq!(try_parse_amp_hw_notify(&bare), None);
+        // Explicit gain id still works.
+        let explicit = [0x0C, 0xC0, 0x08, 0x01, 0x18, 0x00, 0x20, 0xC8, 0x01, 0x30, 0x01];
+        assert_eq!(try_parse_amp_hw_notify(&explicit), Some((0, 200)));
     }
 
     #[test]

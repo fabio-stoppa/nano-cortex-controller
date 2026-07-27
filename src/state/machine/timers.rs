@@ -12,8 +12,8 @@ use super::rx::{
     finish_fe_capture, parse_state_buffer, request_current_state_now, send_state_request,
 };
 
-const PARSE_DEBOUNCE_US: u64 = 1200 * 1000;
-const REFRESH_DEBOUNCE_US: u64 = 800 * 1000;
+const PARSE_DEBOUNCE_US: u64 = 350 * 1000;
+const REFRESH_DEBOUNCE_US: u64 = 250 * 1000;
 const PARSE_TASK_STACK: u32 = 8192;
 const PARSE_TASK_PRIO: UBaseType_t = 5;
 

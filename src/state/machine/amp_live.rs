@@ -18,15 +18,24 @@ fn apply_knob_update(knob_id: u8, raw: u8, source: &str) -> bool {
         return false;
     }
 
+    // Preset dump in flight: ignore live knob notifies. FX model-select and
+    // bare C0 08 01 20 frames used to paint gain at a few % — and marking
+    // amp_live_dirty then overwrote the dump's real values on parse.
+    if s.mode == NANO_RX_CURRENT {
+        debug!(
+            target: TAG,
+            "Amp {} raw {raw} ignored during state RX ({source})",
+            KNOB_NAMES[knob_id as usize]
+        );
+        return true;
+    }
+
     if s.amp.valid && amp_knob_get(&s.amp, knob_id) == raw {
         return false;
     }
 
     amp_knob_set(&mut s.amp, knob_id, raw);
     s.amp.valid = true;
-    if s.mode == NANO_RX_CURRENT {
-        s.amp_live_dirty |= 1u8 << knob_id;
-    }
     debug!(
         target: TAG,
         "Amp {} -> raw {raw} ({source})", KNOB_NAMES[knob_id as usize]
@@ -63,6 +72,10 @@ pub(super) fn try_inline_amp_update(data: &[u8]) -> bool {
     let s = st();
 
     if let Some(raw) = try_parse_capture_volume_notify(data) {
+        // Same as knobs: dump owns capture volume while RX is open.
+        if s.mode == NANO_RX_CURRENT {
+            return true;
+        }
         if s.amp.valid && s.amp.have_capture_volume && s.amp.capture_volume == raw {
             return true;
         }
@@ -71,9 +84,6 @@ pub(super) fn try_inline_amp_update(data: &[u8]) -> bool {
         s.amp.valid = true;
         s.cap_vol_kept = raw;
         s.cap_vol_kept_valid = true;
-        if s.mode == NANO_RX_CURRENT {
-            s.cap_vol_live_dirty = true;
-        }
         debug!(target: TAG, "Capture volume -> raw {raw} (notify)");
         push_amp_ui();
         return true;
