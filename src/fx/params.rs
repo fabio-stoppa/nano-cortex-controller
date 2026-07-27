@@ -1,11 +1,10 @@
 //! Param name heuristics: ranges, enum labels, slider mapping and formatting
 //! (port of the `fx_param_*` / `nano_fx_param_*` helpers in `nano_fx.c`).
 
-use core::ffi::{c_char, c_int, CStr};
+use core::ffi::CStr;
 
-use super::shared::Shared;
 use super::types::NanoFxBlock;
-use super::util::{c_str, write_c_buf};
+use super::util::c_str;
 
 /// Display range for a param: `(min, max, step, is_pct)`.
 pub struct Range {
@@ -263,9 +262,6 @@ fn param_enum_label(name: &str, index: i32) -> Option<&'static CStr> {
     None
 }
 
-/// `static char buf[8]` in the C port: the numeric enum fallback label.
-static ENUM_LABEL_BUF: Shared<[u8; 8]> = Shared::new([0; 8]);
-
 /// Formatted param value for the UI (port of `nano_fx_format_param`).
 pub fn format_param(block: &NanoFxBlock, param_index: u8) -> String {
     if block.model.is_null() || param_index >= block.param_count {
@@ -308,130 +304,73 @@ pub fn format_param(block: &NanoFxBlock, param_index: u8) -> String {
     }
 }
 
-/* ------------------------------------------------------------------ C ABI */
-
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_param_is_enum(param_name: *const c_char) -> bool {
-    param_is_enum(c_str(param_name))
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_param_enum_count(param_name: *const c_char) -> c_int {
-    if param_name.is_null() {
-        return 2;
-    }
-    param_enum_count(c_str(param_name))
-}
-
-/// Human-readable label for enum params (e.g. "Off", "On").
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_param_enum_label(
-    param_name: *const c_char,
-    index: c_int,
-) -> *const c_char {
-    if param_name.is_null() {
-        return c"?".as_ptr();
-    }
-
-    match param_enum_label(c_str(param_name), index) {
-        Some(label) => label.as_ptr(),
-        None => {
-            let buf = ENUM_LABEL_BUF.get();
-            let cap = buf.len();
-            write_c_buf(buf.as_mut_ptr().cast::<c_char>(), cap, &format!("{index}"));
-            buf.as_ptr().cast::<c_char>()
-        }
-    }
-}
-
-/// Param display range for UI sliders.
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_param_range(
-    param_name: *const c_char,
-    min_out: *mut f32,
-    max_out: *mut f32,
-    step_out: *mut f32,
-) {
-    let r = param_range(c_str(param_name));
-    unsafe {
-        if !min_out.is_null() {
-            *min_out = r.min;
-        }
-        if !max_out.is_null() {
-            *max_out = r.max;
-        }
-        if !step_out.is_null() {
-            *step_out = r.step;
-        }
-    }
-}
-
-/// Integer scale for `lv_slider` (1, 10, or 100 for fractional steps).
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_param_scale(param_name: *const c_char) -> c_int {
-    param_scale(c_str(param_name))
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_display_to_slider(
-    param_name: *const c_char,
-    display: f32,
-) -> c_int {
-    display_to_slider(c_str(param_name), display)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_slider_to_display(
-    param_name: *const c_char,
-    slider_value: c_int,
-) -> f32 {
-    let name = c_str(param_name);
+pub fn slider_to_display(name: &str, slider_value: i32) -> f32 {
     let r = param_range(name);
     r.min + slider_value as f32 / param_scale(name) as f32
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_slider_min(_param_name: *const c_char) -> c_int {
+pub fn slider_min(_name: &str) -> i32 {
     0
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_slider_max(param_name: *const c_char) -> c_int {
-    let name = c_str(param_name);
+pub fn slider_max(name: &str) -> i32 {
     display_to_slider(name, param_range(name).max)
 }
 
-/// Map display value ↔ normalized using param name heuristics.
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_display_to_normalized(
-    param_name: *const c_char,
-    display: f32,
-) -> f32 {
-    display_to_normalized(c_str(param_name), display)
+/* -------------------------------------------------------------- public API */
+
+pub fn nano_fx_param_is_enum(param_name: &str) -> bool {
+    param_is_enum(param_name)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_normalized_to_display(
-    param_name: *const c_char,
-    normalized: f32,
-) -> f32 {
-    normalized_to_display(c_str(param_name), normalized)
+pub fn nano_fx_param_enum_count(param_name: &str) -> i32 {
+    param_enum_count(param_name)
+}
+
+/// Human-readable label for enum params (e.g. "Off", "On").
+pub fn nano_fx_param_enum_label(param_name: &str, index: i32) -> String {
+    match param_enum_label(param_name, index) {
+        Some(label) => label.to_string_lossy().into_owned(),
+        None => format!("{index}"),
+    }
+}
+
+/// Param display range for UI sliders.
+pub fn nano_fx_param_range(param_name: &str) -> Range {
+    param_range(param_name)
+}
+
+/// Integer scale for `lv_slider` (1, 10, or 100 for fractional steps).
+pub fn nano_fx_param_scale(param_name: &str) -> i32 {
+    param_scale(param_name)
+}
+
+pub fn nano_fx_display_to_slider(param_name: &str, display: f32) -> i32 {
+    display_to_slider(param_name, display)
+}
+
+pub fn nano_fx_slider_to_display(param_name: &str, slider_value: i32) -> f32 {
+    slider_to_display(param_name, slider_value)
+}
+
+pub fn nano_fx_slider_min(param_name: &str) -> i32 {
+    slider_min(param_name)
+}
+
+pub fn nano_fx_slider_max(param_name: &str) -> i32 {
+    slider_max(param_name)
+}
+
+/// Map display value ↔ normalized using param name heuristics.
+pub fn nano_fx_display_to_normalized(param_name: &str, display: f32) -> f32 {
+    display_to_normalized(param_name, display)
+}
+
+pub fn nano_fx_normalized_to_display(param_name: &str, normalized: f32) -> f32 {
+    normalized_to_display(param_name, normalized)
 }
 
 /// Format param for UI (e.g. "35.0 %").
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_format_param(
-    block: *const NanoFxBlock,
-    param_index: u8,
-    buf: *mut c_char,
-    cap: usize,
-) {
-    if buf.is_null() || cap == 0 {
-        return;
-    }
-    let text = match unsafe { block.as_ref() } {
-        Some(block) => format_param(block, param_index),
-        None => String::from("-"),
-    };
-    write_c_buf(buf, cap, &text);
+pub fn nano_fx_format_param(block: &NanoFxBlock, param_index: u8) -> String {
+    format_param(block, param_index)
 }

@@ -521,7 +521,6 @@ static PARAMS_52: ParamNames<5> = ParamNames([
 
 pub const NANO_FX_CATALOG_COUNT: usize = 53;
 
-#[no_mangle]
 pub static nano_fx_catalog: [NanoFxModelDef; NANO_FX_CATALOG_COUNT] = [
     NanoFxModelDef {
         name: c"Chief BD2".as_ptr(),
@@ -896,7 +895,6 @@ pub static nano_fx_catalog: [NanoFxModelDef; NANO_FX_CATALOG_COUNT] = [
     },
 ];
 
-#[no_mangle]
 pub static nano_fx_catalog_count: usize = NANO_FX_CATALOG_COUNT;
 
 /// The catalog as a slice; every lookup goes through here.

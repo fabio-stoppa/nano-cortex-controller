@@ -5,8 +5,8 @@ mod amp;
 mod ble;
 mod fx;
 mod memsafe;
-mod seqlock;
 mod state;
+mod syncutil;
 mod tuner;
 mod ui;
 
@@ -23,8 +23,7 @@ fn check(err: esp_err_t, what: &str) {
 }
 
 fn main() {
-    // Keep C-ABI symbols in the final binary for cross-module callers.
-    nano_wire::ffi::ensure_linked();
+    // Keep module entry symbols in the final binary for cross-module callers.
     ble::ensure_linked();
     state::ensure_linked();
     fx::ensure_linked();
@@ -39,7 +38,7 @@ fn main() {
     // issued this early in boot, so anything logged before it never ships.
     check(ui::nano_ui_start(), "nano_ui_start");
 
-    info!("firmware build 2026-07-26-rust7 (nano-wire + BLE + state + FX + tuner + amp + UI in Rust)");
+    info!("firmware build 2026-07-27-rust8 (syncutil + module splits; nano-wire + BLE + state + FX + tuner + amp + UI)");
     info!("Nano Cortex firmware starting");
 
     check(ble::nano_ble_start(), "nano_ble_start");
@@ -48,7 +47,7 @@ fn main() {
         thread::sleep(Duration::from_secs(60));
         if !ble::nano_ble_connected() {
             info!("Waiting for Nano Cortex (power on, BT enabled, not paired elsewhere)");
-        } else if state::nano_state_get_amp().is_null() {
+        } else if !state::nano_state_amp_ready() {
             info!("BLE connected — waiting for preset state parse");
         }
     }

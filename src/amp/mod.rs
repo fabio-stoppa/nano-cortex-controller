@@ -2,7 +2,7 @@
 
 use core::ffi::c_char;
 
-use nano_wire::ffi::NanoAmpC;
+use nano_wire::types::NanoAmpC;
 
 pub const NANO_AMP_CAPTURE_COUNT: u8 = 25;
 
@@ -26,7 +26,6 @@ unsafe impl Sync for NanoAmpCapture {}
 
 pub const NANO_AMP_CATALOG_COUNT: usize = 25;
 
-#[no_mangle]
 pub static nano_amp_catalog: [NanoAmpCapture; NANO_AMP_CATALOG_COUNT] = [
     NanoAmpCapture { slot: 1, name: c"CA John's Ch1".as_ptr(), bank: NANO_AMP_BANK_CLEAN },
     NanoAmpCapture { slot: 2, name: c"Comet 60".as_ptr(), bank: NANO_AMP_BANK_CLEAN },
@@ -55,7 +54,6 @@ pub static nano_amp_catalog: [NanoAmpCapture; NANO_AMP_CATALOG_COUNT] = [
     NanoAmpCapture { slot: 25, name: c"Anima Fuzz".as_ptr(), bank: NANO_AMP_BANK_BASS },
 ];
 
-#[no_mangle]
 pub static nano_amp_catalog_count: usize = NANO_AMP_CATALOG_COUNT;
 
 pub fn catalog() -> &'static [NanoAmpCapture] {
@@ -71,20 +69,7 @@ fn bank_short_name(bank: u32) -> Option<&'static str> {
     }
 }
 
-/// `strncpy(out, text, cap - 1)` + explicit NUL — truncate and always terminate.
-fn write_c_buf(out: *mut c_char, cap: usize, text: &str) {
-    if out.is_null() || cap == 0 {
-        return;
-    }
-    let dst = unsafe { core::slice::from_raw_parts_mut(out.cast::<u8>(), cap) };
-    let bytes = text.as_bytes();
-    let n = bytes.len().min(cap - 1);
-    dst[..n].copy_from_slice(&bytes[..n]);
-    dst[n] = 0;
-}
-
-#[no_mangle]
-pub extern "C" fn nano_amp_bank_from_slot(slot: u8) -> u32 {
+pub fn nano_amp_bank_from_slot(slot: u8) -> u32 {
     const BANKS: [u32; 5] = [
         NANO_AMP_BANK_CLEAN,
         NANO_AMP_BANK_2,
@@ -99,45 +84,32 @@ pub extern "C" fn nano_amp_bank_from_slot(slot: u8) -> u32 {
     BANKS[((slot - 1) / 5) as usize]
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn nano_amp_format_bank_line(slot: u8, out: *mut c_char, cap: usize) {
-    if out.is_null() || cap == 0 {
-        return;
-    }
-    unsafe { *out = 0 };
+pub fn nano_amp_format_bank_line(slot: u8) -> String {
     if slot < 1 || slot > NANO_AMP_CAPTURE_COUNT {
-        return;
+        return String::new();
     }
 
     let bank = nano_amp_bank_from_slot(slot);
     let bank_num = (slot - 1) / 5 + 1;
-    let line = match bank_short_name(bank) {
+    match bank_short_name(bank) {
         Some(name) if !name.is_empty() => format!("Bank {bank_num} - {name}"),
         _ => format!("Bank {bank_num}"),
-    };
-    write_c_buf(out, cap, &line);
+    }
 }
 
-#[no_mangle]
-pub extern "C" fn nano_amp_bank_label(bank: u32) -> *const c_char {
+pub fn nano_amp_bank_label(bank: u32) -> &'static str {
     match bank {
-        NANO_AMP_BANK_CLEAN => c"Bank 1 - Clean".as_ptr(),
-        NANO_AMP_BANK_2 => c"Bank 2".as_ptr(),
-        NANO_AMP_BANK_3 => c"Bank 3".as_ptr(),
-        NANO_AMP_BANK_HIGH_GAIN => c"Bank 4 - High Gain".as_ptr(),
-        NANO_AMP_BANK_BASS => c"Bank 5 - Bass".as_ptr(),
-        _ => c"Captures".as_ptr(),
+        NANO_AMP_BANK_CLEAN => "Bank 1 - Clean",
+        NANO_AMP_BANK_2 => "Bank 2",
+        NANO_AMP_BANK_3 => "Bank 3",
+        NANO_AMP_BANK_HIGH_GAIN => "Bank 4 - High Gain",
+        NANO_AMP_BANK_BASS => "Bank 5 - Bass",
+        _ => "Captures",
     }
 }
 
-#[no_mangle]
-pub extern "C" fn nano_amp_capture_by_slot(slot: u8) -> *const NanoAmpCapture {
-    for entry in catalog() {
-        if entry.slot == slot {
-            return entry as *const NanoAmpCapture;
-        }
-    }
-    core::ptr::null()
+pub fn nano_amp_capture_by_slot(slot: u8) -> Option<&'static NanoAmpCapture> {
+    catalog().iter().find(|entry| entry.slot == slot)
 }
 
 /// True for empty names and factory placeholders like `"Capture 12"`.
@@ -164,45 +136,27 @@ fn c_field_str(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
     String::from_utf8_lossy(&bytes[..end])
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn nano_amp_capture_header_text(
-    amp: *const NanoAmpC,
-    out: *mut c_char,
-    cap: usize,
-) {
-    if out.is_null() || cap == 0 {
-        return;
-    }
-    unsafe { *out = 0 };
-
-    let Some(amp) = (unsafe { amp.as_ref() }) else {
-        write_c_buf(out, cap, "Amp");
-        return;
-    };
-
+pub fn nano_amp_capture_header_text(amp: &NanoAmpC) -> String {
     let name = c_field_str(&amp.capture_name);
     if amp.have_capture_name && !name.is_empty() && !is_generic_capture_name(&name) {
-        write_c_buf(out, cap, &name);
-        return;
+        return name.into_owned();
     }
 
     if amp.have_capture_slot && amp.capture_slot > 0 {
-        let capture = nano_amp_capture_by_slot(amp.capture_slot);
-        if let Some(capture) = unsafe { capture.as_ref() } {
+        if let Some(capture) = nano_amp_capture_by_slot(amp.capture_slot) {
             if !capture.name.is_null() {
                 let name = unsafe { core::ffi::CStr::from_ptr(capture.name) };
-                write_c_buf(out, cap, name.to_str().unwrap_or("Amp"));
-                return;
+                return name.to_str().unwrap_or("Amp").to_string();
             }
         }
     }
 
-    write_c_buf(out, cap, "Amp");
+    String::from("Amp")
 }
 
 /// Factory capture name for slot 1..25 (`None` when the slot is unknown).
 pub fn capture_name(slot: u8) -> Option<&'static str> {
-    let capture = unsafe { nano_amp_capture_by_slot(slot).as_ref()? };
+    let capture = nano_amp_capture_by_slot(slot)?;
     if capture.name.is_null() {
         return None;
     }

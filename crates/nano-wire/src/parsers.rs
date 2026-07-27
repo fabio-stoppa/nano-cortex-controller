@@ -657,6 +657,89 @@ pub fn log_amp(tag: &str, amp: &Amp) {
     );
 }
 
+pub fn log_bpm_hunt(tag: &str, data: &[u8]) {
+    log::info!(target: tag, "BPM hunt: scan {}-byte state blob (rust)", data.len());
+    if let Some(bpm) = parse_bpm(data) {
+        log::info!(target: tag, "BPM hunt: parsed BPM={bpm}");
+    }
+}
+
+pub fn log_bpm_raw_scan(tag: &str, label: &str, data: &[u8]) {
+    log::info!(target: tag, "BPM raw scan [{label}]: {} bytes (rust)", data.len());
+}
+
+pub fn log_proto_fields(tag: &str, label: &str, data: &[u8]) {
+    log::info!(
+        target: tag,
+        "STATE {label} — protobuf scan ({} bytes, rust)",
+        data.len()
+    );
+    // Keep scan logging lighter than the C version; amp/BPM parsers are the source of truth.
+    let mut i = 0usize;
+    let mut entries = 0u32;
+    while i < data.len() && entries < 128 {
+        let Some((tag_val, next)) = read_varint(data, i) else {
+            break;
+        };
+        i = next;
+        let field = tag_val >> 3;
+        let wire = tag_val & 0x07;
+        entries += 1;
+        match wire {
+            0 => {
+                let Some((val, next)) = read_varint(data, i) else {
+                    break;
+                };
+                log::info!(target: tag, "STATE {label}   f{field} w0 varint {val}");
+                i = next;
+            }
+            1 => {
+                if i + 8 > data.len() {
+                    break;
+                }
+                i += 8;
+            }
+            2 => {
+                let Some((flen, next)) = read_varint(data, i) else {
+                    break;
+                };
+                i = next + flen as usize;
+                if i > data.len() {
+                    break;
+                }
+                log::info!(target: tag, "STATE {label}   f{field} w2 bytes len={flen}");
+            }
+            5 => {
+                if i + 4 > data.len() {
+                    break;
+                }
+                let f = f32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
+                log::info!(target: tag, "STATE {label}   f{field} w5 float={f}");
+                i += 4;
+            }
+            _ => break,
+        }
+    }
+    log::info!(target: tag, "STATE {label} — scan done ({entries} entries)");
+}
+
+pub fn log_tuner_state_fields(tag: &str, data: &[u8]) {
+    let f45 = field_varint(data, 45);
+    let f48 = field_varint(data, 48);
+    let f49 = field_varint(data, 49);
+    let f50 = field_varint(data, 50);
+    let f51 = field_varint(data, 51);
+    log::info!(
+        target: tag,
+        "Tuner preset: f45={} f48={} f49={} f50={} f51={}",
+        f45.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+        f48.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+        f49.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+        f50.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+        f51.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

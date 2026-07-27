@@ -78,3 +78,98 @@ pub struct PresetCatalog {
     pub names: Vec<String>,
     pub valid: bool,
 }
+
+/// Fixed-layout amp snapshot used by the firmware UI / state machine.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct NanoAmpC {
+    pub gain: u8,
+    pub level: u8,
+    pub bass: u8,
+    pub mid: u8,
+    pub treble: u8,
+    pub capture_volume: u8,
+    pub capture_slot: u8,
+    pub capture_name: [u8; AMP_CAPTURE_NAME_MAX],
+    pub have_capture_slot: bool,
+    pub have_capture_name: bool,
+    pub have_capture_volume: bool,
+    pub valid: bool,
+}
+
+/// Fixed-layout preset name table used by the firmware state machine.
+#[repr(C)]
+pub struct NanoPresetCatalogC {
+    pub names: [[u8; PRESET_NAME_MAX]; PRESET_COUNT],
+    pub count: u8,
+    pub valid: bool,
+}
+
+fn write_c_string(dst: &mut [u8], src: &str) {
+    dst.fill(0);
+    let bytes = src.as_bytes();
+    let n = bytes.len().min(dst.len().saturating_sub(1));
+    dst[..n].copy_from_slice(&bytes[..n]);
+}
+
+impl From<&Amp> for NanoAmpC {
+    fn from(amp: &Amp) -> Self {
+        let mut out = Self {
+            gain: amp.gain,
+            level: amp.level,
+            bass: amp.bass,
+            mid: amp.mid,
+            treble: amp.treble,
+            capture_volume: amp.capture_volume,
+            capture_slot: amp.capture_slot,
+            capture_name: [0; AMP_CAPTURE_NAME_MAX],
+            have_capture_slot: amp.have_capture_slot,
+            have_capture_name: amp.have_capture_name,
+            have_capture_volume: amp.have_capture_volume,
+            valid: amp.valid,
+        };
+        write_c_string(&mut out.capture_name, &amp.capture_name);
+        out
+    }
+}
+
+impl NanoAmpC {
+    /// Convert to the heap `Amp` type (for logging / shared parsers).
+    pub fn to_amp(&self) -> Amp {
+        let end = self
+            .capture_name
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.capture_name.len());
+        Amp {
+            gain: self.gain,
+            level: self.level,
+            bass: self.bass,
+            mid: self.mid,
+            treble: self.treble,
+            capture_volume: self.capture_volume,
+            capture_slot: self.capture_slot,
+            capture_name: String::from_utf8_lossy(&self.capture_name[..end]).into_owned(),
+            have_capture_slot: self.have_capture_slot,
+            have_capture_name: self.have_capture_name,
+            have_capture_volume: self.have_capture_volume,
+            valid: self.valid,
+        }
+    }
+}
+
+impl From<&PresetCatalog> for NanoPresetCatalogC {
+    fn from(cat: &PresetCatalog) -> Self {
+        let mut out = Self {
+            names: [[0; PRESET_NAME_MAX]; PRESET_COUNT],
+            count: 0,
+            valid: false,
+        };
+        out.count = cat.names.len().min(PRESET_COUNT) as u8;
+        out.valid = cat.valid;
+        for (i, name) in cat.names.iter().take(PRESET_COUNT).enumerate() {
+            write_c_string(&mut out.names[i], name);
+        }
+        out
+    }
+}

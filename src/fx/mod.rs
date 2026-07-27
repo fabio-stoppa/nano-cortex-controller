@@ -4,7 +4,6 @@ pub mod catalog;
 pub mod engine;
 pub mod models;
 pub mod params;
-pub mod shared;
 pub mod types;
 pub mod util;
 

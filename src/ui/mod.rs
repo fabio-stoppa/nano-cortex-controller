@@ -7,7 +7,7 @@ pub mod screen;
 
 /// Bring up the display and block until the first frame is on screen.
 pub fn nano_ui_start() -> esp_idf_svc::sys::esp_err_t {
-    unsafe { screen::nano_ui_start() }
+    screen::nano_ui_start()
 }
 
 /// Touch every exported symbol so rustc does not dead-strip them from the

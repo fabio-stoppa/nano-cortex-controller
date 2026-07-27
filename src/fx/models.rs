@@ -1,12 +1,11 @@
 //! Catalog lookups, categories and the display/acronym helpers
 //! (port of the model-side helpers in `nano_fx.c`).
 
-use core::ffi::{c_char, CStr};
 use core::ptr;
 
 use super::catalog::catalog;
 use super::types::*;
-use super::util::{c_str, write_c_buf};
+use super::util::c_str;
 
 pub const BLOCK_LABELS: [&str; NANO_FX_BLOCK_COUNT] = [
     "Pre FX 1",
@@ -14,14 +13,6 @@ pub const BLOCK_LABELS: [&str; NANO_FX_BLOCK_COUNT] = [
     "Post FX 1",
     "Post FX 2",
     "Post FX 3",
-];
-
-const BLOCK_LABELS_C: [&CStr; NANO_FX_BLOCK_COUNT] = [
-    c"Pre FX 1",
-    c"Pre FX 2",
-    c"Post FX 1",
-    c"Post FX 2",
-    c"Post FX 3",
 ];
 
 pub fn block_label(block: u32) -> &'static str {
@@ -507,132 +498,83 @@ pub fn is_model_allowed(block: u32, model: &NanoFxModelDef) -> bool {
     catalog_index(model).is_some_and(|idx| catalog_index_allowed(block, idx))
 }
 
-/* ------------------------------------------------------------------ C ABI */
+/* -------------------------------------------------------------- public API */
 
-#[no_mangle]
-pub extern "C" fn nano_fx_block_label(block: u32) -> *const c_char {
-    BLOCK_LABELS_C
-        .get(block as usize)
-        .map_or(c"?".as_ptr(), |label| label.as_ptr())
+pub fn nano_fx_block_label(block: u32) -> &'static str {
+    block_label(block)
 }
 
 /// Effect family for signal-chain icons (PRE/PFX slots).
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_model_category(model: *const NanoFxModelDef) -> u32 {
-    match model_ref(model) {
-        Some(model) => model_category(model),
-        None => NANO_FX_CAT_NONE,
-    }
+pub fn nano_fx_model_category(model: &NanoFxModelDef) -> u32 {
+    model_category(model)
 }
 
-#[no_mangle]
-pub extern "C" fn nano_fx_category_label(cat: u32) -> *const c_char {
+pub fn nano_fx_category_label(cat: u32) -> &'static str {
     match cat {
-        NANO_FX_CAT_GUITAR_OD => c"Guitar OD".as_ptr(),
-        NANO_FX_CAT_BASS_OD => c"Bass OD".as_ptr(),
-        NANO_FX_CAT_COMPRESSOR => c"Compressor".as_ptr(),
-        NANO_FX_CAT_PITCH => c"Pitch".as_ptr(),
-        NANO_FX_CAT_FILTER => c"Filter".as_ptr(),
-        NANO_FX_CAT_WAH => c"Wah".as_ptr(),
-        NANO_FX_CAT_UTILITY => c"Utility".as_ptr(),
-        NANO_FX_CAT_MODULATION => c"Modulation".as_ptr(),
-        NANO_FX_CAT_DELAY => c"Delay".as_ptr(),
-        NANO_FX_CAT_REVERB => c"Reverb".as_ptr(),
-        _ => c"-".as_ptr(),
+        NANO_FX_CAT_GUITAR_OD => "Guitar OD",
+        NANO_FX_CAT_BASS_OD => "Bass OD",
+        NANO_FX_CAT_COMPRESSOR => "Compressor",
+        NANO_FX_CAT_PITCH => "Pitch",
+        NANO_FX_CAT_FILTER => "Filter",
+        NANO_FX_CAT_WAH => "Wah",
+        NANO_FX_CAT_UTILITY => "Utility",
+        NANO_FX_CAT_MODULATION => "Modulation",
+        NANO_FX_CAT_DELAY => "Delay",
+        NANO_FX_CAT_REVERB => "Reverb",
+        _ => "-",
     }
 }
 
 /// Model name, or "ID xx yy" / "Empty" when unknown.
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_block_model_text(
-    block: *const NanoFxBlock,
-    buf: *mut c_char,
-    cap: usize,
-) {
-    if buf.is_null() || cap == 0 {
-        return;
-    }
-    let text = match unsafe { block.as_ref() } {
-        Some(block) => block_model_text(block),
-        None => String::from("Empty slot"),
-    };
-    write_c_buf(buf, cap, &text);
+pub fn nano_fx_block_model_text(block: &NanoFxBlock) -> String {
+    block_model_text(block)
 }
 
 /// Short label for signal-chain icon (e.g. "P95", "MHL").
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_model_chain_acronym(
-    block: *const NanoFxBlock,
-    buf: *mut c_char,
-    cap: usize,
-) {
-    if buf.is_null() || cap == 0 {
-        return;
-    }
-
-    let Some(block) = (unsafe { block.as_ref() }) else {
-        write_c_buf(buf, cap, "-");
-        return;
-    };
+pub fn nano_fx_model_chain_acronym(block: &NanoFxBlock) -> String {
     if !block.valid {
-        write_c_buf(buf, cap, "-");
-        return;
+        return String::from("-");
     }
 
     // C formats the model text into a 56-byte scratch buffer first.
     let name = truncate_to(&block_model_text(block), 55);
     if name == "Empty slot" || name.starts_with("ID ") {
-        write_c_buf(buf, cap, "-");
-        return;
+        return String::from("-");
     }
 
-    match chain_abbr_from_name(&name, cap) {
-        Some(abbr) => write_c_buf(buf, cap, &abbr),
-        None => write_c_buf(buf, cap, "FX"),
+    match chain_abbr_from_name(&name, 12) {
+        Some(abbr) => abbr,
+        None => String::from("FX"),
     }
 }
 
 /// Whether catalog entry may be loaded in this FX slot (NanOS 2.0 rules).
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_is_model_allowed(
-    block: u32,
-    model: *const NanoFxModelDef,
-) -> bool {
-    match model_ref(model) {
-        Some(model) => is_model_allowed(block, model),
-        None => false,
-    }
+pub fn nano_fx_is_model_allowed(block: u32, model: &NanoFxModelDef) -> bool {
+    is_model_allowed(block, model)
 }
 
-#[no_mangle]
-pub extern "C" fn nano_fx_allowed_model_count(block: u32) -> usize {
+pub fn nano_fx_allowed_model_count(block: u32) -> usize {
     (0..catalog().len())
         .filter(|&idx| catalog_index_allowed(block, idx))
         .count()
 }
 
 /// Nth allowed catalog model for block (0 .. count-1).
-#[no_mangle]
-pub extern "C" fn nano_fx_get_allowed_model(block: u32, index: usize) -> *const NanoFxModelDef {
+pub fn nano_fx_get_allowed_model(block: u32, index: usize) -> Option<&'static NanoFxModelDef> {
     let mut seen = 0;
     for (idx, entry) in catalog().iter().enumerate() {
         if !catalog_index_allowed(block, idx) {
             continue;
         }
         if seen == index {
-            return entry as *const NanoFxModelDef;
+            return Some(entry);
         }
         seen += 1;
     }
-    ptr::null()
+    None
 }
 
-/// Extra export kept from the C port for callers that keyed models by name.
-#[no_mangle]
-pub unsafe extern "C" fn nano_fx_find_model(id: *const u8, id_len: u8) -> *const NanoFxModelDef {
-    if id.is_null() || id_len == 0 {
-        return ptr::null();
-    }
-    let id = unsafe { core::slice::from_raw_parts(id, id_len as usize) };
-    model_ptr(find_model(id))
+/// Extra export kept from the C port for callers that keyed models by id bytes.
+pub fn nano_fx_find_model(id: &[u8]) -> Option<&'static NanoFxModelDef> {
+    find_model(id)
 }
