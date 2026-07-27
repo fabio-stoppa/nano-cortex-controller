@@ -463,15 +463,16 @@ fn try_parse_amp_gain_2d_notify(data: &[u8]) -> Option<u8> {
 /// True when the byte after a knob-style value marks a non-amp frame.
 ///
 /// Amp knob writes continue with field 5 (`0x28`). FX model-select uses
-/// trailer `0x88`; float FX/tuner params use `0x2D`. Matching those as amp
-/// knobs paints gain (id 0) / EQ at a few % while presets reload.
+/// trailer `0x88`; float FX/tuner params use `0x2D`; capture/IR slot select
+/// uses `0x1C` (`C0 18 01/03/04 20 <slot> 1C`). Matching those as amp knobs
+/// paints MASTER/MID/TREBLE at a few % while the pedal wheels turn.
 fn amp_knob_style_false_trailer(b: u8) -> bool {
-    matches!(b, 0x88 | 0x2D)
+    matches!(b, 0x88 | 0x2D | 0x1C)
 }
 
 /// Trailer after `C0 08 01 18 <id> 20 <v>` that is not a hardware amp knob.
 fn amp_hw_knob_false_trailer(b: u8) -> bool {
-    matches!(b, 0x2D | 0x1F | 0x88 | 0x91)
+    matches!(b, 0x2D | 0x1F | 0x88 | 0x91 | 0x1C)
 }
 
 pub fn try_parse_amp_knob_notify(data: &[u8]) -> Option<(u8, u8)> {
@@ -831,9 +832,30 @@ mod tests {
     }
 
     #[test]
+    fn amp_knob_notify_ignores_capture_and_ir_select() {
+        // Pedal capture wheel: C0 18 01 20 <slot> 1C — must not paint MASTER LV
+        let capture = [0x08, 0xC0, 0x18, 0x01, 0x20, 0x02, 0x1C, 0x00, 0x00, 0x00];
+        assert_eq!(try_parse_amp_knob_notify(&capture), None);
+        // Pedal IR wheel: C0 18 03 20 <slot> 1C — must not paint MID
+        let ir = [0x08, 0xC0, 0x18, 0x03, 0x20, 0x01, 0x1C, 0x00, 0x00, 0x00];
+        assert_eq!(try_parse_amp_knob_notify(&ir), None);
+        // Full-range capture select (id 04) shares the same trailer.
+        let capture_full = [0x08, 0xC0, 0x18, 0x04, 0x20, 0x05, 0x1C, 0x00, 0x00, 0x00];
+        assert_eq!(try_parse_amp_knob_notify(&capture_full), None);
+    }
+
+    #[test]
     fn amp_hw_notify_ignores_global_toggle() {
         let data = [0x0A, 0xC0, 0x08, 0x01, 0x18, 0x03, 0x20, 0x01, 0x1F, 0x00, 0x00, 0x00];
         assert_eq!(try_parse_amp_hw_notify(&data), None);
+    }
+
+    #[test]
+    fn amp_hw_notify_ignores_capture_ir_select_trailer() {
+        let capture = [0x0A, 0xC0, 0x08, 0x01, 0x18, 0x01, 0x20, 0x02, 0x1C, 0x00, 0x00, 0x00];
+        assert_eq!(try_parse_amp_hw_notify(&capture), None);
+        let ir = [0x0A, 0xC0, 0x08, 0x01, 0x18, 0x03, 0x20, 0x01, 0x1C, 0x00, 0x00, 0x00];
+        assert_eq!(try_parse_amp_hw_notify(&ir), None);
     }
 
     #[test]
