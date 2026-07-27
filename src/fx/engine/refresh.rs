@@ -53,6 +53,7 @@ pub(super) fn clear_model_write_trust() {
     let s = fx();
     s.block_model_write_us = [0; NANO_FX_BLOCK_COUNT];
     s.block_trusted_model = [ptr::null(); NANO_FX_BLOCK_COUNT];
+    s.block_on_asserted_us = [0; NANO_FX_BLOCK_COUNT];
 }
 
 fn create_timer(handle: &mut esp_timer_handle_t, cb: unsafe extern "C" fn(*mut c_void), name: &CStr) {

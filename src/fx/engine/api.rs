@@ -6,9 +6,10 @@ use esp_idf_svc::sys::{esp_timer_start_once, esp_timer_stop};
 use log::{debug, info, warn};
 
 use super::parse::{
-    apply_gate_from_parsed, apply_model, decode_float32_array, find_fx_param_response,
-    infer_model_by_params, parse_preset, scan_gate_amount_field53, scan_gate_bypass_field54,
-    set_generic_model, store_catalog_model_id, try_apply_catalog_model, upgrade_block_model,
+    apply_gate_from_parsed, apply_model, decode_float32_array, dump_has_fx_bypass_field,
+    dump_has_fx_model_id_fields, find_fx_param_response, infer_model_by_params, parse_preset,
+    scan_gate_amount_field53, scan_gate_bypass_field54, set_generic_model, store_catalog_model_id,
+    try_apply_catalog_model, upgrade_block_model,
 };
 use super::refresh::{
     block_model_write_recent, clear_model_write_trust, ensure_refresh_timers, trusted_model_for,
@@ -85,6 +86,14 @@ pub fn nano_fx_dump_has_gate_fields(data: &[u8]) -> bool {
     scan_gate_amount_field53(data).is_some() || scan_gate_bypass_field54(data).is_some()
 }
 
+/// True when dump includes modern FX model-id fields (48–52).
+pub fn nano_fx_dump_has_model_fields(data: &[u8]) -> bool {
+    if data.len() > crate::memsafe::BLOB_MAX {
+        return false;
+    }
+    dump_has_fx_model_id_fields(data)
+}
+
 /// Salvage gate ON/OFF + amount from any blob that contains f53/f54 tags
 /// (full preset dump or a late high-bit C305 tail after a mid-dump gap).
 pub fn nano_fx_try_apply_gate_bytes(data: &[u8]) -> bool {
@@ -142,27 +151,44 @@ fn sync_from_preset(data: &[u8]) {
         apply_gate_from_parsed(&parsed);
     }
 
+    let dump_has_models = dump_has_fx_model_id_fields(data);
+    let dump_has_bypass = dump_has_fx_bypass_field(data);
     let s = fx();
     for i in 0..NANO_FX_BLOCK_COUNT {
         let src = &parsed.blocks[i];
         let dst = &mut s.fx.blocks[i];
 
-        if src.valid {
+        // Only apply on/off when field 31 was present. Model-only parses leave
+        // on=false by default and must not blank a known live enable state.
+        if dump_has_bypass && src.valid {
             if src.on {
                 dst.on = true;
                 s.block_on_asserted_us[i] = 0;
-            } else if !dst.on {
-                dst.on = false;
             } else if s.block_on_asserted_us[i] != 0
-                && now_us() - s.block_on_asserted_us[i] > FX_ENABLE_ASSERT_US
+                && now_us() - s.block_on_asserted_us[i] < FX_ENABLE_ASSERT_US
             {
+                // Keep a just-enabled block against a stale dump echo.
+            } else {
                 dst.on = false;
                 s.block_on_asserted_us[i] = 0;
             }
             dst.valid = true;
+        } else if src.valid {
+            dst.valid = true;
         }
 
         if src.model_id_len == 0 {
+            // Full dump with model-id fields but nothing for this slot: clear
+            // sticky boot/UI leftovers. Truncated dumps keep prior state.
+            if dump_has_models && !block_model_write_recent(i as u32) {
+                s.block_trusted_model[i] = ptr::null();
+                s.block_model_write_us[i] = 0;
+                dst.model = ptr::null();
+                dst.model_id_len = 0;
+                dst.has_model_id = false;
+                dst.param_count = 0;
+                dst.params_loaded = false;
+            }
             continue;
         }
 
@@ -272,7 +298,11 @@ fn feed_c305(data: &[u8]) -> bool {
 
     if trusted.is_none() {
         let mut inferred = infer_model_by_params(pending, float_count as u8);
-        if model_ref(block.model).is_some_and(|m| m.param_count as usize == float_count) {
+        // Already resolved to a real catalog model from the preset dump —
+        // param-count guesses used to overwrite the chain on boot.
+        if model_ref(block.model).is_some_and(|m| m.id_len > 0) {
+            inferred = None;
+        } else if model_ref(block.model).is_some_and(|m| m.param_count as usize == float_count) {
             inferred = None;
         } else if inferred.is_some() && block_model_write_recent(pending) {
             inferred = None;

@@ -125,6 +125,7 @@ pub(super) fn reset_amp_sync() {
     s.incomplete_probe_label.clear();
     s.incomplete_defer_count = 0;
     s.gate_retry_count = 0;
+    s.fx_retry_count = 0;
     s.tuner_watch_running = false;
     s.pending_tuner_sync = false;
     s.state_rx_since_us = 0;

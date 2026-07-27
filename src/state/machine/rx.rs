@@ -30,6 +30,8 @@ const STATE_RX_TIMEOUT_US: i64 = 5000 * 1000;
 const STATE_INCOMPLETE_DEFER_MAX: u32 = 2;
 /// Re-request current state when INITIAL/ROUTINE dump still lacks gate fields.
 const STATE_GATE_RETRY_MAX: u32 = 2;
+/// Re-request when dump salvaged gate but still lacks FX model-id fields 48–52.
+const STATE_FX_RETRY_MAX: u32 = 2;
 /// Quiet window after a chunk when the protobuf still looks truncated.
 const PARSE_TAIL_US: u64 = 80 * 1000;
 /// Quiet window when the buffer walks clean — catch a last MTU fragment only.
@@ -458,6 +460,21 @@ pub(super) fn parse_state_buffer() {
         request_current_state_now("Gate sync retry");
     } else if crate::fx::nano_fx_dump_has_gate_fields(buf) {
         s.gate_retry_count = 0;
+    }
+
+    if !crate::fx::nano_fx_dump_has_model_fields(buf)
+        && s.fx_retry_count < STATE_FX_RETRY_MAX
+        && (label == "INITIAL" || label == "ROUTINE" || label == "PRESET")
+    {
+        s.fx_retry_count += 1;
+        info!(
+            target: TAG,
+            "FX model fields absent after parse — retry {}/{}",
+            s.fx_retry_count, STATE_FX_RETRY_MAX
+        );
+        request_current_state_now("FX model sync retry");
+    } else if crate::fx::nano_fx_dump_has_model_fields(buf) {
+        s.fx_retry_count = 0;
     }
 
     maybe_retry_tuner_sync();

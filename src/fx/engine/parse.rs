@@ -656,10 +656,43 @@ pub(super) fn find_fx_param_response(data: &[u8]) -> usize {
     len
 }
 
+/// True when the dump carries modern FX model-id fields (48–52).
+///
+/// Truncated INITIAL dumps often salvage gate (f53/f54) from a late tail while
+/// still missing these fields — whole-blob ID scans then paint wrong chain
+/// models until a full preset dump arrives.
+pub(super) fn dump_has_fx_model_id_fields(data: &[u8]) -> bool {
+    let mut seen = 0u8;
+    let mut i = 0usize;
+    while i < data.len() {
+        let Some((tag, next)) = read_varint(data, i) else {
+            break;
+        };
+        i = next;
+        let field = tag >> 3;
+        let wire = tag & 0x07;
+        if (48..=52).contains(&field) && matches!(wire, 0 | 2) {
+            seen |= 1 << (field - 48);
+        }
+        match skip_wire(data, i, wire) {
+            Some(next) => i = next,
+            None => break,
+        }
+    }
+    // Post2 (field 51) can be only a tuner-off marker; require the other four.
+    (seen & 0b10111) == 0b10111
+}
+
+/// True when field 31 carries the 5-byte FX bypass bitmap.
+pub(super) fn dump_has_fx_bypass_field(data: &[u8]) -> bool {
+    extract_field_bytes(data, 31).is_some_and(|b| b.len() >= NANO_FX_BLOCK_COUNT)
+}
+
 /* -------------------------------------------------------------- preset */
 
 pub(super) fn parse_preset(data: &[u8], out: &mut NanoFxState) -> bool {
     let mut any = false;
+    let dump_has_models = dump_has_fx_model_id_fields(data);
 
     if let Some(bypass) = extract_field_bytes(data, 31) {
         if bypass.len() >= NANO_FX_BLOCK_COUNT {
@@ -697,7 +730,9 @@ pub(super) fn parse_preset(data: &[u8], out: &mut NanoFxState) -> bool {
             }
 
             if i as u32 == NANO_FX_POST2 {
-                model = find_post2_delay_in_preset(data);
+                if dump_has_models {
+                    model = find_post2_delay_in_preset(data);
+                }
                 if model.is_none() && block.model_id_len == 1 {
                     model = resolve_legacy_model(NANO_FX_POST2, block.model_id_raw[0]);
                 }
@@ -718,12 +753,12 @@ pub(super) fn parse_preset(data: &[u8], out: &mut NanoFxState) -> bool {
             block.params_loaded = false;
         } else if try_parse_legacy_model_field(data, i, &mut out.blocks[i]) {
             any = true;
-        } else if try_apply_slot_exclusive_model(data, i, &mut out.blocks[i]) {
+        } else if dump_has_models && try_apply_slot_exclusive_model(data, i, &mut out.blocks[i]) {
             any = true;
         }
     }
 
-    {
+    if dump_has_models {
         let delay = find_post2_delay_in_preset(data);
         let p2 = &mut out.blocks[NANO_FX_POST2 as usize];
         let keep = model_ref(p2.model).is_some_and(is_delay_model);
