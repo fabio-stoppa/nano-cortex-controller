@@ -16,6 +16,8 @@ use log::{debug, error, info, warn};
 use nano_wire::ffi::{NanoAmpC, NanoPresetCatalogC};
 use nano_wire::types::{AMP_CAPTURE_NAME_MAX, BPM_MAX, BPM_MIN, PRESET_COUNT, PRESET_NAME_MAX};
 
+use crate::seqlock::SeqLock;
+
 const TAG: &str = "nano_state";
 
 fn tag_ptr() -> *const c_char {
@@ -225,8 +227,8 @@ impl State {
 
 struct Shared<T>(UnsafeCell<T>);
 
-// Same contract as the C port: state is touched from the C305 worker, the parse
-// worker, the esp_timer task and the UI task, ordered only by the BLE event flow.
+// Task contract: C305 worker, parse worker, esp_timer, UI. Ordering is FreeRTOS
+// event flow — not a Rust Mutex. See `crate::fx::shared` for the same pattern.
 unsafe impl<T> Sync for Shared<T> {}
 
 impl<T> Shared<T> {
@@ -241,9 +243,20 @@ impl<T> Shared<T> {
 }
 
 static STATE: Shared<State> = Shared::new(State::new());
+/// Odd/even seqlock for consistent UI snapshots of `NanoAmpC`.
+static AMP_SEQ: SeqLock = SeqLock::new();
 
 fn st() -> &'static mut State {
     STATE.get()
+}
+
+fn amp_publish() {
+    AMP_SEQ.publish();
+}
+
+fn push_amp_ui() {
+    amp_publish();
+    unsafe { crate::ui::screen::nano_ui_set_amp(&st().amp as *const _) };
 }
 
 /// The reassembly buffers live for the whole session, exactly like the C `malloc`.
@@ -690,7 +703,7 @@ fn parse_state_buffer() {
         s.cap_vol_live_dirty = false;
         resolve_pending_level_from_dump();
         unsafe { nano_wire::ffi::nano_log_amp(tag_ptr(), &s.amp) };
-        unsafe { crate::ui::screen::nano_ui_set_amp(&s.amp as *const _) };
+        push_amp_ui();
         if !wait_for_gate {
             start_live_poll();
         }
@@ -1007,7 +1020,7 @@ fn apply_knob_update(knob_id: u8, raw: u8, source: &str) -> bool {
         target: TAG,
         "Amp {} -> raw {raw} ({source})", KNOB_NAMES[knob_id as usize]
     );
-    unsafe { crate::ui::screen::nano_ui_set_amp(&s.amp as *const _) };
+    push_amp_ui();
     true
 }
 
@@ -1053,7 +1066,7 @@ fn try_inline_amp_update(data: &[u8]) -> bool {
             s.cap_vol_live_dirty = true;
         }
         debug!(target: TAG, "Capture volume -> raw {raw} (notify)");
-        unsafe { crate::ui::screen::nano_ui_set_amp(&s.amp as *const _) };
+        push_amp_ui();
         return true;
     }
 
@@ -1108,6 +1121,7 @@ fn reset_amp_sync() {
     s.tempo_mode_active = false;
     s.tempo_ignore_exit_echo_us = 0;
     s.amp = amp_zero();
+    amp_publish();
     s.amp_live_dirty = 0;
     s.cap_vol_live_dirty = false;
     s.cap_vol_kept = 128;
@@ -1158,12 +1172,21 @@ pub extern "C" fn nano_rx_mode_get() -> u32 {
 }
 
 /// Feed one C305 notification (handles FE stream reassembly + amp parse).
-#[no_mangle]
-pub unsafe extern "C" fn nano_state_feed_c305(data: *const u8, len: usize) {
-    if data.is_null() || len == 0 {
+pub fn feed_c305_bytes(data: &[u8]) {
+    if data.is_empty() {
         return;
     }
-    feed_c305(unsafe { slice::from_raw_parts(data, len) });
+    feed_c305(data);
+}
+
+/// Feed one C305 notification (handles FE stream reassembly + amp parse).
+#[no_mangle]
+pub unsafe extern "C" fn nano_state_feed_c305(data: *const u8, len: usize) {
+    let Some(data) = (unsafe { crate::memsafe::bytes_at_most(data, len, crate::memsafe::BLOB_MAX) })
+    else {
+        return;
+    };
+    feed_c305(data);
 }
 
 fn feed_c305(data: &[u8]) {
@@ -1329,12 +1352,21 @@ fn feed_c305(data: &[u8]) {
 }
 
 /// Apply live amp / capture-volume notifies from the GATT callback (no FIFO).
-#[no_mangle]
-pub unsafe extern "C" fn nano_state_try_amp_notify_fast(data: *const u8, len: usize) -> bool {
-    if data.is_null() || len == 0 {
+pub fn try_amp_notify_fast_bytes(data: &[u8]) -> bool {
+    if data.is_empty() {
         return false;
     }
-    try_inline_amp_update(unsafe { slice::from_raw_parts(data, len) })
+    try_inline_amp_update(data)
+}
+
+/// Apply live amp / capture-volume notifies from the GATT callback (no FIFO).
+#[no_mangle]
+pub unsafe extern "C" fn nano_state_try_amp_notify_fast(data: *const u8, len: usize) -> bool {
+    let Some(data) = (unsafe { crate::memsafe::bytes_at_most(data, len, crate::memsafe::PKT_MAX) })
+    else {
+        return false;
+    };
+    try_inline_amp_update(data)
 }
 
 #[no_mangle]
@@ -1345,6 +1377,24 @@ pub extern "C" fn nano_state_get_amp() -> *const NanoAmpC {
     } else {
         ptr::null()
     }
+}
+
+/// Consistent copy for the UI task (seqlock). Returns false when amp is not valid.
+#[no_mangle]
+pub unsafe extern "C" fn nano_state_snapshot_amp(out: *mut NanoAmpC) -> bool {
+    if out.is_null() {
+        return false;
+    }
+
+    AMP_SEQ.read(|| {
+        let s = st();
+        if s.amp.valid {
+            unsafe { *out = amp_copy(&s.amp) };
+            true
+        } else {
+            false
+        }
+    })
 }
 
 /// Optimistically update amp state and send C304 knob write (touch UI).
@@ -1365,6 +1415,7 @@ pub extern "C" fn nano_state_write_amp_knob(knob: u32, raw: u8) -> bool {
         s.master_write_us = now_us();
         s.master_write_raw = raw as i32;
     }
+    amp_publish();
 
     let mut buf = [0u8; 32];
     let n = unsafe { nano_wire::ffi::nano_amp_knob_payload(knob, raw, buf.as_mut_ptr(), buf.len()) };
@@ -1401,7 +1452,7 @@ pub extern "C" fn nano_state_write_capture_volume(raw: u8) -> bool {
     }
 
     debug!(target: TAG, "Capture volume -> raw {raw} (touch)");
-    unsafe { crate::ui::screen::nano_ui_set_amp(&s.amp as *const _) };
+    push_amp_ui();
     ble_write_c304(c"Capture volume", &buf[..n])
 }
 
@@ -1424,7 +1475,7 @@ pub extern "C" fn nano_state_write_capture_slot(slot: u8) -> bool {
         s.amp.have_capture_name = true;
     }
     s.amp.valid = true;
-    unsafe { crate::ui::screen::nano_ui_set_amp(&s.amp as *const _) };
+    push_amp_ui();
 
     let mut buf = [0u8; 16];
     let n = unsafe { nano_wire::ffi::nano_capture_select_payload(slot, buf.as_mut_ptr(), buf.len()) };

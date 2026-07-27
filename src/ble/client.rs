@@ -7,7 +7,7 @@ use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_void, CStr};
 use core::mem::{size_of, MaybeUninit};
 use core::ptr;
-use core::slice;
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, Ordering};
 use std::ffi::CString;
 
 use esp_idf_svc::sys::*;
@@ -15,22 +15,12 @@ use log::{debug, error, info, warn};
 
 const TAG: &str = "nano_ble";
 
-fn tag_ptr() -> *const c_char {
-    c"nano_ble".as_ptr()
-}
-
 fn is_tuner_active() -> bool {
-    let tuner = crate::tuner::nano_tuner_get();
-    !tuner.is_null() && unsafe { (*tuner).active }
+    crate::tuner::nano_tuner_is_active()
 }
 
 fn parse_bpm(data: &[u8]) -> Option<u16> {
-    let mut bpm: u16 = 0;
-    let hit = unsafe {
-        nano_wire::ffi::nano_try_parse_bpm_notify(data.as_ptr(), data.len(), &mut bpm)
-            || nano_wire::ffi::nano_parse_bpm(data.as_ptr(), data.len(), &mut bpm)
-    };
-    hit.then_some(bpm)
+    nano_wire::try_parse_bpm_notify(data).or_else(|| nano_wire::parse_bpm(data))
 }
 
 const NAME_PREFIX: &[u8] = b"Neural DSP Nano Cortex";
@@ -198,8 +188,9 @@ impl Ctx {
 
 struct Shared<T>(UnsafeCell<T>);
 
-// Same contract as the C port: state is touched from the Bluedroid callback task,
-// the C305 worker and the UI task, ordered only by the BLE event flow.
+// Task contract: Bluedroid GATT/GAP callbacks + C305 worker + UI queries.
+// Ordering is the BLE event flow / FreeRTOS queues — not a Rust Mutex.
+// See `crate::fx::shared`.
 unsafe impl<T> Sync for Shared<T> {}
 
 impl<T> Shared<T> {
@@ -215,8 +206,56 @@ impl<T> Shared<T> {
 
 static CTX: Shared<Ctx> = Shared::new(Ctx::new());
 
+/// Cross-task link snapshot — UI / writers read these instead of racing `Ctx`.
+/// Publish order on teardown: `LINK_UP` false first, then handles / if / conn.
+static LINK_UP: AtomicBool = AtomicBool::new(false);
+static SCANNING: AtomicBool = AtomicBool::new(false);
+static GATTC_IF: AtomicI32 = AtomicI32::new(-1);
+static CONN_ID: AtomicU16 = AtomicU16::new(0);
+static C304_HANDLE: AtomicU16 = AtomicU16::new(INVALID_HANDLE);
+static C305_HANDLE: AtomicU16 = AtomicU16::new(INVALID_HANDLE);
+
 fn ctx() -> &'static mut Ctx {
     CTX.get()
+}
+
+fn publish_link(s: &Ctx) {
+    let up = is_connected(s);
+    if !up {
+        // Tear down: drop readiness before invalidating handles used by writers.
+        LINK_UP.store(false, Ordering::Release);
+    }
+    SCANNING.store(s.scanning, Ordering::Release);
+    GATTC_IF.store(s.gattc_if as i32, Ordering::Release);
+    CONN_ID.store(s.conn_id, Ordering::Release);
+    C304_HANDLE.store(s.c304_handle, Ordering::Release);
+    C305_HANDLE.store(s.c305_handle, Ordering::Release);
+    if up {
+        LINK_UP.store(true, Ordering::Release);
+    }
+}
+
+#[derive(Copy, Clone)]
+struct LinkSnap {
+    gattc_if: esp_gatt_if_t,
+    conn_id: u16,
+    c304: u16,
+}
+
+fn link_snap() -> Option<LinkSnap> {
+    if !LINK_UP.load(Ordering::Acquire) {
+        return None;
+    }
+    let snap = LinkSnap {
+        gattc_if: GATTC_IF.load(Ordering::Acquire) as esp_gatt_if_t,
+        conn_id: CONN_ID.load(Ordering::Acquire),
+        c304: C304_HANDLE.load(Ordering::Acquire),
+    };
+    if !LINK_UP.load(Ordering::Acquire) || snap.c304 == INVALID_HANDLE {
+        None
+    } else {
+        Some(snap)
+    }
 }
 
 fn uuid16(id: u16) -> esp_bt_uuid_t {
@@ -283,6 +322,7 @@ fn reset_handles(s: &mut Ctx) {
     s.extra_svc_count = 0;
     s.bpm_read_count = 0;
     s.bpm_read_next = 0;
+    publish_link(s);
 }
 
 fn is_connected(s: &Ctx) -> bool {
@@ -296,6 +336,7 @@ fn start_scan(s: &mut Ctx) {
     let err = unsafe { esp_ble_gap_start_scanning(0) };
     if err == ESP_OK {
         s.scanning = true;
+        publish_link(s);
         info!(target: TAG, "Scanning for \"{}\"...", String::from_utf8_lossy(NAME_PREFIX));
     } else {
         error!(target: TAG, "Scan start failed: {}", err_name(err));
@@ -329,7 +370,7 @@ fn find_char_in_range(
             return None;
         }
 
-        let mut elems = vec![esp_gattc_char_elem_t::default(); count as usize];
+        let mut elems = vec![unsafe { core::mem::zeroed::<esp_gattc_char_elem_t>() }; count as usize];
         let status = esp_ble_gattc_get_char_by_uuid(
             gattc_if,
             conn_id,
@@ -400,7 +441,7 @@ fn collect_chars(gattc_if: esp_gatt_if_t, conn_id: u16, start: u16, end: u16) ->
             return Vec::new();
         }
 
-        let mut elems = vec![esp_gattc_char_elem_t::default(); count as usize];
+        let mut elems = vec![unsafe { core::mem::zeroed::<esp_gattc_char_elem_t>() }; count as usize];
         if esp_ble_gattc_get_all_char(
             gattc_if,
             conn_id,
@@ -615,7 +656,8 @@ unsafe extern "C" fn c305_worker_task(_arg: *mut c_void) {
         }
 
         let item = unsafe { slot.assume_init_ref() };
-        if s.c305_handle == INVALID_HANDLE || item.handle != s.c305_handle {
+        let c305 = C305_HANDLE.load(Ordering::Acquire);
+        if c305 == INVALID_HANDLE || item.handle != c305 {
             debug!(
                 target: TAG,
                 "GATT RX {} h={} len={}",
@@ -626,7 +668,7 @@ unsafe extern "C" fn c305_worker_task(_arg: *mut c_void) {
         }
 
         let len = (item.len as usize).min(C305_PKT_MAX);
-        unsafe { crate::state::nano_state_feed_c305(item.data.as_ptr(), len) };
+        crate::state::feed_c305_bytes(&item.data[..len]);
     }
 }
 
@@ -726,13 +768,18 @@ fn notify_worker(s: &Ctx) {
 }
 
 fn on_gatt_notify(s: &mut Ctx, handle: u16, data: *const u8, len: u16) {
-    if len == 0 || s.queue.is_null() || data.is_null() {
+    if len == 0 || s.queue.is_null() {
         return;
     }
-    let bytes = unsafe { slice::from_raw_parts(data, len as usize) };
+    let Some(bytes) = (unsafe {
+        crate::memsafe::bytes_truncated(data, len as usize, C305_PKT_MAX)
+    }) else {
+        return;
+    };
 
     let tuner_live = is_tuner_active();
-    let is_c305 = s.c305_handle != INVALID_HANDLE && handle == s.c305_handle;
+    let c305 = C305_HANDLE.load(Ordering::Acquire);
+    let is_c305 = c305 != INVALID_HANDLE && handle == c305;
     let is_c306 = s.c306_handle != INVALID_HANDLE && handle == s.c306_handle;
 
     if !is_c305 && !is_c306 {
@@ -754,7 +801,7 @@ fn on_gatt_notify(s: &mut Ctx, handle: u16, data: *const u8, len: u16) {
      * (48 × ~80 ms). Logging in this path also stalls Bluedroid the same way.
      */
     if is_c305 && c305_is_pitch(bytes) {
-        unsafe { crate::tuner::nano_tuner_feed_pitch_fast(bytes.as_ptr(), bytes.len()) };
+        crate::tuner::feed_pitch_fast_bytes(bytes);
         return;
     }
 
@@ -763,23 +810,24 @@ fn on_gatt_notify(s: &mut Ctx, handle: u16, data: *const u8, len: u16) {
      * LEVELHUNT-style INFO logging stalled the worker, so the UI froze then caught
      * up seconds later. Apply live, skip the queue.
      */
-    if is_c305 && !tuner_live && unsafe { crate::state::nano_state_try_amp_notify_fast(bytes.as_ptr(), bytes.len()) } {
+    if is_c305 && !tuner_live && crate::state::try_amp_notify_fast_bytes(bytes) {
         return;
     }
 
-    if bytes.len() > C305_PKT_MAX {
+    if (len as usize) > C305_PKT_MAX {
         warn!(
             target: TAG,
-            "C305 notify truncated {} → {C305_PKT_MAX} bytes", bytes.len()
+            "C305 notify truncated {} → {C305_PKT_MAX} bytes",
+            len
         );
     }
-    let copy_len = bytes.len().min(C305_PKT_MAX);
+    let copy_len = bytes.len();
     let mut item = C305Item {
         handle,
         len: copy_len as u16,
         data: [0; C305_PKT_MAX],
     };
-    item.data[..copy_len].copy_from_slice(&bytes[..copy_len]);
+    item.data[..copy_len].copy_from_slice(bytes);
     let item_ptr = (&raw const item).cast::<c_void>();
 
     /*
@@ -869,6 +917,7 @@ fn gattc_handler(
             s.gattc_if = gattc_if;
             s.remote_bda = connect.remote_bda;
             reset_handles(s);
+            publish_link(s);
             info!(target: TAG, "Connected to Nano Cortex");
 
             // Prefer a short interval so pitch notifies are not paced at ~50ms+.
@@ -940,6 +989,7 @@ fn gattc_handler(
                 unsafe { esp_ble_gattc_close(gattc_if, conn_id) };
                 return;
             }
+            publish_link(s);
             enable_all_notifies(s, gattc_if);
         }
 
@@ -951,7 +1001,7 @@ fn gattc_handler(
             }
 
             let mut count: u16 = 1;
-            let mut descr = esp_gattc_descr_elem_t::default();
+            let mut descr = unsafe { core::mem::zeroed::<esp_gattc_descr_elem_t>() };
             let status = unsafe {
                 esp_ble_gattc_get_descr_by_char_handle(
                     gattc_if,
@@ -993,6 +1043,7 @@ fn gattc_handler(
                 && !s.notify_enabled
             {
                 s.notify_enabled = true;
+                publish_link(s);
                 info!(target: TAG, "GATT subscriptions enabled (C305/C306/…) — syncing");
                 unsafe { crate::ui::screen::nano_ui_set_ble_connected(true) };
                 crate::state::nano_state_begin_sync();
@@ -1019,15 +1070,17 @@ fn gattc_handler(
                     "BPM hunt: GATT read status={} handle={}", read.status, read.handle
                 );
             } else {
-                let value = if read.value.is_null() {
-                    &[][..]
-                } else {
-                    unsafe { slice::from_raw_parts(read.value, read.value_len as usize) }
-                };
+                let value = unsafe {
+                    crate::memsafe::bytes_at_most(
+                        read.value,
+                        read.value_len as usize,
+                        crate::memsafe::PKT_MAX,
+                    )
+                }
+                .unwrap_or(&[]);
                 let label =
                     CString::new(format!("GATT read h={}", read.handle)).unwrap_or_default();
-                unsafe { nano_wire::ffi::nano_log_bytes_full(tag_ptr(), label.as_ptr(), value.as_ptr(), value.len()) };
-                unsafe { nano_wire::ffi::nano_log_bpm_raw_scan(tag_ptr(), label.as_ptr(), value.as_ptr(), value.len()) };
+                nano_wire::log_bytes_full(TAG, label.to_str().unwrap_or("GATT read"), value);
                 if let Some(bpm) = parse_bpm(value) {
                     info!(target: TAG, "BPM {bpm} (GATT read)");
                     crate::state::nano_state_on_bpm_found(bpm);
@@ -1041,6 +1094,7 @@ fn gattc_handler(
             let reason = unsafe { (*param).disconnect.reason };
             warn!(target: TAG, "Disconnected reason=0x{reason:02x} — will rescan");
             s.connected = false;
+            publish_link(s); // drop LINK_UP before tearing handles / sleeping
             s.gattc_if = ESP_GATT_IF_NONE as esp_gatt_if_t;
             reset_handles(s);
             drain_rx_queue(s);
@@ -1081,6 +1135,7 @@ unsafe extern "C" fn gap_cb(event: esp_gap_ble_cb_event_t, param: *mut esp_ble_g
             if unsafe { (*param).scan_start_cmpl.status } != esp_bt_status_t_ESP_BT_STATUS_SUCCESS {
                 error!(target: TAG, "Scan start complete failed");
                 s.scanning = false;
+                publish_link(s);
             }
         }
 
@@ -1103,7 +1158,11 @@ unsafe extern "C" fn gap_cb(event: esp_gap_ble_cb_event_t, param: *mut esp_ble_g
             if adv_name.is_null() || (adv_name_len as usize) < NAME_PREFIX.len() {
                 return;
             }
-            let adv_name = unsafe { slice::from_raw_parts(adv_name, adv_name_len as usize) };
+            let Some(adv_name) = (unsafe {
+                crate::memsafe::bytes_at_most(adv_name, adv_name_len as usize, 64)
+            }) else {
+                return;
+            };
             if !adv_name.starts_with(NAME_PREFIX) {
                 return;
             }
@@ -1111,6 +1170,7 @@ unsafe extern "C" fn gap_cb(event: esp_gap_ble_cb_event_t, param: *mut esp_ble_g
             info!(target: TAG, "Found Nano Cortex, connecting...");
             unsafe { esp_ble_gap_stop_scanning() };
             s.scanning = false;
+            publish_link(s);
             unsafe {
                 esp_ble_gattc_open(
                     s.gattc_if,
@@ -1121,7 +1181,10 @@ unsafe extern "C" fn gap_cb(event: esp_gap_ble_cb_event_t, param: *mut esp_ble_g
             };
         }
 
-        esp_gap_ble_cb_event_t_ESP_GAP_BLE_SCAN_STOP_COMPLETE_EVT => s.scanning = false,
+        esp_gap_ble_cb_event_t_ESP_GAP_BLE_SCAN_STOP_COMPLETE_EVT => {
+            s.scanning = false;
+            publish_link(s);
+        }
 
         _ => {}
     }
@@ -1131,12 +1194,12 @@ unsafe extern "C" fn gap_cb(event: esp_gap_ble_cb_event_t, param: *mut esp_ble_g
 
 #[no_mangle]
 pub extern "C" fn nano_ble_connected() -> bool {
-    is_connected(ctx())
+    LINK_UP.load(Ordering::Acquire)
 }
 
 #[no_mangle]
 pub extern "C" fn nano_ble_scanning() -> bool {
-    ctx().scanning
+    SCANNING.load(Ordering::Acquire)
 }
 
 /// Drop pending C305 packets (call on disconnect).
@@ -1161,38 +1224,37 @@ pub extern "C" fn nano_ble_write_c304(
     data: *const u8,
     len: usize,
 ) -> esp_err_t {
-    let s = ctx();
     let label = if label.is_null() {
         None
     } else {
         Some(unsafe { CStr::from_ptr(label) })
     };
 
-    if !is_connected(s) {
+    let Some(link) = link_snap() else {
         warn!(
             target: TAG,
             "Skip write ({}): not ready",
             label.map_or("?", |l| l.to_str().unwrap_or("?"))
         );
         return ESP_ERR_INVALID_STATE;
-    }
-    if len == 0 || len > 512 || data.is_null() {
+    };
+    if len == 0 || len > crate::memsafe::PKT_MAX || data.is_null() {
         return ESP_ERR_INVALID_ARG;
     }
 
     {
-        let bytes = unsafe { slice::from_raw_parts(data, len) };
-        let lbl = label.unwrap_or(c"C304");
-        unsafe {
-            nano_wire::ffi::nano_log_bytes(tag_ptr(), lbl.as_ptr(), bytes.as_ptr(), bytes.len())
+        let Some(bytes) = (unsafe { crate::memsafe::bytes(data, len) }) else {
+            return ESP_ERR_INVALID_ARG;
         };
+        let lbl = label.map_or("C304", |l| l.to_str().unwrap_or("C304"));
+        nano_wire::log_bytes(TAG, lbl, bytes);
     }
 
     let err = unsafe {
         esp_ble_gattc_write_char(
-            s.gattc_if,
-            s.conn_id,
-            s.c304_handle,
+            link.gattc_if,
+            link.conn_id,
+            link.c304,
             len as u16,
             data.cast_mut(),
             esp_gatt_write_type_t_ESP_GATT_WRITE_TYPE_RSP,
@@ -1209,7 +1271,7 @@ pub extern "C" fn nano_ble_write_c304(
 #[no_mangle]
 pub extern "C" fn nano_ble_read_bpm_probe_chars() {
     let s = ctx();
-    if !is_connected(s) {
+    if !LINK_UP.load(Ordering::Acquire) {
         warn!(target: TAG, "BPM hunt: GATT read skipped (not connected)");
         return;
     }

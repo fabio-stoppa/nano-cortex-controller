@@ -4,6 +4,8 @@
 mod amp;
 mod ble;
 mod fx;
+mod memsafe;
+mod seqlock;
 mod state;
 mod tuner;
 mod ui;

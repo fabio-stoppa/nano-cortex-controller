@@ -7,27 +7,28 @@
 #![allow(dead_code)]
 
 use core::cell::UnsafeCell;
-use core::ffi::{c_char, CStr};
+use core::ffi::{c_char, c_void, CStr};
 use core::ptr;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
 use esp_idf_svc::sys as sys;
 use esp_idf_svc::sys::{
-    esp_err_t, lv_color_t, lv_event_t, lv_obj_t, lv_point_t, lv_style_t, lv_timer_t, ESP_ERR_NO_MEM,
-    ESP_FAIL, ESP_OK,
+    esp_err_t, lv_color_t, lv_event_t, lv_obj_t, lv_point_t, lv_style_t, lv_timer_t,
+    xTaskGetCurrentTaskHandle, ESP_ERR_NO_MEM, ESP_FAIL, ESP_OK,
 };
 use log::{error, info};
 use nano_wire::ffi::NanoAmpC;
 
 use crate::fx::{
     nano_fx_allowed_model_count, nano_fx_block_model_text, nano_fx_category_label,
-    nano_fx_display_to_slider, nano_fx_format_param, nano_fx_get, nano_fx_get_allowed_model,
+    nano_fx_display_to_slider, nano_fx_format_param, nano_fx_get_allowed_model,
     nano_fx_model_category, nano_fx_model_chain_acronym, nano_fx_param_enum_count,
     nano_fx_param_is_enum, nano_fx_slider_max, nano_fx_slider_min, nano_fx_slider_to_display,
-    nano_fx_write_block_enabled, nano_fx_write_block_model, nano_fx_write_gate_enabled,
-    nano_fx_write_gate_reduction, nano_fx_write_param_display,
+    nano_fx_snapshot, nano_fx_write_block_enabled, nano_fx_write_block_model,
+    nano_fx_write_gate_enabled, nano_fx_write_gate_reduction, nano_fx_write_param_display,
 };
 use crate::fx::types::{
     NanoFxBlock, NanoFxModelDef, NanoFxState, NANO_FX_CAT_BASS_OD, NANO_FX_CAT_COMPRESSOR,
@@ -36,12 +37,12 @@ use crate::fx::types::{
     NANO_FX_MAX_PARAMS, NANO_FX_POST1, NANO_FX_POST2, NANO_FX_POST3, NANO_FX_PRE1, NANO_FX_PRE2,
 };
 use crate::state::{
-    nano_state_get_amp, nano_state_get_bpm, nano_state_tempo_enter, nano_state_tempo_exit,
+    nano_state_get_bpm, nano_state_snapshot_amp, nano_state_tempo_enter, nano_state_tempo_exit,
     nano_state_tempo_tap, nano_state_write_amp_knob, nano_state_write_capture_slot,
     nano_state_write_capture_volume,
 };
 use crate::tuner::types::NanoTunerC;
-use crate::tuner::{nano_tuner_cents_f, nano_tuner_get, nano_tuner_set_active, nano_tuner_snapshot};
+use crate::tuner::{nano_tuner_cents_f, nano_tuner_set_active, nano_tuner_snapshot};
 use crate::ui::icons;
 use crate::ui::lvgl as lv;
 
@@ -335,15 +336,47 @@ impl Ui {
 
 struct UiCell(UnsafeCell<Ui>);
 
-// Guarded by the LVGL task the same way `nano_ui.c`'s statics were.
+// Widget tree: LVGL task only for paint. Cross-task setters use `with_inbox`
+// (mutex) to stage async_* snapshots — see `INBOX_LOCK`.
 unsafe impl Sync for UiCell {}
 
 static UI: UiCell = UiCell(UnsafeCell::new(Ui::new()));
 
+/// Serializes staging fields (`async_*`, caches, `dispatch_mask`) between BLE /
+/// state / FX tasks and the LVGL dispatch timer.
+static INBOX_LOCK: Mutex<()> = Mutex::new(());
+
+/// FreeRTOS handle of the LVGL task (set on first UI timer tick).
+static LVGL_TASK: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+
 #[inline]
-#[allow(clippy::mut_from_ref)]
 fn ui() -> &'static mut Ui {
     unsafe { &mut *UI.0.get() }
+}
+
+fn note_lvgl_task() {
+    let handle = unsafe { xTaskGetCurrentTaskHandle() };
+    LVGL_TASK.store(handle.cast(), Ordering::Release);
+}
+
+fn on_lvgl_task() -> bool {
+    let expected = LVGL_TASK.load(Ordering::Acquire);
+    if expected.is_null() {
+        return true; // before first LVGL tick
+    }
+    unsafe { xTaskGetCurrentTaskHandle().cast() == expected }
+}
+
+fn assert_lvgl_task(where_: &str) {
+    debug_assert!(
+        on_lvgl_task(),
+        "UI paint must run on the LVGL task ({where_})"
+    );
+}
+
+fn with_inbox<R>(f: impl FnOnce(&mut Ui) -> R) -> R {
+    let _guard = INBOX_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    f(ui())
 }
 
 static BUILD_DONE: AtomicBool = AtomicBool::new(false);
@@ -354,12 +387,48 @@ fn now_us() -> i64 {
     unsafe { sys::esp_timer_get_time() }
 }
 
-fn fx_state() -> *const NanoFxState {
-    unsafe { nano_fx_get() }
+/// LVGL-task-only paint buffers. Snapshot APIs fill these so paint helpers never
+/// hold a live pointer into FX / amp `Shared` state while the C305 worker writes.
+static mut FX_PAINT: NanoFxState = NanoFxState::zeroed();
+static mut AMP_PAINT: NanoAmpC = unsafe { core::mem::zeroed() };
+static mut TUNER_PAINT: NanoTunerC = NanoTunerC::new();
+
+fn tuner_snap() -> NanoTunerC {
+    let mut out = NanoTunerC::new();
+    unsafe { nano_tuner_snapshot(&mut out) };
+    out
 }
 
+/// Seqlock snapshot into the LVGL paint buffer (must only run on the LVGL task).
+fn fx_state() -> *const NanoFxState {
+    debug_assert!(on_lvgl_task(), "fx_state paint buffer is LVGL-task only");
+    unsafe {
+        if nano_fx_snapshot(&raw mut FX_PAINT) {
+            &raw const FX_PAINT
+        } else {
+            ptr::null()
+        }
+    }
+}
+
+/// Seqlock snapshot into the LVGL paint buffer (must only run on the LVGL task).
 fn amp_state() -> *const NanoAmpC {
-    unsafe { nano_state_get_amp() }
+    debug_assert!(on_lvgl_task(), "amp_state paint buffer is LVGL-task only");
+    unsafe {
+        if nano_state_snapshot_amp(&raw mut AMP_PAINT) {
+            &raw const AMP_PAINT
+        } else {
+            ptr::null()
+        }
+    }
+}
+
+fn tuner_state() -> *const NanoTunerC {
+    debug_assert!(on_lvgl_task(), "tuner_state paint buffer is LVGL-task only");
+    unsafe {
+        nano_tuner_snapshot(&raw mut TUNER_PAINT);
+        &raw const TUNER_PAINT
+    }
 }
 
 fn pct(raw: u8) -> u32 {
@@ -475,10 +544,7 @@ unsafe extern "C" fn tuner_btn_event_cb(e: *mut lv_event_t) {
         return;
     }
 
-    let t = unsafe { nano_tuner_get() };
-    let Some(t) = (unsafe { t.as_ref() }) else {
-        return;
-    };
+    let t = tuner_snap();
     unsafe { nano_tuner_set_active(!t.active) };
 }
 
@@ -560,27 +626,39 @@ fn apply_tuner_locked(tuner: *const NanoTunerC) {
 }
 
 fn async_apply_amp_cb() {
-    let u = ui();
-    if u.async_amp_have {
-        let amp = u.async_amp;
-        apply_amp_locked(&amp);
-    } else {
-        apply_amp_locked(ptr::null());
+    assert_lvgl_task("async_apply_amp");
+    let pending = with_inbox(|u| {
+        if u.async_amp_have {
+            Some(u.async_amp)
+        } else {
+            None
+        }
+    });
+    match pending {
+        Some(amp) => apply_amp_locked(&amp),
+        None => apply_amp_locked(ptr::null()),
     }
 }
 
 fn async_apply_tuner_cb() {
-    let u = ui();
+    assert_lvgl_task("async_apply_tuner");
     // Mode on/off still arrives via snapshot; pitch is sampled live below.
-    if u.async_tuner_pending {
-        let t = u.async_tuner;
-        u.async_tuner_pending = false;
-        apply_tuner_locked(&t);
-        if t.active && !u.tuner_view {
-            show_tuner_view(true);
-        } else if !t.active && u.tuner_view {
-            show_tuner_view(false);
+    let pending = with_inbox(|u| {
+        if !u.async_tuner_pending {
+            return None;
         }
+        u.async_tuner_pending = false;
+        Some(u.async_tuner)
+    });
+    let Some(t) = pending else {
+        return;
+    };
+    apply_tuner_locked(&t);
+    let u = ui();
+    if t.active && !u.tuner_view {
+        show_tuner_view(true);
+    } else if !t.active && u.tuner_view {
+        show_tuner_view(false);
     }
 }
 
@@ -647,25 +725,35 @@ unsafe extern "C" fn ble_icon_timer_cb(_timer: *mut lv_timer_t) {
 }
 
 fn async_apply_ble_cb() {
-    let u = ui();
-    if !u.async_ble_pending {
+    assert_lvgl_task("async_apply_ble");
+    let snap = with_inbox(|u| {
+        if !u.async_ble_pending {
+            return None;
+        }
+        u.async_ble_pending = false;
+        Some((
+            u.async_ble_connected,
+            u.async_tuner_pending.then_some(u.async_tuner),
+            u.async_fx_pending.then_some(u.async_fx),
+        ))
+    });
+    let Some((connected, tuner, fx)) = snap else {
         return;
-    }
-    u.async_ble_pending = false;
-    u.ble_connected = u.async_ble_connected;
+    };
+
+    let u = ui();
+    u.ble_connected = connected;
     refresh_ble_icon_locked();
     set_slider_enabled_locked(u.ble_connected);
     if !u.tempo_tap_btn.is_null() {
         lv::set_enabled(u.tempo_tap_btn, u.ble_connected);
     }
-    if u.async_tuner_pending {
-        let t = u.async_tuner;
+    if let Some(t) = tuner {
         apply_tuner_locked(&t);
     } else {
-        apply_tuner_locked(unsafe { nano_tuner_get() });
+        apply_tuner_locked(tuner_state());
     }
-    if u.async_fx_pending {
-        let fx = u.async_fx;
+    if let Some(fx) = fx {
         apply_fx_locked(&fx);
     } else {
         apply_fx_locked(fx_state());
@@ -675,8 +763,9 @@ fn async_apply_ble_cb() {
 /* -------------------------------------------------------------- dispatch */
 
 fn ui_run_pending_updates(mask: u8) {
-    let u = ui();
-    if (mask & UI_DISP_BLE) != 0 && u.async_ble_pending {
+    assert_lvgl_task("ui_run_pending_updates");
+    let ble = with_inbox(|u| (mask & UI_DISP_BLE) != 0 && u.async_ble_pending);
+    if ble {
         async_apply_ble_cb();
     }
     if (mask & UI_DISP_AMP) != 0 {
@@ -702,36 +791,45 @@ fn ui_run_pending_updates(mask: u8) {
 /// Drain pending UI updates; call from the LVGL task only.
 #[no_mangle]
 pub unsafe extern "C" fn nano_ui_dispatch_if_pending() {
-    let u = ui();
-    if !u.dispatch_ready {
-        return;
-    }
+    note_lvgl_task();
+    assert_lvgl_task("nano_ui_dispatch_if_pending");
 
-    let mut mask = u.dispatch_mask;
-    if mask == 0 {
-        // Dirty bits can be lost against the setters; still paint hot snapshots.
-        if u.async_tuner_pending {
-            mask = UI_DISP_TUNER;
-        } else if u.async_ble_pending {
-            mask = UI_DISP_BLE;
-        } else if u.async_fx_pending {
-            mask = UI_DISP_FX;
-        } else if u.async_tempo_mode_pending {
-            mask = UI_DISP_TEMPO;
-        } else if u.async_bpm_pending {
-            mask = UI_DISP_BPM;
-        } else if u.async_preset_pending {
-            mask = UI_DISP_PRESET;
-        } else {
-            return;
+    let mask = with_inbox(|u| {
+        if !u.dispatch_ready {
+            return 0;
         }
-    }
 
-    u.dispatch_mask = 0;
-    ui_run_pending_updates(mask);
+        let mut mask = u.dispatch_mask;
+        if mask == 0 {
+            // Dirty bits can be lost against the setters; still paint hot snapshots.
+            if u.async_tuner_pending {
+                mask = UI_DISP_TUNER;
+            } else if u.async_ble_pending {
+                mask = UI_DISP_BLE;
+            } else if u.async_fx_pending {
+                mask = UI_DISP_FX;
+            } else if u.async_tempo_mode_pending {
+                mask = UI_DISP_TEMPO;
+            } else if u.async_bpm_pending {
+                mask = UI_DISP_BPM;
+            } else if u.async_preset_pending {
+                mask = UI_DISP_PRESET;
+            } else {
+                return 0;
+            }
+        }
+
+        u.dispatch_mask = 0;
+        mask
+    });
+
+    if mask != 0 {
+        ui_run_pending_updates(mask);
+    }
 }
 
 unsafe extern "C" fn ui_dispatch_timer_cb(_timer: *mut lv_timer_t) {
+    note_lvgl_task();
     unsafe { nano_ui_dispatch_if_pending() };
 
     let mut t = NanoTunerC::default();
@@ -768,13 +866,18 @@ fn ui_init_dispatch() {
 }
 
 fn async_apply_fx_cb() {
-    let u = ui();
-    if !u.async_fx_pending || u.fx_model_picker_open {
-        return;
+    assert_lvgl_task("async_apply_fx");
+    let pending = with_inbox(|u| {
+        if !u.async_fx_pending || u.fx_model_picker_open {
+            return None;
+        }
+        let fx = u.async_fx;
+        u.async_fx_pending = false;
+        Some(fx)
+    });
+    if let Some(fx) = pending {
+        apply_fx_locked(&fx);
     }
-    let fx = u.async_fx;
-    apply_fx_locked(&fx);
-    u.async_fx_pending = false;
 }
 
 fn apply_bpm_locked(bpm: u16, valid: bool) {
@@ -844,21 +947,33 @@ fn refresh_preset_label_locked() {
 }
 
 fn async_apply_preset_cb() {
-    let u = ui();
-    if !u.async_preset_pending {
-        return;
+    assert_lvgl_task("async_apply_preset");
+    // Keep the inbox lock while reading the preset cache so setters cannot tear
+    // the fixed buffer mid-label update.
+    let pending = with_inbox(|u| {
+        if !u.async_preset_pending {
+            return false;
+        }
+        u.async_preset_pending = false;
+        true
+    });
+    if pending {
+        refresh_preset_label_locked();
     }
-    u.async_preset_pending = false;
-    refresh_preset_label_locked();
 }
 
 fn async_apply_bpm_cb() {
-    let u = ui();
-    if !u.async_bpm_pending {
-        return;
+    assert_lvgl_task("async_apply_bpm");
+    let pending = with_inbox(|u| {
+        if !u.async_bpm_pending {
+            return None;
+        }
+        u.async_bpm_pending = false;
+        Some((u.async_bpm, u.async_bpm_valid))
+    });
+    if let Some((bpm, valid)) = pending {
+        apply_bpm_locked(bpm, valid);
     }
-    u.async_bpm_pending = false;
-    apply_bpm_locked(u.async_bpm, u.async_bpm_valid);
 }
 
 /* ------------------------------------------------------------ chain rail */
@@ -1234,12 +1349,18 @@ fn show_tempo_view(on: bool, write_pedal: bool) {
 }
 
 fn async_apply_tempo_mode_cb() {
-    let u = ui();
-    if !u.async_tempo_mode_pending {
+    assert_lvgl_task("async_apply_tempo_mode");
+    let pending = with_inbox(|u| {
+        if !u.async_tempo_mode_pending {
+            return None;
+        }
+        u.async_tempo_mode_pending = false;
+        Some(u.async_tempo_mode)
+    });
+    let Some(on) = pending else {
         return;
-    }
-    u.async_tempo_mode_pending = false;
-    let on = u.async_tempo_mode;
+    };
+    let u = ui();
     if on && !u.tempo_view {
         show_tempo_view(true, false);
     } else if !on && u.tempo_view {
@@ -3467,12 +3588,13 @@ fn build_ui() {
         ui().ble_icon_timer = lv::timer_create(Some(ble_icon_timer_cb), 400, ptr::null_mut());
     }
     refresh_ble_icon_locked();
-    apply_tuner_locked(unsafe { nano_tuner_get() });
+    apply_tuner_locked(tuner_state());
     apply_fx_locked(fx_state());
     update_chain_blocks_locked(amp_state(), fx_state());
 }
 
 unsafe extern "C" fn ui_build_timer_cb(timer: *mut lv_timer_t) {
+    note_lvgl_task();
     build_ui();
     BUILD_DONE.store(true, Ordering::Release);
     lv::timer_delete(timer);
@@ -3616,95 +3738,99 @@ pub unsafe extern "C" fn nano_ui_start() -> esp_err_t {
 /// Refresh on-screen amp values (safe from any task).
 #[no_mangle]
 pub unsafe extern "C" fn nano_ui_set_amp(amp: *const NanoAmpC) {
-    let u = ui();
-    match unsafe { amp.as_ref() }.filter(|a| a.valid) {
-        Some(amp) => {
-            if u.ui_amp_cache_valid && struct_bytes(amp) == struct_bytes(&u.ui_amp_cache) {
-                return;
+    with_inbox(|u| {
+        match unsafe { amp.as_ref() }.filter(|a| a.valid) {
+            Some(amp) => {
+                if u.ui_amp_cache_valid && struct_bytes(amp) == struct_bytes(&u.ui_amp_cache) {
+                    return;
+                }
+                u.ui_amp_cache = *amp;
+                u.ui_amp_cache_valid = true;
+                u.async_amp = *amp;
+                u.async_amp_have = true;
             }
-            u.ui_amp_cache = *amp;
-            u.ui_amp_cache_valid = true;
-            u.async_amp = *amp;
-            u.async_amp_have = true;
-        }
-        None => {
-            if !u.ui_amp_cache_valid {
-                return;
+            None => {
+                if !u.ui_amp_cache_valid {
+                    return;
+                }
+                u.ui_amp_cache_valid = false;
+                u.async_amp_have = false;
             }
-            u.ui_amp_cache_valid = false;
-            u.async_amp_have = false;
         }
-    }
-    u.dispatch_mask |= UI_DISP_AMP;
-    ui_request_dispatch();
+        u.dispatch_mask |= UI_DISP_AMP;
+        ui_request_dispatch();
+    });
 }
 
 /// Update BLE status line.
 #[no_mangle]
 pub unsafe extern "C" fn nano_ui_set_ble_connected(connected: bool) {
-    let u = ui();
-    u.async_ble_connected = connected;
-    u.async_ble_pending = true;
-    u.dispatch_mask |= UI_DISP_BLE;
-    ui_request_dispatch();
+    with_inbox(|u| {
+        u.async_ble_connected = connected;
+        u.async_ble_pending = true;
+        u.dispatch_mask |= UI_DISP_BLE;
+        ui_request_dispatch();
+    });
 }
 
 /// Refresh tuner tab (note/cents/status).
 #[no_mangle]
 pub unsafe extern "C" fn nano_ui_set_tuner(tuner: *const NanoTunerC) {
-    let u = ui();
     let Some(tuner) = (unsafe { tuner.as_ref() }) else {
         return;
     };
-    if u.tuner_note.is_null() {
-        return;
-    }
-    u.async_tuner = *tuner;
-    u.async_tuner_pending = true;
-    u.dispatch_mask |= UI_DISP_TUNER;
-    ui_request_dispatch();
+    with_inbox(|u| {
+        if u.tuner_note.is_null() {
+            return;
+        }
+        u.async_tuner = *tuner;
+        u.async_tuner_pending = true;
+        u.dispatch_mask |= UI_DISP_TUNER;
+        ui_request_dispatch();
+    });
 }
 
 /// Update header preset name (safe from any task).
 #[no_mangle]
 pub unsafe extern "C" fn nano_ui_set_preset_name(name: *const c_char) {
-    let u = ui();
     let incoming = c_str(name);
+    with_inbox(|u| {
+        if u.ui_preset_cache_valid && c_buf_str(&u.ui_preset_cache) == incoming {
+            return;
+        }
 
-    if u.ui_preset_cache_valid && c_buf_str(&u.ui_preset_cache) == incoming {
-        return;
-    }
-
-    copy_into(&mut u.ui_preset_cache, incoming);
-    u.ui_preset_cache_valid = true;
-    copy_into(&mut u.async_preset, incoming);
-    u.async_preset_pending = true;
-    u.dispatch_mask |= UI_DISP_PRESET;
-    ui_request_dispatch();
+        copy_into(&mut u.ui_preset_cache, incoming);
+        u.ui_preset_cache_valid = true;
+        copy_into(&mut u.async_preset, incoming);
+        u.async_preset_pending = true;
+        u.dispatch_mask |= UI_DISP_PRESET;
+        ui_request_dispatch();
+    });
 }
 
 /// Update header tempo readout (safe from any task).
 #[no_mangle]
 pub unsafe extern "C" fn nano_ui_set_bpm(bpm: u16, valid: bool) {
-    let u = ui();
-    if valid {
-        if u.ui_bpm_cache_valid && u.ui_bpm_cache == bpm {
-            return;
+    with_inbox(|u| {
+        if valid {
+            if u.ui_bpm_cache_valid && u.ui_bpm_cache == bpm {
+                return;
+            }
+            u.ui_bpm_cache = bpm;
+            u.ui_bpm_cache_valid = true;
+        } else {
+            if !u.ui_bpm_cache_valid {
+                return;
+            }
+            u.ui_bpm_cache_valid = false;
         }
-        u.ui_bpm_cache = bpm;
-        u.ui_bpm_cache_valid = true;
-    } else {
-        if !u.ui_bpm_cache_valid {
-            return;
-        }
-        u.ui_bpm_cache_valid = false;
-    }
 
-    u.async_bpm = bpm;
-    u.async_bpm_valid = valid;
-    u.async_bpm_pending = true;
-    u.dispatch_mask |= UI_DISP_BPM;
-    ui_request_dispatch();
+        u.async_bpm = bpm;
+        u.async_bpm_valid = valid;
+        u.async_bpm_pending = true;
+        u.dispatch_mask |= UI_DISP_BPM;
+        ui_request_dispatch();
+    });
 }
 
 /// Live tap-tempo notify: update BPM and rephase the beat blinker to this
@@ -3715,50 +3841,53 @@ pub unsafe extern "C" fn nano_ui_bpm_tap(bpm: u16) {
         return;
     }
 
-    let u = ui();
-    u.ui_bpm_cache = bpm;
-    u.ui_bpm_cache_valid = true;
-    u.async_bpm = bpm;
-    u.async_bpm_valid = true;
-    u.async_bpm_pending = true;
-    u.dispatch_mask |= UI_DISP_BPM;
-    ui_request_dispatch();
+    with_inbox(|u| {
+        u.ui_bpm_cache = bpm;
+        u.ui_bpm_cache_valid = true;
+        u.async_bpm = bpm;
+        u.async_bpm_valid = true;
+        u.async_bpm_pending = true;
+        u.dispatch_mask |= UI_DISP_BPM;
+        ui_request_dispatch();
+    });
 }
 
 /// Pedal Tempo Mode on/off (Footswitch / peer notify). Shows or hides the Tempo
 /// screen without writing enter/exit to the pedal. Safe from any task.
 #[no_mangle]
 pub unsafe extern "C" fn nano_ui_set_tempo_mode(active: bool) {
-    let u = ui();
-    u.async_tempo_mode = active;
-    u.async_tempo_mode_pending = true;
-    u.dispatch_mask |= UI_DISP_TEMPO;
-    ui_request_dispatch();
+    with_inbox(|u| {
+        u.async_tempo_mode = active;
+        u.async_tempo_mode_pending = true;
+        u.dispatch_mask |= UI_DISP_TEMPO;
+        ui_request_dispatch();
+    });
 }
 
 /// Refresh gate + FX tabs.
 #[no_mangle]
 pub unsafe extern "C" fn nano_ui_set_fx(fx: *const NanoFxState) {
-    let u = ui();
-    match unsafe { fx.as_ref() } {
-        Some(fx) => {
-            if u.ui_fx_cache_valid && struct_bytes(fx) == struct_bytes(&u.ui_fx_cache) {
-                return;
+    with_inbox(|u| {
+        match unsafe { fx.as_ref() } {
+            Some(fx) => {
+                if u.ui_fx_cache_valid && struct_bytes(fx) == struct_bytes(&u.ui_fx_cache) {
+                    return;
+                }
+                u.ui_fx_cache = *fx;
+                u.ui_fx_cache_valid = true;
+                u.async_fx = *fx;
+                u.async_fx_pending = true;
             }
-            u.ui_fx_cache = *fx;
-            u.ui_fx_cache_valid = true;
-            u.async_fx = *fx;
-            u.async_fx_pending = true;
-        }
-        None => {
-            if !u.ui_fx_cache_valid {
-                return;
+            None => {
+                if !u.ui_fx_cache_valid {
+                    return;
+                }
+                u.ui_fx_cache_valid = false;
+                u.async_fx_pending = false;
+                u.async_fx = unsafe { core::mem::zeroed() };
             }
-            u.ui_fx_cache_valid = false;
-            u.async_fx_pending = false;
-            u.async_fx = unsafe { core::mem::zeroed() };
         }
-    }
-    u.dispatch_mask |= UI_DISP_FX;
-    ui_request_dispatch();
+        u.dispatch_mask |= UI_DISP_FX;
+        ui_request_dispatch();
+    });
 }

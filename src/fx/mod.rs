@@ -11,9 +11,10 @@ pub mod util;
 pub use catalog::{nano_fx_catalog, nano_fx_catalog_count};
 pub use engine::{
     nano_fx_begin_param_refresh, nano_fx_dump_has_gate_fields, nano_fx_feed_c305, nano_fx_get,
-    nano_fx_parse_preset, nano_fx_reset, nano_fx_sync_from_preset, nano_fx_try_apply_gate_bytes,
-    nano_fx_write_block_enabled, nano_fx_write_block_model, nano_fx_write_gate_enabled,
-    nano_fx_write_gate_reduction, nano_fx_write_param_display, nano_fx_write_param_normalized,
+    nano_fx_parse_preset, nano_fx_reset, nano_fx_snapshot, nano_fx_sync_from_preset,
+    nano_fx_try_apply_gate_bytes, nano_fx_write_block_enabled, nano_fx_write_block_model,
+    nano_fx_write_gate_enabled, nano_fx_write_gate_reduction, nano_fx_write_param_display,
+    nano_fx_write_param_normalized,
 };
 pub use models::{
     nano_fx_allowed_model_count, nano_fx_block_label, nano_fx_block_model_text,
@@ -32,6 +33,7 @@ pub fn ensure_linked() {
     let fns: &[*const ()] = &[
         nano_fx_reset as *const (),
         nano_fx_get as *const (),
+        nano_fx_snapshot as *const (),
         nano_fx_parse_preset as *const (),
         nano_fx_sync_from_preset as *const (),
         nano_fx_begin_param_refresh as *const (),

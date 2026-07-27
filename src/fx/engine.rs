@@ -3,7 +3,6 @@
 
 use core::ffi::{c_char, c_void, CStr};
 use core::ptr;
-use core::slice;
 use std::ffi::CString;
 
 // Explicit imports: `sys` also re-exports the `NANO_FX_*` defines from the header.
@@ -22,6 +21,7 @@ use super::params::{clampf, format_param, normalized_to_display};
 use super::shared::Shared;
 use super::types::*;
 use super::util::c_str;
+use crate::seqlock::SeqLock;
 
 const TAG: &str = "nano_fx";
 const FX_REFRESH_TIMEOUT_US: u64 = 900 * 1000;
@@ -104,9 +104,20 @@ impl Fx {
 }
 
 static FX: Shared<Fx> = Shared::new(Fx::new());
+/// Odd/even seqlock for consistent UI snapshots of `NanoFxState`.
+static FX_SEQ: SeqLock = SeqLock::new();
 
 fn fx() -> &'static mut Fx {
     FX.get()
+}
+
+fn fx_publish() {
+    FX_SEQ.publish();
+}
+
+fn push_fx_ui() {
+    fx_publish();
+    unsafe { crate::ui::screen::nano_ui_set_fx(&fx().fx) };
 }
 
 fn now_us() -> i64 {
@@ -796,7 +807,7 @@ fn send_next_refresh() {
     s.refresh_active = false;
     s.refresh_q_len = 0;
     s.refresh_q_head = 0;
-    unsafe { crate::ui::screen::nano_ui_set_fx(&s.fx) };
+    push_fx_ui();
 }
 
 fn run_begin_param_refresh() {
@@ -818,7 +829,7 @@ fn run_begin_param_refresh() {
 
     if s.refresh_q_len == 0 {
         info!(target: TAG, "No active FX blocks to refresh");
-        unsafe { crate::ui::screen::nano_ui_set_fx(&s.fx) };
+        push_fx_ui();
         return;
     }
 
@@ -956,6 +967,7 @@ pub extern "C" fn nano_fx_reset() {
             unsafe { esp_timer_stop(timer) };
         }
     }
+    fx_publish();
 }
 
 #[no_mangle]
@@ -968,6 +980,25 @@ pub extern "C" fn nano_fx_get() -> *const NanoFxState {
     }
 }
 
+/// Consistent copy for the UI task (seqlock). Returns false when FX is not valid.
+#[no_mangle]
+pub unsafe extern "C" fn nano_fx_snapshot(out: *mut NanoFxState) -> bool {
+    if out.is_null() {
+        return false;
+    }
+
+    let valid = FX_SEQ.read(|| {
+        let s = fx();
+        if s.fx.valid {
+            unsafe { *out = s.fx };
+            true
+        } else {
+            false
+        }
+    });
+    valid
+}
+
 /// Parse gate + FX block models/bypass from preset state blob.
 #[no_mangle]
 pub unsafe extern "C" fn nano_fx_parse_preset(
@@ -975,12 +1006,14 @@ pub unsafe extern "C" fn nano_fx_parse_preset(
     len: usize,
     out: *mut NanoFxState,
 ) -> bool {
-    if data.is_null() || len == 0 || out.is_null() {
+    if out.is_null() {
         return false;
     }
-    parse_preset(unsafe { slice::from_raw_parts(data, len) }, unsafe {
-        &mut *out
-    })
+    let Some(data) = (unsafe { crate::memsafe::bytes_at_most(data, len, crate::memsafe::BLOB_MAX) })
+    else {
+        return false;
+    };
+    parse_preset(data, unsafe { &mut *out })
 }
 
 fn parse_preset(data: &[u8], out: &mut NanoFxState) -> bool {
@@ -1157,10 +1190,10 @@ fn parse_preset(data: &[u8], out: &mut NanoFxState) -> bool {
 /// True when raw dump bytes contain gate amount (f53) and/or bypass (f54) tags.
 #[no_mangle]
 pub unsafe extern "C" fn nano_fx_dump_has_gate_fields(data: *const u8, len: usize) -> bool {
-    if data.is_null() || len == 0 {
+    let Some(data) = (unsafe { crate::memsafe::bytes_at_most(data, len, crate::memsafe::BLOB_MAX) })
+    else {
         return false;
-    }
-    let data = unsafe { slice::from_raw_parts(data, len) };
+    };
     scan_gate_amount_field53(data).is_some() || scan_gate_bypass_field54(data).is_some()
 }
 
@@ -1168,10 +1201,13 @@ pub unsafe extern "C" fn nano_fx_dump_has_gate_fields(data: *const u8, len: usiz
 /// (full preset dump or a late high-bit C305 tail after a mid-dump gap).
 #[no_mangle]
 pub unsafe extern "C" fn nano_fx_try_apply_gate_bytes(data: *const u8, len: usize) -> bool {
-    if data.is_null() || len < 6 {
+    let Some(data) = (unsafe { crate::memsafe::bytes_at_most(data, len, crate::memsafe::BLOB_MAX) })
+    else {
+        return false;
+    };
+    if data.len() < 6 {
         return false;
     }
-    let data = unsafe { slice::from_raw_parts(data, len) };
     if scan_gate_amount_field53(data).is_none() && scan_gate_bypass_field54(data).is_none() {
         return false;
     }
@@ -1182,7 +1218,7 @@ pub unsafe extern "C" fn nano_fx_try_apply_gate_bytes(data: *const u8, len: usiz
     }
 
     apply_gate_from_parsed(&parsed);
-    unsafe { crate::ui::screen::nano_ui_set_fx(&fx().fx) };
+    push_fx_ui();
     true
 }
 
@@ -1200,10 +1236,11 @@ pub extern "C" fn nano_fx_begin_param_refresh() {
 /// Parse preset blob into internal FX state and start param refresh.
 #[no_mangle]
 pub unsafe extern "C" fn nano_fx_sync_from_preset(data: *const u8, len: usize) {
-    if data.is_null() || len == 0 {
+    let Some(data) = (unsafe { crate::memsafe::bytes_at_most(data, len, crate::memsafe::BLOB_MAX) })
+    else {
         return;
-    }
-    sync_from_preset(unsafe { slice::from_raw_parts(data, len) });
+    };
+    sync_from_preset(data);
 }
 
 fn sync_from_preset(data: &[u8]) {
@@ -1275,17 +1312,21 @@ fn sync_from_preset(data: &[u8]) {
     }
 
     s.fx.valid = true;
-    unsafe { crate::ui::screen::nano_ui_set_fx(&s.fx) };
+    push_fx_ui();
     nano_fx_begin_param_refresh();
 }
 
 /// Feed C305; returns true if consumed (FX param refresh response).
 #[no_mangle]
 pub unsafe extern "C" fn nano_fx_feed_c305(data: *const u8, len: usize) -> bool {
-    if data.is_null() || len < 10 {
+    let Some(data) = (unsafe { crate::memsafe::bytes_at_most(data, len, crate::memsafe::PKT_MAX) })
+    else {
+        return false;
+    };
+    if data.len() < 10 {
         return false;
     }
-    feed_c305(unsafe { slice::from_raw_parts(data, len) })
+    feed_c305(data)
 }
 
 fn feed_c305(data: &[u8]) -> bool {
@@ -1391,7 +1432,7 @@ fn feed_c305(data: &[u8]) -> bool {
         esp_timer_stop(s.refresh_timeout_timer);
         esp_timer_start_once(s.refresh_gap_timer, FX_REFRESH_GAP_US);
     }
-    unsafe { crate::ui::screen::nano_ui_set_fx(&s.fx) };
+    push_fx_ui();
     true
 }
 
@@ -1411,7 +1452,7 @@ pub extern "C" fn nano_fx_write_gate_enabled(enabled: bool) -> bool {
         return false;
     }
     info!(target: TAG, "Gate {}", if enabled { "ON" } else { "OFF" });
-    unsafe { crate::ui::screen::nano_ui_set_fx(&s.fx) };
+    push_fx_ui();
     if crate::ble::nano_ble_write_c304(
         (if enabled { c"Gate ON" } else { c"Gate OFF" }).as_ptr(),
         buf[..n].as_ptr(),
@@ -1438,7 +1479,7 @@ pub extern "C" fn nano_fx_write_gate_reduction(pct: u8) -> bool {
         return false;
     }
 
-    unsafe { crate::ui::screen::nano_ui_set_fx(&s.fx) };
+    push_fx_ui();
     if crate::ble::nano_ble_write_c304(
         c_label(&format!("Gate amount {pct}%")).as_ptr(),
         buf[..n].as_ptr(),
@@ -1518,7 +1559,7 @@ pub unsafe extern "C" fn nano_fx_write_block_model(
     }
 
     enqueue_param_refresh(block);
-    unsafe { crate::ui::screen::nano_ui_set_fx(&s.fx) };
+    push_fx_ui();
     true
 }
 
@@ -1553,7 +1594,7 @@ pub extern "C" fn nano_fx_write_block_enabled(block: u32, enabled: bool) -> bool
         31,
     );
     info!(target: TAG, "{label}");
-    unsafe { crate::ui::screen::nano_ui_set_fx(&s.fx) };
+    push_fx_ui();
 
     if crate::ble::nano_ble_write_c304(
         c_label(&label).as_ptr(),
@@ -1599,6 +1640,7 @@ pub extern "C" fn nano_fx_write_param_normalized(
     param.display = normalized_to_display(name, normalized);
     param.valid = true;
     s.fx.valid = true;
+    fx_publish();
 
     let mut buf = [0u8; 24];
     let n = builders::fx_param_payload(SLOT_CFG[idx].model_slot, param_index, normalized, &mut buf);

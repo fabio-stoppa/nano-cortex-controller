@@ -4,8 +4,7 @@
 use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_void};
 use core::ptr;
-use core::slice;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use esp_idf_svc::sys::{
     esp_timer_create, esp_timer_create_args_t, esp_timer_get_time, esp_timer_handle_t,
@@ -17,6 +16,7 @@ use nano_wire::builders;
 use nano_wire::varint::read_varint;
 
 use super::types::*;
+use crate::seqlock::SeqLock;
 
 const TAG: &str = "nano_tuner";
 const PITCH_MAGIC0: u8 = 0x23;
@@ -39,9 +39,8 @@ const NOTE_NAMES: [&str; 12] = [
 
 struct Shared<T>(UnsafeCell<T>);
 
-// Same contract as the C port: tuner state is touched from the GATT callback,
-// the C305 worker, the esp_timer task and the UI task, ordered only by the
-// BLE event flow (readers use the seqlock in `nano_tuner_snapshot`).
+// Task contract: GATT notify, C305 worker, esp_timer, UI. Snapshot readers use
+// the seqlock in `nano_tuner_snapshot`. Not a Rust Mutex — see `crate::fx::shared`.
 unsafe impl<T> Sync for Shared<T> {}
 
 impl<T> Shared<T> {
@@ -124,7 +123,9 @@ impl Tuner {
 }
 
 static TUNER: Shared<Tuner> = Shared::new(Tuner::new());
-static TUNER_SEQ: AtomicU32 = AtomicU32::new(0);
+static TUNER_SEQ: SeqLock = SeqLock::new();
+/// Hot-path flag for BLE worker — avoid live `nano_tuner_get()` pointer races.
+static TUNER_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 fn tn() -> &'static mut Tuner {
     TUNER.get()
@@ -135,7 +136,8 @@ fn now_us() -> i64 {
 }
 
 fn tuner_publish() {
-    TUNER_SEQ.fetch_add(1, Ordering::Release);
+    TUNER_ACTIVE.store(tn().tuner.active, Ordering::Release);
+    TUNER_SEQ.publish();
 }
 
 fn mark_tuner_live_from_c305() {
@@ -1035,11 +1037,11 @@ pub extern "C" fn nano_tuner_tick() {
 
 #[no_mangle]
 pub unsafe extern "C" fn nano_tuner_feed_c305(data: *const u8, len: usize) -> bool {
-    if data.is_null() || len == 0 {
+    let Some(data) = (unsafe { crate::memsafe::bytes_at_most(data, len, crate::memsafe::PKT_MAX) })
+    else {
         expire_stale_pitch();
         return false;
-    }
-    let data = unsafe { slice::from_raw_parts(data, len) };
+    };
 
     expire_stale_pitch();
 
@@ -1066,19 +1068,26 @@ pub unsafe extern "C" fn nano_tuner_feed_c305(data: *const u8, len: usize) -> bo
 }
 
 /// Apply pitch immediately from the GATT notify path (no worker hop).
-#[no_mangle]
-pub unsafe extern "C" fn nano_tuner_feed_pitch_fast(data: *const u8, len: usize) -> bool {
-    if data.is_null() || len == 0 || rx_active_blocked() {
+pub fn feed_pitch_fast_bytes(data: &[u8]) -> bool {
+    if data.is_empty() || rx_active_blocked() {
         return false;
     }
-    let data = unsafe { slice::from_raw_parts(data, len) };
-
     // Pitch only — no sniff, no 2D/mode, safe to call from GATT notify context.
     if try_parse_pitch(data) {
         tn().last_raw_sniff_us = now_us();
         return true;
     }
     false
+}
+
+/// Apply pitch immediately from the GATT notify path (no worker hop).
+#[no_mangle]
+pub unsafe extern "C" fn nano_tuner_feed_pitch_fast(data: *const u8, len: usize) -> bool {
+    let Some(data) = (unsafe { crate::memsafe::bytes_at_most(data, len, crate::memsafe::PKT_MAX) })
+    else {
+        return false;
+    };
+    feed_pitch_fast_bytes(data)
 }
 
 #[no_mangle]
@@ -1122,21 +1131,22 @@ pub extern "C" fn nano_tuner_get() -> *const NanoTunerC {
     &tn().tuner as *const NanoTunerC
 }
 
-/// Consistent copy for UI thread (seqlock).
+/// Consistent copy for UI thread (odd/even seqlock).
 #[no_mangle]
 pub unsafe extern "C" fn nano_tuner_snapshot(out: *mut NanoTunerC) {
     if out.is_null() {
         return;
     }
 
-    loop {
-        let s1 = TUNER_SEQ.load(Ordering::Acquire);
+    TUNER_SEQ.read(|| {
         unsafe { *out = tn().tuner };
-        let s2 = TUNER_SEQ.load(Ordering::Acquire);
-        if s1 == s2 {
-            return;
-        }
-    }
+    });
+}
+
+/// Lock-free tuner-active check for BLE / worker hot paths.
+#[no_mangle]
+pub extern "C" fn nano_tuner_is_active() -> bool {
+    TUNER_ACTIVE.load(Ordering::Acquire)
 }
 
 /// Human-readable mute/bypass label matching the Nano pedal (not raw wire enum).
