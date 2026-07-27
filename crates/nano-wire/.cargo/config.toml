@@ -1,0 +1,6 @@
+# Host tests — do not inherit the firmware Xtensa target from the repo root.
+[build]
+target = "x86_64-unknown-linux-gnu"
+
+[unstable]
+build-std = []
