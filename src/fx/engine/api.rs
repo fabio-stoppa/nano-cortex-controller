@@ -78,12 +78,21 @@ pub fn nano_fx_parse_preset(data: &[u8], out: &mut NanoFxState) -> bool {
     parse_preset(data, out)
 }
 
-/// True when raw dump bytes contain gate amount (f53) and/or bypass (f54) tags.
+/// True when the dump carries a gate amount (f53 fixed32 in [0,1]).
+///
+/// Amount alone is enough for UI: omitted f54 means ON (proto3 default). Bypass
+/// alone still leaves GATE AMNT as "-".
 pub fn nano_fx_dump_has_gate_fields(data: &[u8]) -> bool {
     if data.len() > crate::memsafe::BLOB_MAX {
         return false;
     }
-    scan_gate_amount_field53(data).is_some() || scan_gate_bypass_field54(data).is_some()
+    scan_gate_amount_field53(data).is_some()
+}
+
+/// True when live FX gate state can fill INPUT GATE + GATE AMNT (not "-").
+pub fn nano_fx_gate_ui_ready() -> bool {
+    let g = &fx().fx.gate;
+    g.valid && g.on_known && g.reduction_valid
 }
 
 /// True when dump includes modern FX model-id fields (48–52).

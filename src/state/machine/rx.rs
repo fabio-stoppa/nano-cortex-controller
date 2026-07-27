@@ -29,7 +29,7 @@ const STATE_RX_TIMEOUT_US: i64 = 5000 * 1000;
 /// Max times we defer finish while waiting for a gate tail after mid-f34 truncation.
 const STATE_INCOMPLETE_DEFER_MAX: u32 = 2;
 /// Re-request current state when INITIAL/ROUTINE dump still lacks gate fields.
-const STATE_GATE_RETRY_MAX: u32 = 2;
+const STATE_GATE_RETRY_MAX: u32 = 3;
 /// Re-request when dump salvaged gate but still lacks FX model-id fields 48–52.
 const STATE_FX_RETRY_MAX: u32 = 2;
 /// Quiet window after a chunk when the protobuf still looks truncated.
@@ -397,7 +397,7 @@ pub(super) fn parse_state_buffer() {
         set_label(&mut s.incomplete_probe_label, &label);
         info!(
             target: TAG,
-            "Incomplete state dump ({buf_len} bytes, no gate tail) — waiting ({}/{})",
+            "Incomplete state dump ({buf_len} bytes, no gate amount) — waiting ({}/{})",
             s.incomplete_defer_count, STATE_INCOMPLETE_DEFER_MAX
         );
         // Apply whatever FX/gate/name we already have; keep RX open for late tails.
@@ -448,17 +448,24 @@ pub(super) fn parse_state_buffer() {
         }
     }
 
-    if !crate::fx::nano_fx_dump_has_gate_fields(buf)
+    // Prefer live gate readiness over raw tags — catches parse misses and
+    // ensures both INPUT GATE and GATE AMNT leave "-". Force the probe label
+    // so REFRESH_MIN_INTERVAL cannot silently drop the retry.
+    if !crate::fx::nano_fx_gate_ui_ready()
         && s.gate_retry_count < STATE_GATE_RETRY_MAX
-        && (label == "INITIAL" || label == "ROUTINE" || label == "PRESET")
+        && (label == "INITIAL"
+            || label == "ROUTINE"
+            || label == "PRESET"
+            || label == "GATE")
     {
         s.gate_retry_count += 1;
+        set_label(&mut s.state_probe_label, "GATE");
         info!(
             target: TAG,
-            "Gate fields absent after parse — retry {}/{}", s.gate_retry_count, STATE_GATE_RETRY_MAX
+            "Gate UI incomplete after parse — retry {}/{}", s.gate_retry_count, STATE_GATE_RETRY_MAX
         );
         request_current_state_now("Gate sync retry");
-    } else if crate::fx::nano_fx_dump_has_gate_fields(buf) {
+    } else if crate::fx::nano_fx_gate_ui_ready() {
         s.gate_retry_count = 0;
     }
 

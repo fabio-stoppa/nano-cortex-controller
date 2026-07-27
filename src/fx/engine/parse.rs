@@ -208,23 +208,30 @@ fn extract_field_fixed32_float(data: &[u8], field_num: u32) -> Option<f32> {
     found
 }
 
+/// True when `value` is a usable gate amount fixed32 in [0, 1].
+fn gate_amount_norm_ok(value: f32) -> bool {
+    value.is_finite() && (0.0..=1.0).contains(&value)
+}
+
 /// Scan raw dump for gate amount (field 53 fixed32) even if earlier fields are truncated.
+/// Keeps the last in-range hit (same as the sequential walk) so an early false
+/// `AD 03` in binary payload cannot mask the real tail value.
 pub(super) fn scan_gate_amount_field53(data: &[u8]) -> Option<f32> {
     // Tag for field 53 wire5 = (53<<3)|5 = 429 = AD 03
     if data.len() < 6 {
         return None;
     }
+    let mut found = None;
     for i in 0..=(data.len() - 6) {
         if data[i] != 0xAD || data[i + 1] != 0x03 {
             continue;
         }
         let value = le_f32(&data[i + 2..i + 6]);
-        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-            continue;
+        if gate_amount_norm_ok(value) {
+            found = Some(value);
         }
-        return Some(value);
     }
-    None
+    found
 }
 
 /// Scan raw dump for gate bypass (field 54 varint 0/1) even if earlier fields are truncated.
@@ -796,10 +803,12 @@ pub(super) fn parse_preset(data: &[u8], out: &mut NanoFxState) -> bool {
         }
 
         // Amount: field 53 fixed32 in [0,1] → raw 0..255 → percent.
+        // Accept the full range — rejecting ~0.1 as a "placeholder" blanked
+        // INPUT GATE + GATE AMNT whenever amount was ≤~15% and f54 was omitted.
         let mut amt_src = "none";
         let mut gate_norm = -1.0f32;
         match extract_field_fixed32_float(data, 53) {
-            Some(value) if value.is_finite() && (0.0..=1.0).contains(&value) => {
+            Some(value) if gate_amount_norm_ok(value) => {
                 gate_norm = value;
                 amt_src = "walk";
             }
@@ -813,16 +822,10 @@ pub(super) fn parse_preset(data: &[u8], out: &mut NanoFxState) -> bool {
 
         let mut have_amt = false;
         let mut amt_raw = 0u32;
-        if (0.0..=1.0).contains(&gate_norm) {
-            let raw = (gate_norm * 255.0).round().clamp(0.0, 255.0) as u32;
-            // Placeholder ~0.1 in some dumps is not a real amount.
-            if raw > 32 || gate_norm >= 0.15 {
-                amt_raw = raw;
-                out.gate.reduction_pct = ((amt_raw * 100 + 127) / 255) as u8;
-                have_amt = true;
-            } else {
-                amt_src = "none";
-            }
+        if gate_amount_norm_ok(gate_norm) {
+            amt_raw = (gate_norm * 255.0).round().clamp(0.0, 255.0) as u32;
+            out.gate.reduction_pct = ((amt_raw * 100 + 127) / 255) as u8;
+            have_amt = true;
         }
         if have_amt {
             if out.gate.reduction_pct > 100 {
