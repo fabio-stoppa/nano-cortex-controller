@@ -1,6 +1,7 @@
 //! Param-refresh queue and the esp_timer callbacks that drive it.
 
 use core::ffi::{c_void, CStr};
+use core::ptr;
 
 use esp_idf_svc::sys::{
     esp_timer_create, esp_timer_create_args_t, esp_timer_handle_t, esp_timer_start_once,
@@ -27,12 +28,31 @@ pub(super) fn block_model_write_recent(block: u32) -> bool {
     now_us() - s.block_model_write_us[idx] < super::state::FX_MODEL_WRITE_ASSERT_US
 }
 
-/// Preset 1-byte firmware enums often lag behind a BLE model select.
-pub(super) fn preset_model_stale_legacy(local: &NanoFxBlock, preset: &NanoFxBlock) -> bool {
-    if local.model.is_null() || local.model_id_len < 2 || preset.model_id_len != 1 {
-        return false;
+/// Model selected via UI/BLE write; honor only inside the assert window.
+pub(super) fn trusted_model_for(block: u32) -> Option<&'static NanoFxModelDef> {
+    let s = fx();
+    let idx = block as usize;
+    if idx >= NANO_FX_BLOCK_COUNT {
+        return None;
     }
-    local.params_loaded || block_model_write_recent(local.id)
+    let trusted = s.block_trusted_model[idx];
+    if trusted.is_null() {
+        return None;
+    }
+    if !block_model_write_recent(block) {
+        s.block_trusted_model[idx] = ptr::null();
+        s.block_model_write_us[idx] = 0;
+        return None;
+    }
+    // SAFETY: pointer is always a `&'static NanoFxModelDef` from the catalog.
+    Some(unsafe { &*trusted })
+}
+
+/// Drop write-assert trust so the next preset dump can replace models.
+pub(super) fn clear_model_write_trust() {
+    let s = fx();
+    s.block_model_write_us = [0; NANO_FX_BLOCK_COUNT];
+    s.block_trusted_model = [ptr::null(); NANO_FX_BLOCK_COUNT];
 }
 
 fn create_timer(handle: &mut esp_timer_handle_t, cb: unsafe extern "C" fn(*mut c_void), name: &CStr) {

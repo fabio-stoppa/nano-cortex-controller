@@ -86,6 +86,7 @@ fn feed_c305(data: &[u8]) {
         } else {
             info!(target: TAG, "Preset change ACK — requesting state");
             set_label(&mut s.state_probe_label, "PRESET");
+            crate::fx::nano_fx_clear_model_trust();
             if s.mode == NANO_RX_IDLE {
                 request_current_state_now("Preset change");
             }

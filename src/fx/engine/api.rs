@@ -10,7 +10,9 @@ use super::parse::{
     infer_model_by_params, parse_preset, scan_gate_amount_field53, scan_gate_bypass_field54,
     set_generic_model, store_catalog_model_id, try_apply_catalog_model, upgrade_block_model,
 };
-use super::refresh::{block_model_write_recent, ensure_refresh_timers, preset_model_stale_legacy};
+use super::refresh::{
+    block_model_write_recent, clear_model_write_trust, ensure_refresh_timers, trusted_model_for,
+};
 use super::state::{
     fx, fx_publish, now_us, push_fx_ui, FX_ENABLE_ASSERT_US, FX_REFRESH_GAP_US, FX_SEQ, TAG,
 };
@@ -116,6 +118,11 @@ pub fn nano_fx_begin_param_refresh() {
     }
 }
 
+/// Forget UI/BLE model write asserts so the next preset dump can replace slots.
+pub fn nano_fx_clear_model_trust() {
+    clear_model_write_trust();
+}
+
 /// Parse preset blob into internal FX state and start param refresh.
 pub fn nano_fx_sync_from_preset(data: &[u8]) {
     if data.len() > crate::memsafe::BLOB_MAX {
@@ -159,12 +166,14 @@ fn sync_from_preset(data: &[u8]) {
             continue;
         }
 
-        if !s.block_trusted_model[i].is_null()
-            || block_model_write_recent(i as u32)
-            || preset_model_stale_legacy(dst, src)
-        {
+        // Only shield local UI/BLE model writes during the assert window.
+        // Unbounded `block_trusted_model` / `params_loaded` made the first FX
+        // slot (and any UI-changed model) stick across every preset.
+        if block_model_write_recent(i as u32) {
             continue;
         }
+        s.block_trusted_model[i] = ptr::null();
+        s.block_model_write_us[i] = 0;
 
         dst.has_model_id = true;
 
@@ -244,7 +253,7 @@ fn feed_c305(data: &[u8]) -> bool {
     let floats = &floats[..float_count];
 
     let label = BLOCK_LABELS[pending as usize];
-    let trusted = model_ref(s.block_trusted_model[pending as usize]);
+    let trusted = trusted_model_for(pending);
     let block = &mut s.fx.blocks[pending as usize];
 
     try_apply_catalog_model(block);
