@@ -16,9 +16,10 @@ use super::ctx::{
 };
 use super::rx::{
     append_fe_payload, append_state_payload, check_state_rx_timeout, request_current_state_now,
+    schedule_state_parse,
 };
 use super::tempo::{on_tempo_notify, tempo_bpm_f, write_tempo_tap_bpm};
-use super::timers::{ensure_timers, schedule_parse, schedule_refresh};
+use super::timers::{ensure_timers, schedule_refresh};
 
 const STATE_REQUEST_DELAY_US: u64 = 2200 * 1000;
 const TUNER_FAST_SYNC_US: u64 = 400 * 1000;
@@ -116,7 +117,7 @@ fn feed_c305(data: &[u8]) {
             info!(target: TAG, "BPM hunt: C1 state dump chunk len={len}");
         }
         append_state_payload(data);
-        schedule_parse();
+        schedule_state_parse();
         return;
     }
 
@@ -145,7 +146,7 @@ fn feed_c305(data: &[u8]) {
             return;
         }
         append_state_payload(data);
-        schedule_parse();
+        schedule_state_parse();
         return;
     }
 

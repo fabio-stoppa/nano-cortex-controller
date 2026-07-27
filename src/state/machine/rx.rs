@@ -21,15 +21,19 @@ use super::ctx::{
     is_tuner_active, now_us, push_amp_ui, set_label, st, NANO_RX_CURRENT, NANO_RX_IDLE,
     STATE_BUF_MAX, TAG,
 };
-use super::timers::schedule_parse;
+use super::timers::schedule_parse_in;
 
-const REFRESH_MIN_INTERVAL_US: i64 = 400 * 1000;
+const REFRESH_MIN_INTERVAL_US: i64 = 150 * 1000;
 const LIVE_POLL_INTERVAL_US: u64 = 15000 * 1000;
 const STATE_RX_TIMEOUT_US: i64 = 5000 * 1000;
 /// Max times we defer finish while waiting for a gate tail after mid-f34 truncation.
 const STATE_INCOMPLETE_DEFER_MAX: u32 = 2;
 /// Re-request current state when INITIAL/ROUTINE dump still lacks gate fields.
 const STATE_GATE_RETRY_MAX: u32 = 2;
+/// Quiet window after a chunk when the protobuf still looks truncated.
+const PARSE_TAIL_US: u64 = 80 * 1000;
+/// Quiet window when the buffer walks clean — catch a last MTU fragment only.
+const PARSE_COMPLETE_US: u64 = 20 * 1000;
 
 pub(super) fn append_fe_payload(data: &[u8]) {
     let s = st();
@@ -130,6 +134,22 @@ pub(super) fn append_state_payload(data: &[u8]) {
     s.state_len += plen;
     s.state_rx_since_us = now_us();
     info!(target: TAG, "State chunk +{plen} → {} bytes", s.state_len);
+}
+
+/// Pick a short quiet-window: complete dumps finish fast; truncated ones wait for tails.
+pub(super) fn schedule_state_parse() {
+    let s = st();
+    let delay = if s.state_len == 0 {
+        PARSE_COMPLETE_US
+    } else {
+        let buf = state_slice(s.state_len);
+        if state_dump_truncated(buf) {
+            PARSE_TAIL_US
+        } else {
+            PARSE_COMPLETE_US
+        }
+    };
+    schedule_parse_in(delay);
 }
 
 fn finish_state_capture() {
@@ -378,9 +398,11 @@ pub(super) fn parse_state_buffer() {
             "Incomplete state dump ({buf_len} bytes, no gate tail) — waiting ({}/{})",
             s.incomplete_defer_count, STATE_INCOMPLETE_DEFER_MAX
         );
-        // Apply whatever FX/gate we already have; keep RX open for late 0x80 tails.
+        // Apply whatever FX/gate/name we already have; keep RX open for late tails.
         crate::fx::nano_fx_sync_from_preset(buf);
-        schedule_parse();
+        update_preset_label_locked(buf);
+        // Prefer waiting for a real chunk; fall back to one short re-parse.
+        schedule_parse_in(PARSE_TAIL_US);
         return;
     }
 

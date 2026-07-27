@@ -12,8 +12,7 @@ use super::rx::{
     finish_fe_capture, parse_state_buffer, request_current_state_now, send_state_request,
 };
 
-const PARSE_DEBOUNCE_US: u64 = 350 * 1000;
-const REFRESH_DEBOUNCE_US: u64 = 250 * 1000;
+const REFRESH_DEBOUNCE_US: u64 = 50 * 1000;
 const PARSE_TASK_STACK: u32 = 8192;
 const PARSE_TASK_PRIO: UBaseType_t = 5;
 
@@ -112,14 +111,16 @@ unsafe extern "C" fn tuner_watch_poll_cb(_arg: *mut c_void) {
     request_current_state_now("Tuner watch");
 }
 
-pub(super) fn schedule_parse() {
+/// Arm (or re-arm) the parse timer with an explicit quiet-window.
+pub(super) fn schedule_parse_in(delay_us: u64) {
     let s = st();
     if s.parse_timer.is_null() {
         return;
     }
+    let delay = delay_us.max(1);
     unsafe {
         esp_timer_stop(s.parse_timer);
-        esp_timer_start_once(s.parse_timer, PARSE_DEBOUNCE_US);
+        esp_timer_start_once(s.parse_timer, delay);
     }
 }
 
