@@ -62,9 +62,11 @@ fn extract_model_field(data: &[u8], field_num: u32) -> Option<&[u8]> {
             if first.is_none() && !raw.is_empty() {
                 first = Some(raw);
             }
-            // Field 51 wire-0 is the tuner-off marker, not a model ID.
-            if field_num != 51 && !raw.is_empty() && raw.len() <= 3 && find_model_in_blob(raw).is_some()
-            {
+            // Field 51 wire-0 is shared with the tuner-off marker (e.g. 6010 /
+            // BA 2E). Still accept wire-0 when the raw varint bytes are a real
+            // catalog model ID (delay IDs are FA/F4/FB/… 2E). Rejecting all
+            // field-51 wire-0 forced a bogus legacy fallback (field 14).
+            if !raw.is_empty() && raw.len() <= 3 && find_model_in_blob(raw).is_some() {
                 catalog_hit = Some(raw);
             }
             i = next;
@@ -100,6 +102,8 @@ fn extract_model_field(data: &[u8], field_num: u32) -> Option<&[u8]> {
         }
     }
 
+    // For field 51, never fall back to a non-catalog wire-0 value — those are
+    // tuner-off markers. Catalog hits and wire-2 blobs are fine.
     catalog_hit
         .or(best_wire2)
         .or(if field_num != 51 { first } else { None })
@@ -492,6 +496,21 @@ fn try_parse_legacy_model_field(data: &[u8], block_idx: usize, block: &mut NanoF
                 info!(target: TAG, "{label} model: {}", model_name(model));
             }
             None => {
+                // Post2 delays often sit in field 51 as wire-0 catalog IDs; if
+                // that path missed, salvage from a preset-wide delay ID scan
+                // before treating the 1-byte firmware enum as unknown.
+                if block_idx as u32 == NANO_FX_POST2 {
+                    if let Some(delay) = find_post2_delay_in_preset(data) {
+                        store_catalog_model_id(block, delay);
+                        apply_model(block, Some(delay));
+                        info!(
+                            target: TAG,
+                            "{label} model: {} (legacy enum {val} → delay scan)",
+                            model_name(delay)
+                        );
+                        return true;
+                    }
+                }
                 warn!(target: TAG, "{label} legacy model ID {val} not in catalog");
                 block.model = ptr::null();
                 block.param_count = 0;

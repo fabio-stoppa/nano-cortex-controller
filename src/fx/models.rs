@@ -89,9 +89,12 @@ pub fn resolve_legacy_model(block: u32, val: u8) -> Option<&'static NanoFxModelD
         return Some(direct);
     }
 
-    const FIRMWARE_ENUM: [(u32, u8, &str); 2] = [
+    // Per-slot firmware enums (not wire IDs). Correlated against dumps where
+    // modern fields 48–52 carried the matching catalog model.
+    const FIRMWARE_ENUM: [(u32, u8, &str); 3] = [
         (NANO_FX_PRE1, 25, "Transpose"),
         (NANO_FX_POST1, 15, "Doubler"),
+        (NANO_FX_POST2, 3, "Analog Delay"),
     ];
 
     FIRMWARE_ENUM
