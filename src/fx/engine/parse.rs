@@ -2,7 +2,7 @@
 
 use core::ptr;
 
-use log::{info, warn};
+use log::{debug, info, warn};
 
 use nano_wire::varint::read_varint;
 
@@ -293,10 +293,11 @@ pub(super) fn apply_model(block: &mut NanoFxBlock, model: Option<&'static NanoFx
 
     if let Some(model) = model {
         block.param_count = model.param_count;
+        // Leave values invalid until param refresh — UI keeps prior knobs and
+        // shows "…" instead of midpoint defaults.
         for i in 0..(model.param_count as usize).min(NANO_FX_MAX_PARAMS) {
-            let name = c_str(unsafe { *model.param_names.add(i) });
-            block.params[i].display = normalized_to_display(name, 0.5);
-            block.params[i].normalized = 0.5;
+            block.params[i].normalized = 0.0;
+            block.params[i].display = 0.0;
             block.params[i].valid = false;
         }
     }
@@ -626,7 +627,7 @@ pub(super) fn apply_gate_from_parsed(parsed: &NanoFxState) {
     } else {
         "?"
     };
-    info!(
+    debug!(
         target: TAG,
         "Gate sync: {state}{} amount={}%{}",
         if s.fx.gate.on_known { "" } else { " (bypass unknown)" },

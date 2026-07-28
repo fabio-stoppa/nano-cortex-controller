@@ -12,6 +12,15 @@ use crate::syncutil::{SeqLock, Shared};
 pub(super) const TAG: &str = "nano_fx";
 pub(super) const FX_REFRESH_TIMEOUT_US: u64 = 900 * 1000;
 pub(super) const FX_REFRESH_GAP_US: u64 = 80 * 1000;
+/// Coalesce Amount LED→poll off the BLE notify path.
+pub(super) const FX_AMOUNT_UI_GAP_US: u64 = 45 * 1000;
+/// Shorter inter-request gap when re-polling the same Amount-focused block.
+pub(super) const FX_AMOUNT_REFRESH_GAP_US: u64 = 30 * 1000;
+/// Skip Amount poll if a live param echo for that block landed this recently.
+pub(super) const FX_AMOUNT_LIVE_SKIP_US: i64 = 100 * 1000;
+/// After a refresh timeout, drop late replies before starting the next request
+/// (responses are untagged — a late packet would corrupt the next block).
+pub(super) const FX_REFRESH_STALE_GUARD_US: u64 = 150 * 1000;
 pub(super) const FX_ENABLE_ASSERT_US: i64 = 3000 * 1000;
 pub(super) const FX_MODEL_WRITE_ASSERT_US: i64 = 30 * 1000 * 1000;
 
@@ -46,6 +55,7 @@ pub(super) struct Fx {
     pub(super) refresh_timeout_timer: esp_timer_handle_t,
     pub(super) refresh_gap_timer: esp_timer_handle_t,
     pub(super) begin_refresh_timer: esp_timer_handle_t,
+    pub(super) amount_ui_timer: esp_timer_handle_t,
     pub(super) block_on_asserted_us: [i64; NANO_FX_BLOCK_COUNT],
     pub(super) block_model_write_us: [i64; NANO_FX_BLOCK_COUNT],
     /// Protects local Gate ON/OFF against stale live-poll until assert window ends.
@@ -61,6 +71,25 @@ pub(super) struct Fx {
     pub(super) generic_model: NanoFxModelDef,
     pub(super) generic_param_ptrs: [*const c_char; NANO_FX_MAX_PARAMS],
     pub(super) generic_param_names: [[u8; 12]; NANO_FX_MAX_PARAMS],
+    /// Last AMOUNT knob raw (0..255); -1 = none yet.
+    pub(super) last_amount_raw: i16,
+    /// Nano-selected FX block (model slot 0..=4); -1 = unknown.
+    pub(super) pedal_fx_focus: i8,
+    /// Block id snapshotted for the pending Amount poll log.
+    pub(super) amount_log_block: i8,
+    /// True when AMOUNT changed and a poll is due on the UI timer.
+    pub(super) amount_log_pending: bool,
+    /// Last live FX param notify time / block (skip redundant Amount polls).
+    pub(super) live_param_us: i64,
+    pub(super) live_param_block: i8,
+    /// Pending refresh was queued by Amount (shorter gap after response).
+    pub(super) amount_refresh: bool,
+    /// Drop param-refresh replies until this time (post-timeout stale guard).
+    pub(super) refresh_stale_until_us: i64,
+    /// After the next preset sync, re-push UI FX focus to the Nano.
+    pub(super) reassert_focus_after_sync: bool,
+    /// Hold FX param paints until the visible block's refresh finishes.
+    pub(super) suppress_fx_param_ui: bool,
 }
 
 impl Fx {
@@ -75,6 +104,7 @@ impl Fx {
             refresh_timeout_timer: ptr::null_mut(),
             refresh_gap_timer: ptr::null_mut(),
             begin_refresh_timer: ptr::null_mut(),
+            amount_ui_timer: ptr::null_mut(),
             block_on_asserted_us: [0; NANO_FX_BLOCK_COUNT],
             block_model_write_us: [0; NANO_FX_BLOCK_COUNT],
             gate_assert_us: 0,
@@ -85,6 +115,16 @@ impl Fx {
             generic_model: NanoFxModelDef::empty(),
             generic_param_ptrs: [ptr::null(); NANO_FX_MAX_PARAMS],
             generic_param_names: [[0; 12]; NANO_FX_MAX_PARAMS],
+            last_amount_raw: -1,
+            pedal_fx_focus: -1,
+            amount_log_block: -1,
+            amount_log_pending: false,
+            live_param_us: 0,
+            live_param_block: -1,
+            amount_refresh: false,
+            refresh_stale_until_us: 0,
+            reassert_focus_after_sync: false,
+            suppress_fx_param_ui: false,
         }
     }
 }

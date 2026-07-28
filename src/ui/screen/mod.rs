@@ -26,7 +26,8 @@ use crate::fx::{
     nano_fx_allowed_model_count, nano_fx_block_model_text, nano_fx_category_label,
     nano_fx_display_to_slider, nano_fx_format_param, nano_fx_get_allowed_model,
     nano_fx_model_category, nano_fx_model_chain_acronym, nano_fx_param_enum_count,
-    nano_fx_param_is_enum, nano_fx_slider_max, nano_fx_slider_min, nano_fx_slider_to_display,
+    nano_fx_param_is_enum, nano_fx_param_wire_index, nano_fx_slider_max, nano_fx_slider_min,
+    nano_fx_slider_to_display,
     nano_fx_snapshot, nano_fx_write_block_enabled, nano_fx_write_block_model,
     nano_fx_write_gate_enabled, nano_fx_write_gate_reduction, nano_fx_write_param_display,
 };
@@ -65,8 +66,8 @@ mod tuner;
 mod writes;
 
 pub use api::{
-    nano_ui_bpm_tap, nano_ui_set_amp, nano_ui_set_ble_connected, nano_ui_set_bpm,
-    nano_ui_set_fx, nano_ui_set_preset_name, nano_ui_set_tempo_mode, nano_ui_set_tuner,
-    nano_ui_start,
+    nano_ui_bpm_tap, nano_ui_select_fx_block, nano_ui_set_amp, nano_ui_set_ble_connected,
+    nano_ui_set_bpm, nano_ui_set_fx, nano_ui_set_preset_name, nano_ui_set_tempo_mode,
+    nano_ui_set_tuner, nano_ui_start,
 };
 pub use dispatch::nano_ui_dispatch_if_pending;

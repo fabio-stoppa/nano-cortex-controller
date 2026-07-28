@@ -2,10 +2,10 @@
 
 use super::*;
 use super::ble::async_apply_ble_cb;
-use super::chain::{async_apply_tempo_mode_cb, show_tuner_view};
+use super::chain::{apply_fx_focus_locked, async_apply_tempo_mode_cb, show_tuner_view};
 use super::consts::{
     NANO_AMP_CAPTURE_COUNT, UI_DISPATCH_PERIOD_MS, UI_DISP_AMP, UI_DISP_BLE, UI_DISP_BPM,
-    UI_DISP_FX, UI_DISP_PRESET, UI_DISP_TEMPO, UI_DISP_TUNER,
+    UI_DISP_FX, UI_DISP_FX_FOCUS, UI_DISP_PRESET, UI_DISP_TEMPO, UI_DISP_TUNER,
 };
 use super::fx_panel::apply_fx_locked;
 use super::helpers::{amp_state, c_buf_str, set_label_if_changed};
@@ -22,6 +22,19 @@ pub(super) fn ui_run_pending_updates(mask: u8) {
     }
     if (mask & UI_DISP_TUNER) != 0 {
         async_apply_tuner_cb();
+    }
+    if (mask & UI_DISP_FX_FOCUS) != 0 {
+        let focus = with_inbox(|u| {
+            if !u.async_fx_focus_pending {
+                return None;
+            }
+            u.async_fx_focus_pending = false;
+            let block = u.async_fx_focus;
+            (block >= 0).then_some(block as u8)
+        });
+        if let Some(block) = focus {
+            apply_fx_focus_locked(block);
+        }
     }
     if (mask & UI_DISP_FX) != 0 {
         async_apply_fx_cb();
@@ -54,6 +67,8 @@ pub fn nano_ui_dispatch_if_pending() {
                 mask = UI_DISP_TUNER;
             } else if u.async_ble_pending {
                 mask = UI_DISP_BLE;
+            } else if u.async_fx_focus_pending {
+                mask = UI_DISP_FX_FOCUS;
             } else if u.async_fx_pending {
                 mask = UI_DISP_FX;
             } else if u.async_tempo_mode_pending {

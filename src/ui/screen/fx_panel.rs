@@ -11,33 +11,34 @@ use super::params::{
     update_pedal_params_grid_scroll,
 };
 use super::state::{ui, FxParamUi};
-pub(super) fn apply_fx_param_locked(i: usize, block: &NanoFxBlock) {
-    if i >= NANO_FX_MAX_PARAMS || block.model.is_null() {
+pub(super) fn apply_fx_param_locked(display_i: usize, block: &NanoFxBlock) {
+    if display_i >= NANO_FX_MAX_PARAMS || block.model.is_null() {
         return;
     }
 
     let u = ui();
-    let param = u.fx_params[i];
+    let param = u.fx_params[display_i];
     if param.col.is_null() {
         return;
     }
 
-    if i >= block.param_count as usize || block.param_count == 0 {
+    if display_i >= block.param_count as usize || block.param_count == 0 {
+        lv::add_flag(param.col, lv::FLAG_HIDDEN);
+        return;
+    }
+
+    let wire = unsafe { block.model.as_ref() }
+        .map(|m| nano_fx_param_wire_index(m, display_i))
+        .unwrap_or(display_i);
+    if wire >= block.param_count as usize {
         lv::add_flag(param.col, lv::FLAG_HIDDEN);
         return;
     }
 
     lv::remove_flag(param.col, lv::FLAG_HIDDEN);
 
-    let pname = c_str(unsafe { (*block.model).param_names.add(i).read() });
+    let pname = c_str(unsafe { (*block.model).param_names.add(wire).read() });
     set_label_if_changed(param.name, &fx_short_param_name(pname));
-
-    let display = if block.params[i].valid {
-        block.params[i].display
-    } else {
-        let mid = (nano_fx_slider_min(pname) + nano_fx_slider_max(pname)) / 2;
-        nano_fx_slider_to_display(pname, mid)
-    };
 
     let smin = nano_fx_slider_min(pname);
     let smax = nano_fx_slider_max(pname);
@@ -47,23 +48,23 @@ pub(super) fn apply_fx_param_locked(i: usize, block: &NanoFxBlock) {
         lv::slider_set_range(param.slider, smin, smax);
     }
 
-    if i as i32 != u.fx_drag_param {
-        let slider_val = nano_fx_display_to_slider(pname, display);
-        set_slider_if_changed(param.slider, slider_val);
-
-        let mut tmp = *block;
-        if !tmp.params[i].valid {
-            tmp.params[i].display = display;
-            tmp.params[i].valid = true;
-        }
-        set_label_if_changed(param.value, &nano_fx_format_param(&tmp, i as u8));
-        u.fx_last_sent[i] = slider_val;
-    }
-
     lv::set_enabled(
         param.slider,
-        u.ble_connected && block.on && block.param_count > 0,
+        u.ble_connected && block.on && block.param_count > 0 && block.params_loaded,
     );
+
+    // Wait for real values — never paint midpoints (that was the preset spike).
+    if !block.params_loaded || !block.params[wire].valid {
+        return;
+    }
+
+    if display_i as i32 != u.fx_drag_param {
+        let display = block.params[wire].display;
+        let slider_val = nano_fx_display_to_slider(pname, display);
+        set_slider_if_changed(param.slider, slider_val);
+        set_label_if_changed(param.value, &nano_fx_format_param(block, wire as u8));
+        u.fx_last_sent[display_i] = slider_val;
+    }
 }
 
 pub(super) fn apply_fx_locked(fx: *const NanoFxState) {
@@ -104,12 +105,7 @@ pub(super) fn apply_fx_locked(fx: *const NanoFxState) {
             let known = fx_ref
                 .map(|f| f.gate.valid && f.gate.on_known)
                 .unwrap_or(false);
-            if !known {
-                if u.gate_on_drag == 0 && u.gate_drag == 0 {
-                    lv::slider_set_value(u.gate_on.slider, 0, lv::ANIM_OFF);
-                    lv::label_set_text(u.gate_on.value, "-");
-                }
-            } else if u.gate_on_drag == 0 && u.gate_drag == 0 {
+            if known && u.gate_on_drag == 0 && u.gate_drag == 0 {
                 let on = if fx_ref.unwrap().gate.on { 1 } else { 0 };
                 set_slider_if_changed(u.gate_on.slider, on);
                 set_label_if_changed(u.gate_on.value, if on != 0 { "On" } else { "Off" });
@@ -120,12 +116,7 @@ pub(super) fn apply_fx_locked(fx: *const NanoFxState) {
             let known = fx_ref
                 .map(|f| f.gate.valid && f.gate.reduction_valid)
                 .unwrap_or(false);
-            if !known {
-                if u.gate_drag == 0 {
-                    lv::slider_set_value(u.gate.slider, 50, lv::ANIM_OFF);
-                    lv::label_set_text(u.gate.value, "-");
-                }
-            } else if u.gate_drag == 0 {
+            if known && u.gate_drag == 0 {
                 let reduction = fx_ref.unwrap().gate.reduction_pct;
                 set_slider_if_changed(u.gate.slider, reduction as i32);
                 set_label_if_changed(u.gate.value, &format!("{reduction}%"));
@@ -152,6 +143,13 @@ pub(super) fn apply_fx_locked(fx: *const NanoFxState) {
         u.fx_ui_sync = false;
         return;
     };
+
+    // After a preset change, leave the last painted knobs alone until the
+    // visible block's refresh returns — then paint once with final values.
+    if crate::fx::nano_fx_params_ui_held() {
+        u.fx_ui_sync = false;
+        return;
+    }
 
     if !fx_panel_is_visible() {
         sync_header_model_locked(fx);

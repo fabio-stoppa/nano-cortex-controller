@@ -468,31 +468,33 @@ static PARAMS_46: ParamNames<11> = ParamNames([
 ]);
 
 static PARAMS_47: ParamNames<5> = ParamNames([
-    c"Mix".as_ptr(),
+    // Wire order: Mix is last (Amount). Catalog UI lists often put Mix first.
     c"Size".as_ptr(),
     c"Pre Delay".as_ptr(),
     c"High Pass".as_ptr(),
     c"Low Pass".as_ptr(),
+    c"Mix".as_ptr(),
 ]);
 
 static PARAMS_48: ParamNames<6> = ParamNames([
-    c"Mix".as_ptr(),
     c"Decay".as_ptr(),
     c"Pre Delay".as_ptr(),
     c"Damping".as_ptr(),
     c"High Pass".as_ptr(),
     c"Low Pass".as_ptr(),
+    c"Mix".as_ptr(),
 ]);
 
 static PARAMS_49: ParamNames<5> = ParamNames([
-    c"Mix".as_ptr(),
     c"Decay".as_ptr(),
     c"Pre Delay".as_ptr(),
     c"High Pass".as_ptr(),
     c"Low Pass".as_ptr(),
+    c"Mix".as_ptr(),
 ]);
 
 static PARAMS_50: ParamNames<6> = ParamNames([
+    // Mind Hall: Amount/Mix is first (matches device + Cortex Cloud).
     c"Mix".as_ptr(),
     c"Decay".as_ptr(),
     c"Pre Delay".as_ptr(),
@@ -502,21 +504,21 @@ static PARAMS_50: ParamNames<6> = ParamNames([
 ]);
 
 static PARAMS_51: ParamNames<7> = ParamNames([
-    c"Mix".as_ptr(),
     c"Decay".as_ptr(),
     c"Pre Delay".as_ptr(),
     c"Mod Speed".as_ptr(),
     c"Mod Depth".as_ptr(),
     c"High Pass".as_ptr(),
     c"Low Pass".as_ptr(),
+    c"Mix".as_ptr(),
 ]);
 
 static PARAMS_52: ParamNames<5> = ParamNames([
-    c"Mix".as_ptr(),
     c"Decay".as_ptr(),
     c"Pre Delay".as_ptr(),
     c"High Pass".as_ptr(),
     c"Low Pass".as_ptr(),
+    c"Mix".as_ptr(),
 ]);
 
 pub const NANO_FX_CATALOG_COUNT: usize = 53;

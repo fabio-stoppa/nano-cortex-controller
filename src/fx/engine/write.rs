@@ -38,6 +38,23 @@ pub(super) fn write_gate_enabled(enabled: bool) -> bool {
     true
 }
 
+/// Tell the Nano which FX slot the Amount knob should control.
+pub(super) fn write_fx_focus(model_slot: u8) -> bool {
+    if model_slot as usize >= NANO_FX_BLOCK_COUNT {
+        return false;
+    }
+    let mut buf = [0u8; 16];
+    let n = builders::fx_slot_focus_payload(model_slot, &mut buf);
+    if n == 0 || !crate::ble::nano_ble_connected() {
+        return false;
+    }
+    let label = c_label(&clip(
+        &format!("FX focus {}", BLOCK_LABELS[model_slot as usize]),
+        31,
+    ));
+    crate::ble::nano_ble_write_c304(&label, &buf[..n]) == ESP_OK
+}
+
 pub(super) fn write_gate_reduction(pct: u8) -> bool {
     let pct = pct.min(100);
     let s = fx();

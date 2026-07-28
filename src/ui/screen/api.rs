@@ -3,8 +3,8 @@
 use super::*;
 use super::build::ui_build_timer_cb;
 use super::consts::{
-    NANO_BPM_MAX, NANO_BPM_MIN, UI_DISP_AMP, UI_DISP_BLE, UI_DISP_BPM, UI_DISP_FX, UI_DISP_PRESET,
-    UI_DISP_TEMPO, UI_DISP_TUNER,
+    NANO_BPM_MAX, NANO_BPM_MIN, UI_DISP_AMP, UI_DISP_BLE, UI_DISP_BPM, UI_DISP_FX, UI_DISP_FX_FOCUS,
+    UI_DISP_PRESET, UI_DISP_TEMPO, UI_DISP_TUNER,
 };
 use super::dispatch::ui_request_dispatch;
 use super::helpers::{c_buf_str, copy_into, struct_bytes};
@@ -178,11 +178,31 @@ pub fn nano_ui_set_fx(fx: &NanoFxState) {
         if u.ui_fx_cache_valid && struct_bytes(fx) == struct_bytes(&u.ui_fx_cache) {
             return;
         }
-        u.ui_fx_cache = *fx;
+        // NanoFxState is ~2KB — avoid Copy temps on the caller stack (esp_timer
+        // callbacks used to overflow the timer task with `u.async_fx = *fx`).
+        unsafe {
+            core::ptr::copy_nonoverlapping(fx, &mut u.ui_fx_cache, 1);
+            core::ptr::copy_nonoverlapping(fx, &mut u.async_fx, 1);
+        }
         u.ui_fx_cache_valid = true;
-        u.async_fx = *fx;
         u.async_fx_pending = true;
         u.dispatch_mask |= UI_DISP_FX;
+        ui_request_dispatch();
+    });
+}
+
+/// Switch the UI to an FX block selected on the Nano (safe from any task).
+pub fn nano_ui_select_fx_block(block: u8) {
+    if block as usize >= 5 {
+        return;
+    }
+    with_inbox(|u| {
+        if u.async_fx_focus_pending && u.async_fx_focus == block as i8 {
+            return;
+        }
+        u.async_fx_focus = block as i8;
+        u.async_fx_focus_pending = true;
+        u.dispatch_mask |= UI_DISP_FX_FOCUS;
         ui_request_dispatch();
     });
 }

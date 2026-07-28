@@ -81,9 +81,9 @@ pub(super) fn try_send_knob_locked(idx: usize, raw: u8, force: bool) {
     }
 }
 
-pub(super) fn try_send_fx_param_locked(idx: usize, slider_val: i32, force: bool) {
+pub(super) fn try_send_fx_param_locked(display_i: usize, slider_val: i32, force: bool) {
     let u = ui();
-    if u.fx_ui_sync || !u.ble_connected || idx >= NANO_FX_MAX_PARAMS {
+    if u.fx_ui_sync || !u.ble_connected || display_i >= NANO_FX_MAX_PARAMS {
         return;
     }
 
@@ -91,23 +91,30 @@ pub(super) fn try_send_fx_param_locked(idx: usize, slider_val: i32, force: bool)
         return;
     };
     let block = &fx.blocks[u.fx_selected as usize];
-    if block.model.is_null() || idx >= block.param_count as usize {
+    if block.model.is_null() || display_i >= block.param_count as usize {
         return;
     }
 
-    let pname = c_str(unsafe { (*block.model).param_names.add(idx).read() });
+    let wire = unsafe { block.model.as_ref() }
+        .map(|m| nano_fx_param_wire_index(m, display_i))
+        .unwrap_or(display_i);
+    if wire >= block.param_count as usize {
+        return;
+    }
+
+    let pname = c_str(unsafe { (*block.model).param_names.add(wire).read() });
     let now = now_us();
     if !force
-        && slider_val == u.fx_last_sent[idx]
-        && now - u.fx_last_send_us[idx] < DRAG_WRITE_INTERVAL_US
+        && slider_val == u.fx_last_sent[display_i]
+        && now - u.fx_last_send_us[display_i] < DRAG_WRITE_INTERVAL_US
     {
         return;
     }
 
     let display = nano_fx_slider_to_display(pname, slider_val);
-    if nano_fx_write_param_display(u.fx_selected, idx as u8, display) {
-        u.fx_last_sent[idx] = slider_val;
-        u.fx_last_send_us[idx] = now;
+    if nano_fx_write_param_display(u.fx_selected, wire as u8, display) {
+        u.fx_last_sent[display_i] = slider_val;
+        u.fx_last_send_us[display_i] = now;
     }
 }
 

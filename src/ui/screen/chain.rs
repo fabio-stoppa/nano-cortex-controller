@@ -199,8 +199,45 @@ pub(super) fn chain_slot_to_fx_block(slot: usize) -> u32 {
     }
 }
 
+pub(super) fn fx_block_to_chain_slot(block: u32) -> usize {
+    match block {
+        NANO_FX_PRE1 => CHAIN_PRE1,
+        NANO_FX_PRE2 => CHAIN_PRE2,
+        NANO_FX_POST1 => CHAIN_PFX1,
+        NANO_FX_POST2 => CHAIN_PFX2,
+        NANO_FX_POST3 => CHAIN_PFX3,
+        _ => CHAIN_PRE1,
+    }
+}
+
 pub(super) fn chain_slot_is_fx(slot: usize) -> bool {
     matches!(slot, CHAIN_PRE1 | CHAIN_PRE2 | CHAIN_PFX1 | CHAIN_PFX2 | CHAIN_PFX3)
+}
+
+/// Switch chain + FX panel to `block` (0..=4). LVGL task only.
+pub(super) fn apply_fx_focus_locked(block: u8) {
+    if block as usize >= 5 {
+        return;
+    }
+    let chain = fx_block_to_chain_slot(block as u32);
+    let u = ui();
+    if u.fx_selected == block as u32
+        && u.chain_selected == chain
+        && !u.tuner_view
+        && !u.tempo_view
+    {
+        return;
+    }
+
+    if u.tuner_view || u.tempo_view {
+        layout_chrome_for_tuner(false);
+    }
+    u.tuner_view = false;
+    u.chain_selected = chain;
+    u.fx_selected = block as u32;
+    show_content_for_chain(chain);
+    apply_fx_locked(fx_state());
+    update_chain_blocks_locked(amp_state(), fx_state());
 }
 
 pub(super) fn show_content_for_chain(slot: usize) {
@@ -510,6 +547,8 @@ pub(super) unsafe extern "C" fn chain_block_btn_event_cb(e: *mut lv_event_t) {
 
     if chain_slot_is_fx(idx) {
         u.fx_selected = chain_slot_to_fx_block(idx);
+        // Align Nano Amount target with the on-screen FX block.
+        crate::fx::nano_fx_focus_from_ui(u.fx_selected as u8);
     }
 
     show_content_for_chain(idx);

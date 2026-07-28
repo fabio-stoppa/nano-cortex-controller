@@ -16,6 +16,7 @@ pub(super) const UI_DISP_FX: u8 = 1 << 3;
 pub(super) const UI_DISP_BPM: u8 = 1 << 4;
 pub(super) const UI_DISP_PRESET: u8 = 1 << 5;
 pub(super) const UI_DISP_TEMPO: u8 = 1 << 6;
+pub(super) const UI_DISP_FX_FOCUS: u8 = 1 << 7;
 
 pub(super) const CHAIN_BLOCK_COUNT: usize = 6;
 pub(super) const UI_EDGE_PAD: i32 = 1;

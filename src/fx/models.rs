@@ -23,6 +23,31 @@ pub fn model_name(model: &NanoFxModelDef) -> &'static str {
     c_str(model.name)
 }
 
+/// Wire indices in UI order. `None` means identity (`display_i == wire_i`).
+///
+/// Some reverbs store Mix last on the wire (Amount target) but we still want
+/// Mix first in the param grid — same idea as the web editor `displayOrder`.
+pub fn param_display_order(model: &NanoFxModelDef) -> Option<&'static [u8]> {
+    match model_name(model) {
+        "Ambience" | "Hall" | "Room" => Some(&[4, 0, 1, 2, 3]),
+        "Cave" => Some(&[5, 0, 1, 2, 3, 4]),
+        "Modulated" => Some(&[6, 0, 1, 2, 3, 4, 5]),
+        _ => None,
+    }
+}
+
+/// Map a UI cell index to the device/wire param index.
+pub fn param_wire_index(model: &NanoFxModelDef, display_index: usize) -> usize {
+    match param_display_order(model) {
+        Some(order) if display_index < order.len() => order[display_index] as usize,
+        _ => display_index,
+    }
+}
+
+pub fn nano_fx_param_wire_index(model: &NanoFxModelDef, display_index: usize) -> usize {
+    param_wire_index(model, display_index)
+}
+
 pub fn model_ptr(model: Option<&'static NanoFxModelDef>) -> *const NanoFxModelDef {
     model.map_or(ptr::null(), |m| m as *const NanoFxModelDef)
 }

@@ -140,6 +140,9 @@ pub(super) struct Ui {
 
     pub(super) async_fx: NanoFxState,
     pub(super) async_fx_pending: bool,
+    /// Pedal/Amount requested FX block focus (-1 none); applied on LVGL thread.
+    pub(super) async_fx_focus: i8,
+    pub(super) async_fx_focus_pending: bool,
     pub(super) async_bpm: u16,
     pub(super) async_bpm_valid: bool,
     pub(super) async_bpm_pending: bool,
@@ -182,6 +185,7 @@ impl Ui {
         u.chain_selected = CHAIN_AMP;
         u.tempo_scope_global = true;
         u.fx_drag_param = -1;
+        u.async_fx_focus = -1;
         u
     }
 }

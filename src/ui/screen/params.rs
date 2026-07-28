@@ -297,9 +297,14 @@ pub(super) fn param_cell_apply_slider(
         if let Some(fx) = unsafe { fx_state().as_ref() } {
             let block = &fx.blocks[u.fx_selected as usize];
             if !block.model.is_null() && idx < block.param_count as usize {
-                let pname = c_str(unsafe { (*block.model).param_names.add(idx).read() });
-                if nano_fx_param_is_enum(pname) && nano_fx_param_enum_count(pname) == 2 {
-                    binary_half = true;
+                let wire = unsafe { block.model.as_ref() }
+                    .map(|m| nano_fx_param_wire_index(m, idx))
+                    .unwrap_or(idx);
+                if wire < block.param_count as usize {
+                    let pname = c_str(unsafe { (*block.model).param_names.add(wire).read() });
+                    if nano_fx_param_is_enum(pname) && nano_fx_param_enum_count(pname) == 2 {
+                        binary_half = true;
+                    }
                 }
             }
         }
@@ -319,11 +324,16 @@ pub(super) fn param_cell_apply_slider(
     if let Some(fx) = unsafe { fx_state().as_ref() } {
         let block = &fx.blocks[u.fx_selected as usize];
         if !block.model.is_null() && idx < block.param_count as usize {
-            let pname = c_str(unsafe { (*block.model).param_names.add(idx).read() });
-            let mut tmp = *block;
-            tmp.params[idx].display = nano_fx_slider_to_display(pname, val);
-            tmp.params[idx].valid = true;
-            lv::label_set_text(u.fx_params[idx].value, &nano_fx_format_param(&tmp, idx as u8));
+            let wire = unsafe { block.model.as_ref() }
+                .map(|m| nano_fx_param_wire_index(m, idx))
+                .unwrap_or(idx);
+            if wire < block.param_count as usize {
+                let pname = c_str(unsafe { (*block.model).param_names.add(wire).read() });
+                let mut tmp = *block;
+                tmp.params[wire].display = nano_fx_slider_to_display(pname, val);
+                tmp.params[wire].valid = true;
+                lv::label_set_text(u.fx_params[idx].value, &nano_fx_format_param(&tmp, wire as u8));
+            }
         }
     }
 

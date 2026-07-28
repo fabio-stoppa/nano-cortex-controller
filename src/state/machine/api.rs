@@ -87,6 +87,7 @@ fn feed_c305(data: &[u8]) {
             info!(target: TAG, "Preset change ACK — requesting state");
             set_label(&mut s.state_probe_label, "PRESET");
             crate::fx::nano_fx_clear_model_trust();
+            crate::fx::nano_fx_note_preset_change();
             if s.mode == NANO_RX_IDLE {
                 request_current_state_now("Preset change");
             }
@@ -204,14 +205,12 @@ fn feed_c305(data: &[u8]) {
         sniff_unknown_c305(data);
         schedule_refresh();
     } else {
-        info!(
+        debug!(
             target: TAG,
-            "BPM hunt: other C305 while mode={} len={len} lead={:02X}", s.mode, data[0]
+            "other C305 while mode={} len={len} lead={:02X}",
+            s.mode,
+            data[0]
         );
-        {
-            let hunt = &data[..len.min(48)];
-            parsers::log_bytes_full(TAG, "BPM hunt other C305", hunt);
-        }
     }
 }
 

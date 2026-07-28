@@ -16,20 +16,24 @@ pub(super) fn apply_amp_locked(amp: *const NanoAmpC) {
     let amp = unsafe { amp.as_ref() }.filter(|a| a.valid);
 
     let Some(amp) = amp else {
-        for i in 0..KNOB_COUNT {
-            if i as i32 == u.drag_knob || u.knobs[i].slider.is_null() {
-                continue;
+        // Keep last knobs while connected — blanking to 0/"-" looks like a spike
+        // during brief invalid windows around preset dumps.
+        if !u.ble_connected {
+            for i in 0..KNOB_COUNT {
+                if i as i32 == u.drag_knob || u.knobs[i].slider.is_null() {
+                    continue;
+                }
+                lv::slider_set_value(u.knobs[i].slider, 0, lv::ANIM_OFF);
+                lv::label_set_text(u.knobs[i].value, "-");
+                u.last_sent[i] = 0;
             }
-            lv::slider_set_value(u.knobs[i].slider, 0, lv::ANIM_OFF);
-            lv::label_set_text(u.knobs[i].value, "-");
-            u.last_sent[i] = 0;
+            if !u.cap_vol.slider.is_null() && u.cap_vol_drag == 0 {
+                lv::slider_set_value(u.cap_vol.slider, 128, lv::ANIM_OFF);
+                lv::label_set_text(u.cap_vol.value, "-");
+                lv::add_state(u.cap_vol.slider, lv::STATE_DISABLED);
+            }
+            set_slider_enabled_locked(false);
         }
-        if !u.cap_vol.slider.is_null() && u.cap_vol_drag == 0 {
-            lv::slider_set_value(u.cap_vol.slider, 128, lv::ANIM_OFF);
-            lv::label_set_text(u.cap_vol.value, "-");
-            lv::add_state(u.cap_vol.slider, lv::STATE_DISABLED);
-        }
-        set_slider_enabled_locked(false);
         update_chain_blocks_locked(ptr::null(), fx_state());
         u.amp_chrome_valid = false;
         u.ui_sync = false;

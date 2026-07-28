@@ -4,7 +4,8 @@ use esp_idf_svc::sys::*;
 use log::debug;
 
 use nano_wire::parsers::{
-    try_parse_amp_hw_notify, try_parse_amp_knob_notify, try_parse_capture_volume_notify,
+    try_parse_amount_knob_notify, try_parse_amp_hw_notify, try_parse_amp_knob_notify,
+    try_parse_capture_volume_notify, try_parse_fx_param_notify, try_parse_fx_slot_press,
 };
 
 use super::ctx::{
@@ -70,6 +71,30 @@ pub(super) fn resolve_pending_level_from_dump() {
 
 pub(super) fn try_inline_amp_update(data: &[u8]) -> bool {
     let s = st();
+
+    // Pedal FX button slot select (before Amount / amp knobs).
+    if let Some(slot) = try_parse_fx_slot_press(data) {
+        crate::fx::nano_fx_on_pedal_fx_select(slot);
+        return true;
+    }
+
+    // Live FX param write/echo (Amount often drives one of these).
+    if let Some(notify) = try_parse_fx_param_notify(data) {
+        if s.mode == NANO_RX_CURRENT {
+            return true;
+        }
+        crate::fx::nano_fx_on_live_param(notify.model_slot, notify.param_index, notify.normalized);
+        return true;
+    }
+
+    // AMOUNT before amp/gain: its `20 01 2D…63` float mirror shares a gain prefix.
+    if let Some(notify) = try_parse_amount_knob_notify(data) {
+        if s.mode == NANO_RX_CURRENT {
+            return true;
+        }
+        crate::fx::nano_fx_on_amount_knob(notify.raw, notify.model_slot);
+        return true;
+    }
 
     if let Some(raw) = try_parse_capture_volume_notify(data) {
         // Same as knobs: dump owns capture volume while RX is open.

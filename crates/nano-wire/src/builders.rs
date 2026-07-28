@@ -120,6 +120,23 @@ pub fn global_toggle_payload(id: u8, value: u8, buf: &mut [u8]) -> usize {
     copy_fixed(&pkt, buf)
 }
 
+/// Select the Nano FX-button focus slot (mirrors the C305 press notify).
+///
+/// `0A C0 08 01 18 02 20 <model_slot 0..=4> 1C 00 00 00`
+pub fn fx_slot_focus_payload(model_slot: u8, buf: &mut [u8]) -> usize {
+    if model_slot > 4 {
+        return 0;
+    }
+    let mut pkt = [
+        0x0Au8, 0xC0, 0x08, 0x01, 0x18, 0x02, 0x20, 0x00, 0x1C, 0x00, 0x00, 0x00,
+    ];
+    if buf.len() < pkt.len() {
+        return 0;
+    }
+    pkt[7] = model_slot;
+    copy_fixed(&pkt, buf)
+}
+
 pub fn gate_reduction_payload(mut pct: u8, buf: &mut [u8]) -> usize {
     if buf.len() < 16 {
         return 0;

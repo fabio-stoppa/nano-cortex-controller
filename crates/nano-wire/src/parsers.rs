@@ -531,8 +531,222 @@ pub fn try_parse_capture_volume_notify(data: &[u8]) -> Option<u8> {
     None
 }
 
+/// Pedal AMOUNT knob notify (LED-ring raw 0..255).
+///
+/// Float mirror (trailer `63 00 00 00`):
+/// - `C0 08 01 18 <model_slot 0..=4> 2D <f32> 63 …` — slot is the Nano-selected FX
+/// - `C0 08 01 20 01 2D <f32> 63 …` — slot omitted (use last FX focus)
+///
+/// Varint form (no slot): `C0 08 01 18 <5|7|8|9> 20 <raw> 30 01 1A`
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AmountKnobNotify {
+    pub raw: u8,
+    /// FX model slot 0..=4 when the float form carries `18 <slot>`.
+    pub model_slot: Option<u8>,
+}
+
+pub fn try_parse_amount_knob_notify(data: &[u8]) -> Option<AmountKnobNotify> {
+    if data.len() < 10 {
+        return None;
+    }
+
+    let mut i = 0usize;
+    while i + 3 < data.len() {
+        if data[i] != 0xC0 || data[i + 1] != 0x08 || data[i + 2] != 0x01 {
+            i += 1;
+            continue;
+        }
+        let p = i + 3;
+        if let Some(n) = decode_amount_float_at(data, p) {
+            return Some(n);
+        }
+        if let Some(raw) = decode_amount_varint_at(data, p) {
+            return Some(AmountKnobNotify {
+                raw,
+                model_slot: None,
+            });
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Live FX param write/echo: `C0 08 01 18 <model_slot> 20 <param_index> 2D <f32> 63…`
+///
+/// Same shape as C304 `fx_param_payload`. Amount LED-ring uses `18 <slot> 2D`
+/// (no `20 <param>`) or `20 01 2D`, so it does not match here.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FxParamNotify {
+    pub model_slot: u8,
+    pub param_index: u8,
+    pub normalized: f32,
+}
+
+pub fn try_parse_fx_param_notify(data: &[u8]) -> Option<FxParamNotify> {
+    if data.len() < 12 {
+        return None;
+    }
+    let mut i = 0usize;
+    while i + 11 < data.len() {
+        if data[i] != 0xC0 || data[i + 1] != 0x08 || data[i + 2] != 0x01 || data[i + 3] != 0x18 {
+            i += 1;
+            continue;
+        }
+        let slot = data[i + 4];
+        if slot > 4 {
+            i += 1;
+            continue;
+        }
+
+        // Full form: 18 <slot> 20 <param_index> 2D <f32> 63
+        if data[i + 5] == 0x20 {
+            let Some((param_index, next)) = read_varint(data, i + 6) else {
+                i += 1;
+                continue;
+            };
+            if param_index > 63 || next + 5 >= data.len() || data[next] != 0x2D {
+                i += 1;
+                continue;
+            }
+            if data[next + 5] != 0x63 {
+                i += 1;
+                continue;
+            }
+            let value = read_f32_le(&data[next + 1..]);
+            if !value.is_finite() || !((-0.05..=1.05).contains(&value)) {
+                i += 1;
+                continue;
+            }
+            return Some(FxParamNotify {
+                model_slot: slot,
+                param_index: param_index as u8,
+                normalized: value.clamp(0.0, 1.0),
+            });
+        }
+
+        // Proto3 may omit param_index 0: 18 <slot> 2D <norm 0..1> 63
+        // (Amount LED-ring uses the same shape but with raw values > 1.)
+        if data[i + 5] == 0x2D && i + 11 < data.len() && data[i + 10] == 0x63 {
+            let value = read_f32_le(&data[i + 6..]);
+            if value.is_finite() && (-0.05..=1.05).contains(&value) {
+                return Some(FxParamNotify {
+                    model_slot: slot,
+                    param_index: 0,
+                    normalized: value.clamp(0.0, 1.0),
+                });
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// FX button press that selects a slot: `C0 08 01 18 02 20 <slot> 1C`.
+/// Trailer `1C` distinguishes this from bass (`30 01 1A`) / expression (`40`).
+/// Accepts model slots 0..=4 or enable slots 4..=8 (mapped back to 0..=4).
+///
+/// Proto3 may omit slot 0: `C0 08 01 18 02 1C` (wrap from Post FX 3 → Pre FX 1).
+pub fn try_parse_fx_slot_press(data: &[u8]) -> Option<u8> {
+    if data.len() < 7 {
+        return None;
+    }
+    let mut i = 0usize;
+    while i + 6 < data.len() {
+        if data[i] != 0xC0
+            || data[i + 1] != 0x08
+            || data[i + 2] != 0x01
+            || data[i + 3] != 0x18
+            || data[i + 4] != 0x02
+        {
+            i += 1;
+            continue;
+        }
+        // Omitted default slot 0: … 18 02 1C
+        if data[i + 5] == 0x1C {
+            return Some(0);
+        }
+        if data[i + 5] != 0x20 {
+            i += 1;
+            continue;
+        }
+        if let Some((val, next)) = read_varint(data, i + 6) {
+            if next < data.len() && data[next] == 0x1C {
+                if val <= 4 {
+                    return Some(val as u8);
+                }
+                // Enable-slot namespace (pre1=4 … post3=8) → model slot.
+                if (4..=8).contains(&val) {
+                    return Some((val - 4) as u8);
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn decode_amount_float_at(data: &[u8], index: usize) -> Option<AmountKnobNotify> {
+    // Need 18/<0..=4> 2D f32 63 00 00 00  OR  20 01 2D f32 63 00 00 00
+    if index + 11 > data.len() || data[index + 2] != 0x2D {
+        return None;
+    }
+    let model_slot = match (data[index], data[index + 1]) {
+        (0x18, slot) if slot <= 4 => Some(slot),
+        (0x20, 0x01) => None,
+        _ => return None,
+    };
+    if data[index + 7] != 0x63
+        || data[index + 8] != 0x00
+        || data[index + 9] != 0x00
+        || data[index + 10] != 0x00
+    {
+        return None;
+    }
+    let value = read_f32_le(&data[index + 3..]);
+    if !value.is_finite() {
+        return None;
+    }
+    // Tuner keepalive shares 2D floats but not this AMOUNT trailer shape.
+    if (value - 440.0).abs() <= 1.0 {
+        return None;
+    }
+    // Slot + normalized 0..1 is an FX param write with omitted index 0 — not LED raw.
+    if model_slot.is_some() && value <= 1.05 {
+        return None;
+    }
+    Some(AmountKnobNotify {
+        raw: value.clamp(0.0, 255.0).round() as u8,
+        model_slot,
+    })
+}
+
+fn decode_amount_varint_at(data: &[u8], index: usize) -> Option<u8> {
+    if index + 2 >= data.len() || data[index] != 0x18 {
+        return None;
+    }
+    let field = data[index + 1];
+    if !matches!(field, 5 | 7 | 8 | 9) {
+        return None;
+    }
+    if data[index + 2] != 0x20 {
+        return None;
+    }
+    let (val, next) = read_varint(data, index + 3)?;
+    if next + 2 >= data.len() {
+        return None;
+    }
+    if data[next] != 0x30 || data[next + 1] != 0x01 || data[next + 2] != 0x1A {
+        return None;
+    }
+    Some(clamp_u8(val))
+}
+
 pub fn try_parse_amp_hw_notify(data: &[u8]) -> Option<(u8, u8)> {
     if data.len() < 7 {
+        return None;
+    }
+    // AMOUNT's `20 01 2D <f32> 63` shares a prefix with float gain — claim it first.
+    if try_parse_amount_knob_notify(data).is_some() {
         return None;
     }
     // Float gain: C0 08 01 20 <…> 2D <f32> 63 (not the bare integer shortcut).
@@ -848,6 +1062,121 @@ mod tests {
     fn amp_hw_notify_ignores_global_toggle() {
         let data = [0x0A, 0xC0, 0x08, 0x01, 0x18, 0x03, 0x20, 0x01, 0x1F, 0x00, 0x00, 0x00];
         assert_eq!(try_parse_amp_hw_notify(&data), None);
+    }
+
+    #[test]
+    fn amount_knob_float_field02() {
+        let mut data = vec![0x0D, 0xC0, 0x08, 0x01, 0x18, 0x02, 0x2D];
+        data.extend_from_slice(&98.0f32.to_le_bytes());
+        data.extend_from_slice(&[0x63, 0x00, 0x00, 0x00]);
+        assert_eq!(
+            try_parse_amount_knob_notify(&data),
+            Some(AmountKnobNotify {
+                raw: 98,
+                model_slot: Some(2)
+            })
+        );
+    }
+
+    #[test]
+    fn amount_knob_float_slot0() {
+        let mut data = vec![0x0D, 0xC0, 0x08, 0x01, 0x18, 0x00, 0x2D];
+        data.extend_from_slice(&64.0f32.to_le_bytes());
+        data.extend_from_slice(&[0x63, 0x00, 0x00, 0x00]);
+        assert_eq!(
+            try_parse_amount_knob_notify(&data),
+            Some(AmountKnobNotify {
+                raw: 64,
+                model_slot: Some(0)
+            })
+        );
+    }
+
+    #[test]
+    fn amount_knob_float_direct_20_01() {
+        let mut data = vec![0x0D, 0xC0, 0x08, 0x01, 0x20, 0x01, 0x2D];
+        data.extend_from_slice(&110.0f32.to_le_bytes());
+        data.extend_from_slice(&[0x63, 0x00, 0x00, 0x00]);
+        assert_eq!(
+            try_parse_amount_knob_notify(&data),
+            Some(AmountKnobNotify {
+                raw: 110,
+                model_slot: None
+            })
+        );
+        // Must not be stolen as amp gain.
+        assert_eq!(try_parse_amp_hw_notify(&data), None);
+    }
+
+    #[test]
+    fn amount_knob_varint_field07() {
+        let data = [
+            0x0C, 0xC0, 0x08, 0x01, 0x18, 0x07, 0x20, 0x64, 0x30, 0x01, 0x1A, 0x00, 0x00, 0x00,
+        ];
+        assert_eq!(
+            try_parse_amount_knob_notify(&data),
+            Some(AmountKnobNotify {
+                raw: 100,
+                model_slot: None
+            })
+        );
+    }
+
+    #[test]
+    fn fx_slot_press_selects_post1() {
+        let data = [0x0A, 0xC0, 0x08, 0x01, 0x18, 0x02, 0x20, 0x02, 0x1C, 0x00, 0x00, 0x00];
+        assert_eq!(try_parse_fx_slot_press(&data), Some(2));
+        // Bass knob shares 18 02 20 but ends 30 01 1A.
+        let bass = [0x0C, 0xC0, 0x08, 0x01, 0x18, 0x02, 0x20, 0x20, 0x30, 0x01, 0x1A];
+        assert_eq!(try_parse_fx_slot_press(&bass), None);
+    }
+
+    #[test]
+    fn fx_slot_press_omitted_pre1() {
+        // Wrap Post3 → Pre1: proto3 omits slot value 0.
+        let data = [0x08, 0xC0, 0x08, 0x01, 0x18, 0x02, 0x1C, 0x00, 0x00, 0x00];
+        assert_eq!(try_parse_fx_slot_press(&data), Some(0));
+    }
+
+    #[test]
+    fn fx_slot_press_pre2() {
+        let data = [0x0A, 0xC0, 0x08, 0x01, 0x18, 0x02, 0x20, 0x01, 0x1C, 0x00, 0x00, 0x00];
+        assert_eq!(try_parse_fx_slot_press(&data), Some(1));
+    }
+
+    #[test]
+    fn fx_param_notify_normalized() {
+        let mut data = vec![0x0F, 0xC0, 0x08, 0x01, 0x18, 0x00, 0x20, 0x02, 0x2D];
+        data.extend_from_slice(&0.42f32.to_le_bytes());
+        data.extend_from_slice(&[0x63, 0x00, 0x00, 0x00]);
+        let n = try_parse_fx_param_notify(&data).expect("fx param");
+        assert_eq!(n.model_slot, 0);
+        assert_eq!(n.param_index, 2);
+        assert!((n.normalized - 0.42).abs() < 1e-6);
+        // Must not be mistaken for Amount LED-ring (`18 slot 2D` without `20`).
+        assert!(try_parse_amount_knob_notify(&data).is_none());
+    }
+
+    #[test]
+    fn fx_param_notify_omitted_index_zero() {
+        // Proto3 default: param_index 0 omitted → looks like Amount LED shape but value ≤ 1.
+        let mut data = vec![0x0D, 0xC0, 0x08, 0x01, 0x18, 0x00, 0x2D];
+        data.extend_from_slice(&0.37f32.to_le_bytes());
+        data.extend_from_slice(&[0x63, 0x00, 0x00, 0x00]);
+        let n = try_parse_fx_param_notify(&data).expect("param 0");
+        assert_eq!(n.model_slot, 0);
+        assert_eq!(n.param_index, 0);
+        assert!((n.normalized - 0.37).abs() < 1e-6);
+        assert!(try_parse_amount_knob_notify(&data).is_none());
+    }
+
+    #[test]
+    fn fx_param_notify_rejects_amount_led_shape() {
+        let mut data = vec![0x0D, 0xC0, 0x08, 0x01, 0x18, 0x01, 0x2D];
+        data.extend_from_slice(&98.0f32.to_le_bytes());
+        data.extend_from_slice(&[0x63, 0x00, 0x00, 0x00]);
+        assert_eq!(try_parse_fx_param_notify(&data), None);
+        assert!(try_parse_amount_knob_notify(&data).is_some());
     }
 
     #[test]

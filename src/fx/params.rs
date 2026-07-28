@@ -3,7 +3,7 @@
 
 use core::ffi::CStr;
 
-use super::types::NanoFxBlock;
+use super::types::{NanoFxBlock, NanoFxModelDef};
 use super::util::c_str;
 
 /// Display range for a param: `(min, max, step, is_pct)`.
@@ -127,13 +127,42 @@ pub fn param_range(name: &str) -> Range {
     if name.contains("Pre Delay") {
         return Range {
             min: 0.0,
-            max: 500.0,
+            max: 200.0,
+            step: 0.1,
+            is_pct: false,
+        };
+    }
+
+    if name.contains("Mod Speed") {
+        return Range {
+            min: 0.1,
+            max: 5.0,
+            step: 0.01,
+            is_pct: false,
+        };
+    }
+
+    // Must be before the generic "Freq" / default %-age branches — High/Low Pass
+    // were incorrectly shown as 0–100% (same as Mix), which made Amount look
+    // like it was driving Low Pass on reverbs.
+    if name.contains("High Pass") {
+        return Range {
+            min: 20.0,
+            max: 800.0,
+            step: 1.0,
+            is_pct: false,
+        };
+    }
+    if name.contains("Low Pass") {
+        return Range {
+            min: 800.0,
+            max: 12000.0,
             step: 1.0,
             is_pct: false,
         };
     }
 
-    if name.contains("Freq") && !name.contains("High Pass") && !name.contains("Low Pass") {
+    if name.contains("Freq") {
         return Range {
             min: 20.0,
             max: 20000.0,

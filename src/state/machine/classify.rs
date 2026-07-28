@@ -1,11 +1,10 @@
 //! C305 payload classification helpers.
 
-use log::info;
-use nano_wire::parsers;
+use log::debug;
 
 use super::ctx::{now_us, st, NANO_RX_CURRENT, NANO_RX_METADATA, TAG};
 
-const SNIFF_MIN_INTERVAL_US: i64 = 100 * 1000;
+const SNIFF_MIN_INTERVAL_US: i64 = 500 * 1000;
 
 pub(super) fn is_fe_stream(data: &[u8], mode: u32) -> bool {
     if data.len() < 3 {
@@ -50,15 +49,12 @@ pub(super) fn sniff_unknown_c305(data: &[u8]) {
         return;
     }
     s.last_sniff_us = now;
-    info!(
+    // Keep this at debug — live Amount/FX traffic used to flood INFO and stall BLE.
+    debug!(
         target: TAG,
-        "BPM hunt: unknown C305 len={} lead={:02X} {:02X}",
+        "unknown C305 len={} lead={:02X} {:02X}",
         data.len(),
         data.first().copied().unwrap_or(0),
         data.get(1).copied().unwrap_or(0)
     );
-    {
-        let hunt = &data[..data.len().min(64)];
-        parsers::log_bytes_full(TAG, "BPM hunt C305", hunt);
-    }
 }
