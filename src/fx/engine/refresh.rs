@@ -12,7 +12,7 @@ use log::{debug, warn};
 use nano_wire::builders;
 
 use super::state::{
-    fx, now_us, push_fx_ui, FX_AMOUNT_LIVE_SKIP_US, FX_AMOUNT_UI_GAP_US,
+    fx, now_us, push_fx_ui, FX_AMOUNT_LIVE_SKIP_US, FX_AMOUNT_UI_GAP_US, FX_REFRESH_GAP_US,
     FX_REFRESH_STALE_GUARD_US, FX_REFRESH_TIMEOUT_US, SLOT_CFG, TAG,
 };
 use crate::fx::models::{block_label, BLOCK_LABELS};
@@ -27,8 +27,17 @@ const PARAM_REFRESH_LABELS: [&CStr; NANO_FX_BLOCK_COUNT] = [
     c"Post3 param refresh",
 ];
 
-fn block_needs_refresh(block: &NanoFxBlock) -> bool {
-    block.on && !block.params_loaded
+pub(super) fn block_needs_refresh(block: &NanoFxBlock) -> bool {
+    if !block.valid || block.model.is_null() || block.param_count == 0 {
+        return false;
+    }
+    if !block.params_loaded {
+        return true;
+    }
+    // A poll that marked loaded but applied no values (e.g. short dual-param
+    // replies) must be retried — otherwise the UI sits on "-" forever.
+    let n = (block.param_count as usize).min(NANO_FX_MAX_PARAMS);
+    block.params[..n].iter().all(|p| !p.valid)
 }
 
 pub(super) fn block_model_write_recent(block: u32) -> bool {
@@ -218,6 +227,94 @@ pub(super) fn enqueue_param_refresh(block: u32) {
     }
 }
 
+/// If a live param notify filled every slot of the in-flight refresh block,
+/// treat the poll as done (avoids 450ms+ "-" waits on 1–2 param models).
+pub(super) fn maybe_complete_refresh_from_live(block: u32) -> bool {
+    let s = fx();
+    if !s.refresh_active || s.pending_block != block || (block as usize) >= NANO_FX_BLOCK_COUNT {
+        return false;
+    }
+
+    let b = &s.fx.blocks[block as usize];
+    let n = (b.param_count as usize).min(NANO_FX_MAX_PARAMS);
+    if n == 0 || !b.params[..n].iter().all(|p| p.valid) {
+        return false;
+    }
+
+    s.fx.blocks[block as usize].params_loaded = true;
+    s.refresh_active = false;
+    s.amount_refresh = false;
+    s.refresh_stale_until_us = 0;
+    unsafe {
+        esp_timer_stop(s.refresh_timeout_timer);
+        esp_timer_start_once(s.refresh_gap_timer, FX_REFRESH_GAP_US);
+    }
+    if s.suppress_fx_param_ui {
+        // Release hold once the on-screen block has real values.
+        let sel = if s.pedal_fx_focus >= 0 {
+            s.pedal_fx_focus as u32
+        } else {
+            block
+        };
+        if sel == block {
+            s.suppress_fx_param_ui = false;
+        }
+    }
+    push_fx_ui();
+    debug!(
+        target: TAG,
+        "{} params completed via live notify",
+        BLOCK_LABELS[block as usize]
+    );
+    true
+}
+
+/// Pull `block` to the front of the remaining refresh queue (or start one) so
+/// the on-screen FX can paint without waiting behind other slots.
+pub(super) fn prioritize_param_refresh(block: u32) {
+    if block as usize >= NANO_FX_BLOCK_COUNT {
+        return;
+    }
+
+    ensure_refresh_timers();
+    let s = fx();
+    if !block_needs_refresh(&s.fx.blocks[block as usize]) {
+        return;
+    }
+
+    // Compact consumed entries so inserts never write past the array end.
+    // Do NOT abandon an in-flight poll — untagged replies + stale-guard drops
+    // were eating the only answer for short (1–2 param) models.
+    if s.refresh_q_head > 0 {
+        let n = s.refresh_q_len - s.refresh_q_head;
+        for i in 0..n {
+            s.refresh_queue[i] = s.refresh_queue[s.refresh_q_head + i];
+        }
+        s.refresh_q_len = n;
+        s.refresh_q_head = 0;
+    }
+
+    if let Some(pos) = (0..s.refresh_q_len).find(|&i| s.refresh_queue[i] == block) {
+        if pos > 0 {
+            let b = s.refresh_queue[pos];
+            for i in (1..=pos).rev() {
+                s.refresh_queue[i] = s.refresh_queue[i - 1];
+            }
+            s.refresh_queue[0] = b;
+        }
+    } else if s.refresh_q_len < NANO_FX_BLOCK_COUNT {
+        for i in (0..s.refresh_q_len).rev() {
+            s.refresh_queue[i + 1] = s.refresh_queue[i];
+        }
+        s.refresh_queue[0] = block;
+        s.refresh_q_len += 1;
+    }
+
+    if !s.refresh_active {
+        send_next_refresh();
+    }
+}
+
 fn send_next_refresh() {
     ensure_refresh_timers();
     let s = fx();
@@ -228,9 +325,12 @@ fn send_next_refresh() {
         s.refresh_q_head += 1;
 
         // Explicitly queued blocks (e.g. Amount poll) refresh even when bypassed.
-        if s.fx.blocks[idx].params_loaded {
+        // Also retry "loaded" slots that still have no valid values.
+        if !block_needs_refresh(&s.fx.blocks[idx]) {
             continue;
         }
+        // Ensure the poll path does not treat a prior empty load as done.
+        s.fx.blocks[idx].params_loaded = false;
 
         s.pending_block = block_id;
         s.refresh_active = true;
@@ -274,30 +374,45 @@ fn run_begin_param_refresh() {
     s.refresh_q_len = 0;
     s.refresh_q_head = 0;
 
-    // Refresh the on-screen block first so the UI can paint final values ASAP.
+    // Focused slot first, then other engaged blocks, then bypassed — so a
+    // 1–2 param FX under the finger isn't stuck behind the rest of the chain.
     let priority = if s.pedal_fx_focus >= 0 {
         Some(s.pedal_fx_focus as usize)
     } else {
         None
     };
-    if let Some(p) = priority {
-        if block_needs_refresh(&s.fx.blocks[p]) {
-            s.refresh_queue[s.refresh_q_len] = p as u32;
+
+    let already_queued = |s: &super::state::Fx, block: u32| {
+        s.refresh_queue[..s.refresh_q_len]
+            .iter()
+            .any(|&queued| queued == block)
+    };
+    let mut push = |s: &mut super::state::Fx, i: usize| {
+        if !block_needs_refresh(&s.fx.blocks[i]) || already_queued(s, i as u32) {
+            return;
+        }
+        if s.refresh_q_len < NANO_FX_BLOCK_COUNT {
+            s.refresh_queue[s.refresh_q_len] = i as u32;
             s.refresh_q_len += 1;
+        }
+    };
+
+    if let Some(p) = priority {
+        push(s, p);
+    }
+    for i in 0..NANO_FX_BLOCK_COUNT {
+        if priority != Some(i) && s.fx.blocks[i].on {
+            push(s, i);
         }
     }
     for i in 0..NANO_FX_BLOCK_COUNT {
-        if priority == Some(i) {
-            continue;
-        }
-        if block_needs_refresh(&s.fx.blocks[i]) {
-            s.refresh_queue[s.refresh_q_len] = i as u32;
-            s.refresh_q_len += 1;
+        if priority != Some(i) && !s.fx.blocks[i].on {
+            push(s, i);
         }
     }
 
     if s.refresh_q_len == 0 {
-        debug!(target: TAG, "No active FX blocks to refresh");
+        debug!(target: TAG, "No FX blocks need param refresh");
         if s.suppress_fx_param_ui {
             s.suppress_fx_param_ui = false;
         }

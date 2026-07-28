@@ -160,25 +160,22 @@ pub(super) fn chain_style_block(idx: usize, selected: bool, active: bool, accent
     block.last_active = active;
     block.last_accent = accent;
 
-    let opa = if selected || active {
-        lv::OPA_COVER
-    } else {
-        lv::OPA_40
-    };
-    lv::set_style_opa(block.col, opa, 0);
+    // Fill vs outline carries on/off; keep accents fully readable when off.
+    lv::set_style_opa(block.col, lv::OPA_COVER, 0);
 
-    let outline = if active {
-        accent
+    // On: accent fill. Off: transparent with accent outline.
+    if active {
+        lv::set_style_bg_color(block.col, accent, 0);
+        lv::set_style_bg_opa(block.col, lv::OPA_COVER, 0);
     } else {
-        lv::color_hex(0x404040)
-    };
+        lv::set_style_bg_opa(block.col, lv::OPA_TRANSP, 0);
+    }
 
-    lv::set_style_bg_opa(block.col, lv::OPA_TRANSP, 0);
     if selected {
         lv::set_style_border_color(block.col, lv::color_hex(0xFFFFFF), 0);
         lv::set_style_border_width(block.col, CHAIN_TAB_BORDER_SEL, 0);
     } else {
-        lv::set_style_border_color(block.col, outline, 0);
+        lv::set_style_border_color(block.col, accent, 0);
         lv::set_style_border_width(block.col, CHAIN_TAB_BORDER_W, 0);
     }
     lv::set_style_border_opa(block.col, lv::OPA_COVER, 0);
@@ -479,16 +476,11 @@ pub(super) fn update_chain_blocks_locked(amp: *const NanoAmpC, fx: *const NanoFx
             )
         };
 
-        let label_color = if selected {
-            if active {
-                accent
-            } else {
-                lv::color_hex(0x909090)
-            }
-        } else if active {
-            accent
+        // On: white on accent fill. Off: accent label matching the outline.
+        let label_color = if active {
+            lv::color_hex(0xFFFFFF)
         } else {
-            lv::color_hex(0x505050)
+            accent
         };
 
         chain_set_block_label(i, &block_label, label_color);
@@ -547,6 +539,10 @@ pub(super) unsafe extern "C" fn chain_block_btn_event_cb(e: *mut lv_event_t) {
 
     if chain_slot_is_fx(idx) {
         u.fx_selected = chain_slot_to_fx_block(idx);
+        u.fx_drag_param = -1;
+        // Force the next FX push to repaint even if the seqlock snapshot
+        // matches the cache byte-for-byte after a failed/held paint.
+        u.ui_fx_cache_valid = false;
         // Align Nano Amount target with the on-screen FX block.
         crate::fx::nano_fx_focus_from_ui(u.fx_selected as u8);
     }

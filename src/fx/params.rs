@@ -3,7 +3,7 @@
 
 use core::ffi::CStr;
 
-use super::types::{NanoFxBlock, NanoFxModelDef};
+use super::types::NanoFxBlock;
 use super::util::c_str;
 
 /// Display range for a param: `(min, max, step, is_pct)`.

@@ -649,6 +649,49 @@ pub(super) fn decode_float32_array(data: &[u8], out: &mut [f32]) -> usize {
     count
 }
 
+/// Decode the `22 <len> …` float payload from an FX param-refresh reply.
+///
+/// Some firmware builds write `<len>` as a **byte** length (protobuf style);
+/// others (especially 1–2 param models like OD1 / Volume) write a **float
+/// count**. Try both, then fall back to reading as many f32s as fit.
+pub(super) fn decode_param_refresh_floats(
+    data: &[u8],
+    start: usize,
+    len_field: usize,
+    out: &mut [f32],
+) -> usize {
+    let len = data.len();
+    if start >= len || out.is_empty() || len_field == 0 {
+        return 0;
+    }
+
+    // 1) Float count — 1–2 param models (OD1, Volume, OD250) often send
+    //    `22 02` meaning two floats (8 bytes), not two payload bytes.
+    if len_field < 4 && len_field <= out.len() {
+        let end = start + len_field * 4;
+        if end <= len {
+            let n = decode_float32_array(&data[start..end], out);
+            if n > 0 {
+                return n;
+            }
+        }
+    }
+
+    // 2) Protobuf byte length (most multi-param models; must be aligned).
+    if len_field >= 4 && len_field % 4 == 0 {
+        let end = start + len_field;
+        if end <= len {
+            let n = decode_float32_array(&data[start..end], out);
+            if n > 0 {
+                return n;
+            }
+        }
+    }
+
+    // 3) Ignore the length field — take as many aligned floats as remain.
+    decode_float32_array(&data[start..], out)
+}
+
 pub(super) fn find_fx_param_response(data: &[u8]) -> usize {
     let len = data.len();
     if len < 6 {
@@ -866,4 +909,37 @@ pub(super) fn parse_preset(data: &[u8], out: &mut NanoFxState) -> bool {
 
     out.valid = any;
     any
+}
+
+#[cfg(test)]
+mod decode_tests {
+    use super::*;
+
+    fn parse_hex(hex: &str) -> Vec<u8> {
+        hex.split_whitespace()
+            .map(|b| u8::from_str_radix(b, 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn decode_byte_length_two_floats() {
+        let data = parse_hex("0E C0 08 06 22 08 00 00 00 3F 00 00 80 3F");
+        let mut out = [0f32; NANO_FX_MAX_PARAMS];
+        let hdr = find_fx_param_response(&data);
+        let n = decode_param_refresh_floats(&data, hdr + 5, data[hdr + 4] as usize, &mut out);
+        assert_eq!(n, 2);
+        assert!((out[0] - 0.5).abs() < 0.001);
+        assert!((out[1] - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn decode_float_count_two_param_models() {
+        let data = parse_hex("0E C0 08 06 22 02 00 00 00 3F 00 00 80 3F");
+        let mut out = [0f32; NANO_FX_MAX_PARAMS];
+        let hdr = find_fx_param_response(&data);
+        let n = decode_param_refresh_floats(&data, hdr + 5, data[hdr + 4] as usize, &mut out);
+        assert_eq!(n, 2);
+        assert!((out[0] - 0.5).abs() < 0.001);
+        assert!((out[1] - 1.0).abs() < 0.001);
+    }
 }

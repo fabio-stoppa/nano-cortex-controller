@@ -10,7 +10,7 @@ use crate::fx::types::*;
 use crate::syncutil::{SeqLock, Shared};
 
 pub(super) const TAG: &str = "nano_fx";
-pub(super) const FX_REFRESH_TIMEOUT_US: u64 = 900 * 1000;
+pub(super) const FX_REFRESH_TIMEOUT_US: u64 = 450 * 1000;
 pub(super) const FX_REFRESH_GAP_US: u64 = 80 * 1000;
 /// Coalesce Amount LED→poll off the BLE notify path.
 pub(super) const FX_AMOUNT_UI_GAP_US: u64 = 45 * 1000;
@@ -18,6 +18,9 @@ pub(super) const FX_AMOUNT_UI_GAP_US: u64 = 45 * 1000;
 pub(super) const FX_AMOUNT_REFRESH_GAP_US: u64 = 30 * 1000;
 /// Skip Amount poll if a live param echo for that block landed this recently.
 pub(super) const FX_AMOUNT_LIVE_SKIP_US: i64 = 100 * 1000;
+/// After the UI picks an FX slot, ignore device focus steals from stale
+/// live-param / Amount traffic for this long (BLE in-flight echoes).
+pub(super) const FX_UI_FOCUS_GUARD_US: i64 = 400 * 1000;
 /// After a refresh timeout, drop late replies before starting the next request
 /// (responses are untagged — a late packet would corrupt the next block).
 pub(super) const FX_REFRESH_STALE_GUARD_US: u64 = 150 * 1000;
@@ -90,6 +93,8 @@ pub(super) struct Fx {
     pub(super) reassert_focus_after_sync: bool,
     /// Hold FX param paints until the visible block's refresh finishes.
     pub(super) suppress_fx_param_ui: bool,
+    /// `now_us()` when the UI last chose FX focus; 0 = no guard.
+    pub(super) ui_focus_guard_us: i64,
 }
 
 impl Fx {
@@ -125,6 +130,7 @@ impl Fx {
             refresh_stale_until_us: 0,
             reassert_focus_after_sync: false,
             suppress_fx_param_ui: false,
+            ui_focus_guard_us: 0,
         }
     }
 }

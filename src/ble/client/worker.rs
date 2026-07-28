@@ -118,6 +118,17 @@ pub(super) fn c305_is_pitch(data: &[u8]) -> bool {
 }
 
 /// Pitch (22/01|02) or tuner mode (2D / gain+2D) — keep these on the live path.
+/// Bulk FX param readback (`C0 08 06 22 …`) — fast-path off the C305 FIFO so
+/// short 1–2 param replies are not dropped behind preset dump chunks.
+pub(super) fn c305_is_fx_param_refresh(data: &[u8]) -> bool {
+    if data.len() < 10 {
+        return false;
+    }
+    data.windows(5).any(|w| {
+        w[0] == 0xC0 && w[1] == 0x08 && w[2] == 0x06 && w[3] == 0x22
+    })
+}
+
 pub(super) fn c305_is_tuner_hot(data: &[u8]) -> bool {
     if data.len() < 5 {
         return false;
@@ -171,8 +182,12 @@ pub(super) fn on_gatt_notify(s: &mut Ctx, handle: u16, data: *const u8, len: u16
         );
     }
 
-    // C306 mirrors C305 — never queue it (doubles work; stomps the live pitch mailbox).
+    // C306 mirrors C305 — skip the queue, but still apply FX param readbacks
+    // (short replies sometimes only show up on the indicate mirror).
     if is_c306 {
+        if !tuner_live && c305_is_fx_param_refresh(bytes) {
+            crate::state::feed_c305_bytes(bytes);
+        }
         return;
     }
 
@@ -192,6 +207,11 @@ pub(super) fn on_gatt_notify(s: &mut Ctx, handle: u16, data: *const u8, len: u16
      * up seconds later. Apply live, skip the queue.
      */
     if is_c305 && !tuner_live && crate::state::try_amp_notify_fast_bytes(bytes) {
+        return;
+    }
+
+    if is_c305 && !tuner_live && c305_is_fx_param_refresh(bytes) {
+        crate::state::feed_c305_bytes(bytes);
         return;
     }
 

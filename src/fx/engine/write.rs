@@ -180,7 +180,8 @@ pub(super) fn write_block_enabled(block: u32, enabled: bool) -> bool {
         enqueue_param_refresh(block);
     } else {
         s.block_on_asserted_us[idx] = 0;
-        s.fx.blocks[idx].params_loaded = false;
+        // Keep last param values for the UI while bypassed; preset sync forces
+        // a reload when values are actually stale.
     }
     true
 }

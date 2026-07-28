@@ -53,8 +53,10 @@ pub(super) fn apply_fx_param_locked(display_i: usize, block: &NanoFxBlock) {
         u.ble_connected && block.on && block.param_count > 0 && block.params_loaded,
     );
 
-    // Wait for real values — never paint midpoints (that was the preset spike).
-    if !block.params_loaded || !block.params[wire].valid {
+    // Paint when this wire slot has a real value. Do not gate on params_loaded —
+    // Amount/refresh clears that flag while a poll is in flight. Keep the last
+    // painted value instead of blanking to "-" (same as amp knobs).
+    if !block.params[wire].valid {
         return;
     }
 
@@ -143,13 +145,6 @@ pub(super) fn apply_fx_locked(fx: *const NanoFxState) {
         u.fx_ui_sync = false;
         return;
     };
-
-    // After a preset change, leave the last painted knobs alone until the
-    // visible block's refresh returns — then paint once with final values.
-    if crate::fx::nano_fx_params_ui_held() {
-        u.fx_ui_sync = false;
-        return;
-    }
 
     if !fx_panel_is_visible() {
         sync_header_model_locked(fx);
@@ -266,6 +261,18 @@ pub(super) unsafe extern "C" fn fx_build_timer_cb(timer: *mut lv_timer_t) {
 pub(super) fn ensure_fx_params_up_to(count: usize) {
     let u = ui();
     let count = count.min(NANO_FX_MAX_PARAMS);
+
+    // 1–4 param FX (OD1, Volume, …): build cells immediately. The deferred
+    // 50ms builder left values stuck on "-" until a later push that often
+    // short-circuited against the FX UI cache.
+    if count <= 4 {
+        for j in 0..count {
+            if u.fx_params[j].col.is_null() {
+                build_fx_param_cell(j);
+            }
+        }
+        return;
+    }
 
     let need_more = (0..count).any(|j| u.fx_params[j].col.is_null());
 
