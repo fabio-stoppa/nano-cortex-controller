@@ -95,6 +95,8 @@ pub(super) struct Fx {
     pub(super) suppress_fx_param_ui: bool,
     /// `now_us()` when the UI last chose FX focus; 0 = no guard.
     pub(super) ui_focus_guard_us: i64,
+    /// True once the post-sync param-refresh queue has drained (or was empty).
+    pub(super) params_sync_ready: bool,
 }
 
 impl Fx {
@@ -131,6 +133,7 @@ impl Fx {
             reassert_focus_after_sync: false,
             suppress_fx_param_ui: false,
             ui_focus_guard_us: 0,
+            params_sync_ready: false,
         }
     }
 }

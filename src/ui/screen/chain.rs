@@ -101,6 +101,10 @@ pub(super) fn ui_bring_chrome_to_front() {
     if !u.header_bar.is_null() {
         lv::move_foreground(u.header_bar);
     }
+    // Connecting cover sits above chrome until BLE is up.
+    if !u.connecting_overlay.is_null() && !lv::has_flag(u.connecting_overlay, lv::FLAG_HIDDEN) {
+        lv::move_foreground(u.connecting_overlay);
+    }
 }
 
 pub(super) fn make_content_panel(parent: *mut lv_obj_t) -> *mut lv_obj_t {

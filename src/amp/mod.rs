@@ -26,7 +26,7 @@ unsafe impl Sync for NanoAmpCapture {}
 
 pub const NANO_AMP_CATALOG_COUNT: usize = 25;
 
-pub static nano_amp_catalog: [NanoAmpCapture; NANO_AMP_CATALOG_COUNT] = [
+pub static NANO_AMP_CATALOG: [NanoAmpCapture; NANO_AMP_CATALOG_COUNT] = [
     NanoAmpCapture { slot: 1, name: c"CA John's Ch1".as_ptr(), bank: NANO_AMP_BANK_CLEAN },
     NanoAmpCapture { slot: 2, name: c"Comet 60".as_ptr(), bank: NANO_AMP_BANK_CLEAN },
     NanoAmpCapture { slot: 3, name: c"Bogna X100B Ch1".as_ptr(), bank: NANO_AMP_BANK_CLEAN },
@@ -54,10 +54,8 @@ pub static nano_amp_catalog: [NanoAmpCapture; NANO_AMP_CATALOG_COUNT] = [
     NanoAmpCapture { slot: 25, name: c"Anima Fuzz".as_ptr(), bank: NANO_AMP_BANK_BASS },
 ];
 
-pub static nano_amp_catalog_count: usize = NANO_AMP_CATALOG_COUNT;
-
 pub fn catalog() -> &'static [NanoAmpCapture] {
-    &nano_amp_catalog
+    &NANO_AMP_CATALOG
 }
 
 fn bank_short_name(bank: u32) -> Option<&'static str> {
@@ -174,10 +172,6 @@ pub fn ensure_linked() {
     ];
     core::hint::black_box(fns);
 
-    // The C UI walks the catalog directly, so keep both statics too.
-    let data: &[*const ()] = &[
-        nano_amp_catalog.as_ptr() as *const (),
-        &nano_amp_catalog_count as *const usize as *const (),
-    ];
-    core::hint::black_box(data);
+    // Keep the catalog table from being LTO-stripped.
+    core::hint::black_box(NANO_AMP_CATALOG.as_ptr());
 }

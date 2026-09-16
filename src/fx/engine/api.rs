@@ -47,6 +47,7 @@ pub fn nano_fx_reset() {
     s.reassert_focus_after_sync = false;
     s.suppress_fx_param_ui = false;
     s.ui_focus_guard_us = 0;
+    s.params_sync_ready = false;
     s.refresh_q_len = 0;
     s.refresh_q_head = 0;
     s.refresh_active = false;
@@ -108,6 +109,11 @@ pub fn nano_fx_dump_has_gate_fields(data: &[u8]) -> bool {
 pub fn nano_fx_gate_ui_ready() -> bool {
     let g = &fx().fx.gate;
     g.valid && g.on_known && g.reduction_valid
+}
+
+/// True after the post-preset param-refresh queue has finished (or had nothing to do).
+pub fn nano_fx_params_sync_ready() -> bool {
+    fx().params_sync_ready
 }
 
 /// True when dump includes modern FX model-id fields (48–52).
@@ -175,6 +181,9 @@ fn sync_from_preset(data: &[u8]) {
         }
         return;
     }
+
+    // New models/params are incoming — connecting UI waits for the refresh drain.
+    fx().params_sync_ready = false;
 
     if parsed.gate.valid {
         apply_gate_from_parsed(&parsed);

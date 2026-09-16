@@ -358,6 +358,7 @@ fn send_next_refresh() {
     s.refresh_active = false;
     s.refresh_q_len = 0;
     s.refresh_q_head = 0;
+    s.params_sync_ready = true;
     if s.suppress_fx_param_ui {
         s.suppress_fx_param_ui = false;
     }
@@ -371,6 +372,7 @@ fn run_begin_param_refresh() {
         return;
     }
 
+    s.params_sync_ready = false;
     s.refresh_q_len = 0;
     s.refresh_q_head = 0;
 
@@ -387,7 +389,7 @@ fn run_begin_param_refresh() {
             .iter()
             .any(|&queued| queued == block)
     };
-    let mut push = |s: &mut super::state::Fx, i: usize| {
+    let push = |s: &mut super::state::Fx, i: usize| {
         if !block_needs_refresh(&s.fx.blocks[i]) || already_queued(s, i as u32) {
             return;
         }
@@ -413,6 +415,7 @@ fn run_begin_param_refresh() {
 
     if s.refresh_q_len == 0 {
         debug!(target: TAG, "No FX blocks need param refresh");
+        s.params_sync_ready = true;
         if s.suppress_fx_param_ui {
             s.suppress_fx_param_ui = false;
         }

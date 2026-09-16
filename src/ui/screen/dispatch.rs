@@ -140,6 +140,7 @@ pub(super) fn async_apply_fx_cb() {
     });
     if let Some(fx) = pending {
         apply_fx_locked(&fx);
+        super::ble::update_connecting_overlay_locked();
     }
 }
 

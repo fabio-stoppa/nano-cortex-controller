@@ -1,7 +1,7 @@
 /* ------------------------------------------------------------ build tree */
 
 use super::*;
-use super::ble::{ble_icon_timer_cb, refresh_ble_icon_locked};
+use super::ble::{ble_icon_timer_cb, build_connecting_overlay, refresh_ble_icon_locked};
 use super::chain::{
     chain_block_btn_event_cb, chain_btn_prepare, chain_set_block_label, icon_kind_glyph,
     make_content_panel, show_content_for_chain, tuner_hdr_btn_event_cb, ui_bring_chrome_to_front,
@@ -469,6 +469,7 @@ pub(super) fn build_ui() {
     lv::add_flag(tempo_panel, lv::FLAG_HIDDEN);
 
     show_content_for_chain(CHAIN_AMP);
+    build_connecting_overlay(screen);
     ui_bring_chrome_to_front();
 
     ui_init_dispatch();

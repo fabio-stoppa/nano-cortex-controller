@@ -155,6 +155,7 @@ pub(super) fn async_apply_amp_cb() {
         Some(amp) => apply_amp_locked(&amp),
         None => apply_amp_locked(ptr::null()),
     }
+    super::ble::update_connecting_overlay_locked();
 }
 
 pub(super) fn async_apply_tuner_cb() {

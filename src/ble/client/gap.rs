@@ -4,6 +4,10 @@
 use super::*;
 use super::ctx::*;
 
+// ESP-IDF bindgen names events `esp_gap_ble_cb_event_t_ESP_*` (type prefix +
+// enum). Rust wants SCREAMING_SNAKE for consts-in-patterns; we keep the
+// generated identifiers so arms match the C headers verbatim.
+#[allow(non_upper_case_globals)]
 pub(super) unsafe extern "C" fn gap_cb(event: esp_gap_ble_cb_event_t, param: *mut esp_ble_gap_cb_param_t) {
     let s = ctx();
 

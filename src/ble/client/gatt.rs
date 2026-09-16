@@ -286,6 +286,10 @@ pub(super) fn enable_all_notifies(s: &mut Ctx, gattc_if: esp_gatt_if_t) {
     }
 }
 
+// ESP-IDF bindgen names events `esp_gattc_cb_event_t_ESP_*` (type prefix +
+// enum). Rust wants SCREAMING_SNAKE for consts-in-patterns; we keep the
+// generated identifiers so arms match the C headers verbatim.
+#[allow(non_upper_case_globals)]
 pub(super) fn gattc_handler(
     s: &mut Ctx,
     event: esp_gattc_cb_event_t,

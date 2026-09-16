@@ -3,8 +3,6 @@
 //! Transcribed 1:1 from the C table (archived in `recovered/fx-c/`); the
 //! catalog index also drives category and per-slot allow rules in `models.rs`.
 
-#![allow(non_upper_case_globals)]
-
 use super::types::{NanoFxModelDef, ParamNames};
 
 static PARAMS_0: ParamNames<3> = ParamNames([
@@ -523,7 +521,7 @@ static PARAMS_52: ParamNames<5> = ParamNames([
 
 pub const NANO_FX_CATALOG_COUNT: usize = 53;
 
-pub static nano_fx_catalog: [NanoFxModelDef; NANO_FX_CATALOG_COUNT] = [
+pub static NANO_FX_CATALOG: [NanoFxModelDef; NANO_FX_CATALOG_COUNT] = [
     NanoFxModelDef {
         name: c"Chief BD2".as_ptr(),
         id_len: 1,
@@ -897,9 +895,7 @@ pub static nano_fx_catalog: [NanoFxModelDef; NANO_FX_CATALOG_COUNT] = [
     },
 ];
 
-pub static nano_fx_catalog_count: usize = NANO_FX_CATALOG_COUNT;
-
 /// The catalog as a slice; every lookup goes through here.
 pub fn catalog() -> &'static [NanoFxModelDef] {
-    &nano_fx_catalog
+    &NANO_FX_CATALOG
 }

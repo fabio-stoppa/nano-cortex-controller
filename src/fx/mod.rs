@@ -7,12 +7,12 @@ pub mod params;
 pub mod types;
 pub mod util;
 
-pub use catalog::{nano_fx_catalog, nano_fx_catalog_count};
+pub use catalog::NANO_FX_CATALOG;
 pub use engine::{
     nano_fx_begin_param_refresh, nano_fx_clear_model_trust, nano_fx_dump_has_gate_fields,
     nano_fx_dump_has_model_fields, nano_fx_feed_c305, nano_fx_focus_from_ui, nano_fx_gate_ui_ready,
     nano_fx_get, nano_fx_note_preset_change, nano_fx_on_amount_knob, nano_fx_on_live_param,
-    nano_fx_params_ui_held,
+    nano_fx_params_sync_ready, nano_fx_params_ui_held,
     nano_fx_on_pedal_fx_select, nano_fx_parse_preset, nano_fx_reset, nano_fx_snapshot,
     nano_fx_sync_from_preset, nano_fx_try_apply_gate_bytes, nano_fx_write_block_enabled,
     nano_fx_write_block_model, nano_fx_write_gate_enabled, nano_fx_write_gate_reduction,
@@ -43,6 +43,7 @@ pub fn ensure_linked() {
         nano_fx_dump_has_gate_fields as *const (),
         nano_fx_dump_has_model_fields as *const (),
         nano_fx_gate_ui_ready as *const (),
+        nano_fx_params_sync_ready as *const (),
         nano_fx_try_apply_gate_bytes as *const (),
         nano_fx_feed_c305 as *const (),
         nano_fx_on_amount_knob as *const (),
@@ -82,10 +83,6 @@ pub fn ensure_linked() {
     ];
     core::hint::black_box(fns);
 
-    // The C UI indexes the catalog directly, so keep both statics too.
-    let data: &[*const ()] = &[
-        nano_fx_catalog.as_ptr() as *const (),
-        &nano_fx_catalog_count as *const usize as *const (),
-    ];
-    core::hint::black_box(data);
+    // Keep the catalog table from being LTO-stripped.
+    core::hint::black_box(NANO_FX_CATALOG.as_ptr());
 }

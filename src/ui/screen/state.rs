@@ -53,6 +53,13 @@ pub(super) struct Ui {
     pub(super) ble_icon_timer: *mut lv_timer_t,
     pub(super) ble_blink_on: bool,
 
+    /// Full-screen overlay while scanning / waiting for Nano BLE.
+    pub(super) connecting_overlay: *mut lv_obj_t,
+    pub(super) connecting_icon: *mut lv_obj_t,
+    pub(super) connecting_status: *mut lv_obj_t,
+    /// Keep the overlay up through first amp + FX param sync after connect.
+    pub(super) connecting_await_ready: bool,
+
     pub(super) tuner_note: *mut lv_obj_t,
     pub(super) tuner_cents: *mut lv_obj_t,
     pub(super) tuner_state: *mut lv_obj_t,
@@ -186,6 +193,7 @@ impl Ui {
         u.tempo_scope_global = true;
         u.fx_drag_param = -1;
         u.async_fx_focus = -1;
+        u.connecting_await_ready = true;
         u
     }
 }
