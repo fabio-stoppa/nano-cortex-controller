@@ -88,8 +88,6 @@ firmware/
 | C305 notify | `0000c305-...` |
 | Device name | `Neural DSP Nano Cortex` |
 
-Next step: ESP-IDF [GATT client example](https://github.com/espressif/esp-idf/tree/master/examples/bluetooth/bluedroid/ble/gatt_client) wired to `nano_protocol.c`.
-
 ## Notes
 
 - Disconnect **Cortex Cloud** before connecting — one BLE client at a time.
