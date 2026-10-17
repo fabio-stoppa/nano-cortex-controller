@@ -138,6 +138,15 @@ extern "C" {
 esp_err_t lvgl_port_init(esp_lcd_panel_handle_t lcd_handle, esp_lcd_touch_handle_t tp_handle);
 
 /**
+ * @brief Runtime display orientation (0 / 90 / 180 / 270).
+ *
+ * Uses LVGL software rotation so logical resolution swaps for 90/270
+ * (800x480 <-> 480x800). Touch axes are remapped to match.
+ * Call under `lvgl_port_lock`. Rebuild the UI after changing orientation.
+ */
+esp_err_t lvgl_port_set_rotation(uint16_t degree);
+
+/**
  * @brief Take LVGL mutex
  *
  * @param[in] timeout_ms: Timeout in [ms]. 0 will block indefinitely.

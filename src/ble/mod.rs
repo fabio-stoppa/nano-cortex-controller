@@ -1,6 +1,7 @@
-//! BLE GATT client for the Nano Cortex.
+//! BLE GATT clients: Nano Cortex + optional M-Vave Chocolate MIDI footswitch.
 
 pub mod client;
+pub mod midi_fs;
 
 pub use client::{
     nano_ble_connected, nano_ble_drain_rx_queue, nano_ble_flush_c305_backlog,
@@ -17,6 +18,8 @@ pub fn ensure_linked() {
         nano_ble_read_bpm_probe_chars as *const (),
         nano_ble_drain_rx_queue as *const (),
         nano_ble_flush_c305_backlog as *const (),
+        midi_fs::is_connected as *const (),
+        midi_fs::register_app as *const (),
     ];
     core::hint::black_box(fns);
 }

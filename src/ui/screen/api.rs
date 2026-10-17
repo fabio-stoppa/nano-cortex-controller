@@ -8,9 +8,13 @@ use super::consts::{
 };
 use super::dispatch::ui_request_dispatch;
 use super::helpers::{c_buf_str, copy_into, struct_bytes};
-use super::state::{with_inbox, BUILD_DONE};
+use super::prefs::{load_layout_mode, prefs_nvs_init};
+use super::state::{ui, with_inbox, BUILD_DONE};
 /// Init Waveshare LCD + LVGL and show amp panel.
 pub fn nano_ui_start() -> esp_err_t {
+    prefs_nvs_init();
+    ui().layout_mode = load_layout_mode();
+
     let (err, panel, touch) = lv::rgb_lcd_init();
     if err != ESP_OK {
         return err;
@@ -49,7 +53,7 @@ pub fn nano_ui_start() -> esp_err_t {
         return ESP_FAIL;
     }
 
-    info!("UI ready (800x480, left chain rail + panels)");
+    info!("UI ready (orientation selectable on connect: landscape/portrait)");
     ESP_OK
 }
 

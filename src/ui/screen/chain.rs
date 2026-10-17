@@ -131,7 +131,11 @@ pub(super) fn chain_set_block_label(idx: usize, text: &str, color: lv_color_t) {
     copy_into(&mut block.icon_text, text);
     block.icon_color = color;
     lv::label_set_text(block.icon, text);
-    lv::set_style_text_font(block.icon, lv::font_chain(), 0);
+    lv::set_style_text_font(
+        block.icon,
+        lv::font_chain_for_mode(ui().layout_mode.is_portrait()),
+        0,
+    );
     lv::set_style_text_color(block.icon, color, 0);
     lv::set_style_shadow_width(block.icon, 0, 0);
 }
@@ -298,25 +302,38 @@ pub(super) fn layout_chrome_for_tuner(tuner_on: bool) {
         lv::set_hidden(u.chain_bar, tuner_on);
     }
 
-    let h = if u.body_h > 0 {
+    if tuner_on {
+        let full_w = lv::hor_res() - 2 * UI_EDGE_PAD;
+        let full_h = if u.body_h > 0 {
+            u.body_h
+        } else {
+            lv::ver_res() - 2 * UI_EDGE_PAD - HEADER_H
+        };
+        lv::set_size(u.content_root, full_w, full_h);
+        lv::align(u.content_root, lv::ALIGN_TOP_LEFT, 0, HEADER_H);
+        return;
+    }
+
+    let w = if u.content_w_normal > 0 {
+        u.content_w_normal
+    } else {
+        lv::get_width(u.content_root)
+    };
+    let h = if u.content_h_normal > 0 {
+        u.content_h_normal
+    } else if u.body_h > 0 {
         u.body_h
     } else {
         lv::get_height(u.content_root)
     };
-
-    if tuner_on {
-        let full_w = lv::hor_res() - 2 * UI_EDGE_PAD;
-        lv::set_size(u.content_root, full_w, h);
-        lv::align(u.content_root, lv::ALIGN_TOP_LEFT, 0, HEADER_H);
+    let x = u.content_x_normal;
+    let y = if u.content_y_normal > 0 {
+        u.content_y_normal
     } else {
-        let w = if u.content_w_normal > 0 {
-            u.content_w_normal
-        } else {
-            lv::get_width(u.content_root)
-        };
-        lv::set_size(u.content_root, w, h);
-        lv::align(u.content_root, lv::ALIGN_TOP_LEFT, u.content_x_normal, HEADER_H);
-    }
+        HEADER_H
+    };
+    lv::set_size(u.content_root, w, h);
+    lv::align(u.content_root, lv::ALIGN_TOP_LEFT, x, y);
 }
 
 pub(super) fn show_tuner_view(on: bool) {
@@ -508,7 +525,7 @@ pub(super) fn chain_toggle_slot(slot: usize) {
     nano_fx_write_block_enabled(bid, !fx.blocks[bid as usize].on);
 }
 
-pub(super) unsafe extern "C" fn chain_block_btn_event_cb(e: *mut lv_event_t) {
+pub(super) extern "C" fn chain_block_btn_event_cb(e: *mut lv_event_t) {
     let code = lv::event_code(e);
     let idx = lv::event_user_data(e);
     if idx >= CHAIN_BLOCK_COUNT {
@@ -560,7 +577,7 @@ pub(super) unsafe extern "C" fn chain_block_btn_event_cb(e: *mut lv_event_t) {
     update_chain_blocks_locked(amp_state(), fx_state());
 }
 
-pub(super) unsafe extern "C" fn tuner_hdr_btn_event_cb(e: *mut lv_event_t) {
+pub(super) extern "C" fn tuner_hdr_btn_event_cb(e: *mut lv_event_t) {
     if lv::event_code(e) != lv::EVENT_CLICKED {
         return;
     }

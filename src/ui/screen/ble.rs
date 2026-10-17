@@ -1,7 +1,11 @@
 /* ------------------------------------------------------------------- BLE */
 
 use super::*;
+use super::build::{
+    apply_layout_mode, refresh_layout_buttons_locked, style_layout_choice_btn,
+};
 use super::chain::{ui_bring_chrome_to_front, ui_no_scroll_only, ui_passive_container};
+use super::consts::LayoutMode;
 use super::fx_panel::apply_fx_locked;
 use super::helpers::{fx_state, tuner_state};
 use super::state::{assert_lvgl_task, ui, with_inbox};
@@ -89,6 +93,38 @@ fn refresh_connecting_status_locked() {
     }
 }
 
+fn make_layout_choice_btn(parent: *mut lv_obj_t, label: &str, mode: LayoutMode) -> *mut lv_obj_t {
+    let btn = lv::button_create(parent);
+    lv::set_size(btn, 148, 36);
+    lv::set_style_radius(btn, 8, 0);
+    lv::set_style_border_width(btn, 1, 0);
+    lv::set_style_shadow_width(btn, 0, 0);
+    lv::set_style_bg_opa(btn, lv::OPA_COVER, 0);
+    lv::add_flag(btn, lv::FLAG_CHECKABLE);
+    lv::add_event_cb(
+        btn,
+        layout_choice_btn_event_cb,
+        lv::EVENT_CLICKED,
+        mode as usize,
+    );
+
+    let lbl = lv::label_create(btn);
+    lv::label_set_text(lbl, label);
+    lv::set_style_text_font(lbl, lv::font_sm(), 0);
+    lv::center(lbl);
+
+    style_layout_choice_btn(btn, false);
+    btn
+}
+
+pub(super) extern "C" fn layout_choice_btn_event_cb(e: *mut lv_event_t) {
+    if lv::event_code(e) != lv::EVENT_CLICKED {
+        return;
+    }
+    let mode = LayoutMode::from_u8(lv::event_user_data(e) as u8);
+    apply_layout_mode(mode);
+}
+
 pub(super) fn build_connecting_overlay(screen: *mut lv_obj_t) {
     let u = ui();
 
@@ -128,8 +164,56 @@ pub(super) fn build_connecting_overlay(screen: *mut lv_obj_t) {
     lv::set_style_text_color(u.connecting_status, lv::color_hex(0x80C0FF), 0);
     lv::set_style_text_align(u.connecting_status, lv::TEXT_ALIGN_CENTER, 0);
 
+    let layout_wrap = lv::obj_create(overlay);
+    let box_w = (lv::hor_res() - 48).clamp(280, 520);
+    lv::set_width(layout_wrap, box_w.min(420));
+    lv::set_height(layout_wrap, lv::SIZE_CONTENT);
+    lv::set_style_bg_opa(layout_wrap, lv::OPA_TRANSP, 0);
+    lv::set_style_border_width(layout_wrap, 0, 0);
+    lv::set_style_pad_all(layout_wrap, 0, 0);
+    lv::set_style_pad_row(layout_wrap, 10, 0);
+    lv::set_flex_flow(layout_wrap, lv::FLEX_FLOW_COLUMN);
+    lv::set_flex_align(
+        layout_wrap,
+        lv::FLEX_ALIGN_CENTER,
+        lv::FLEX_ALIGN_CENTER,
+        lv::FLEX_ALIGN_CENTER,
+    );
+    ui_passive_container(layout_wrap);
+
+    let layout_lbl = lv::label_create(layout_wrap);
+    lv::label_set_text(layout_lbl, "Screen orientation");
+    lv::set_style_text_font(layout_lbl, lv::font_sm(), 0);
+    lv::set_style_text_color(layout_lbl, lv::color_hex(0x909090), 0);
+    lv::set_style_text_align(layout_lbl, lv::TEXT_ALIGN_CENTER, 0);
+
+    let layout_row = lv::obj_create(layout_wrap);
+    lv::set_width(layout_row, lv::pct(100));
+    lv::set_height(layout_row, lv::SIZE_CONTENT);
+    lv::set_style_bg_opa(layout_row, lv::OPA_TRANSP, 0);
+    lv::set_style_border_width(layout_row, 0, 0);
+    lv::set_style_pad_all(layout_row, 0, 0);
+    lv::set_style_pad_column(layout_row, 8, 0);
+    lv::set_style_pad_row(layout_row, 8, 0);
+    lv::set_flex_flow(layout_row, lv::FLEX_FLOW_ROW_WRAP);
+    lv::set_flex_align(
+        layout_row,
+        lv::FLEX_ALIGN_CENTER,
+        lv::FLEX_ALIGN_CENTER,
+        lv::FLEX_ALIGN_CENTER,
+    );
+    ui_passive_container(layout_row);
+
+    u.layout_horiz_btn = make_layout_choice_btn(layout_row, "Landscape", LayoutMode::Horizontal);
+    u.layout_horiz_flip_btn =
+        make_layout_choice_btn(layout_row, "Landscape Flip", LayoutMode::HorizontalFlip);
+    u.layout_vert_btn = make_layout_choice_btn(layout_row, "Portrait", LayoutMode::Vertical);
+    u.layout_vert_flip_btn =
+        make_layout_choice_btn(layout_row, "Portrait Flip", LayoutMode::VerticalFlip);
+    refresh_layout_buttons_locked();
+
     let steps = lv::obj_create(overlay);
-    lv::set_width(steps, 520);
+    lv::set_width(steps, box_w);
     lv::set_height(steps, lv::SIZE_CONTENT);
     lv::set_style_bg_opa(steps, lv::OPA_TRANSP, 0);
     lv::set_style_border_width(steps, 0, 0);
@@ -209,7 +293,7 @@ pub(super) fn refresh_ble_icon_locked() {
     update_connecting_overlay_locked();
 }
 
-pub(super) unsafe extern "C" fn ble_icon_timer_cb(_timer: *mut lv_timer_t) {
+pub(super) extern "C" fn ble_icon_timer_cb(_timer: *mut lv_timer_t) {
     refresh_ble_icon_locked();
 }
 

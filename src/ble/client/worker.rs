@@ -4,7 +4,7 @@
 use super::*;
 use super::{ctx::*, gatt::*};
 
-pub(super) unsafe extern "C" fn c305_worker_task(_arg: *mut c_void) {
+pub(super) extern "C" fn c305_worker_task(_arg: *mut c_void) {
     let s = ctx();
     let mut slot = MaybeUninit::<C305Item>::uninit();
 

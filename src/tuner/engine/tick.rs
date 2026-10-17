@@ -9,7 +9,7 @@ use esp_idf_svc::sys::{
 use super::ctx::*;
 use super::pitch::expire_stale_pitch;
 
-unsafe extern "C" fn tick_timer_cb(_arg: *mut c_void) {
+extern "C" fn tick_timer_cb(_arg: *mut c_void) {
     expire_stale_pitch();
 }
 

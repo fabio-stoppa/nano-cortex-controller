@@ -5,7 +5,7 @@ use super::amp::apply_amp_locked;
 use super::chain::{show_tempo_view, show_tuner_view, update_chain_blocks_locked};
 use super::consts::{
     TUNER_CENTS_SPAN, TUNER_COLOR_IDLE, TUNER_COLOR_NEEDLE, TUNER_COLOR_OK, TUNER_IN_TUNE_CENTS,
-    TUNER_METER_W, TUNER_NEEDLE_W,
+    TUNER_NEEDLE_W,
 };
 use super::header::sync_header_model_locked;
 use super::helpers::{amp_state, fx_state, note_label, set_label_if_changed, tuner_snap};
@@ -19,14 +19,20 @@ pub(super) fn paint_tuner_meter_locked(cents_f: f32, has_pitch: bool) {
     let c = cents_f.clamp(-TUNER_CENTS_SPAN, TUNER_CENTS_SPAN);
     let in_tune = has_pitch && c.abs() <= TUNER_IN_TUNE_CENTS;
 
+    let meter_w = if u.tuner_meter_w > 0 {
+        u.tuner_meter_w
+    } else {
+        lv::get_width(u.tuner_meter).max(TUNER_NEEDLE_W + 1)
+    };
+
     let (x, color) = if !has_pitch {
         (
-            (TUNER_METER_W - TUNER_NEEDLE_W) / 2,
+            (meter_w - TUNER_NEEDLE_W) / 2,
             lv::color_hex(TUNER_COLOR_IDLE),
         )
     } else {
         let t = (c + TUNER_CENTS_SPAN) / (2.0 * TUNER_CENTS_SPAN);
-        let travel = TUNER_METER_W - TUNER_NEEDLE_W;
+        let travel = meter_w - TUNER_NEEDLE_W;
         let x = (t * travel as f32).round() as i32;
         let color = lv::color_hex(if in_tune {
             TUNER_COLOR_OK
@@ -56,7 +62,7 @@ pub(super) fn paint_tuner_meter_locked(cents_f: f32, has_pitch: bool) {
     }
 }
 
-pub(super) unsafe extern "C" fn tuner_btn_event_cb(e: *mut lv_event_t) {
+pub(super) extern "C" fn tuner_btn_event_cb(e: *mut lv_event_t) {
     if lv::event_code(e) != lv::EVENT_CLICKED || !ui().ble_connected {
         return;
     }
@@ -65,7 +71,7 @@ pub(super) unsafe extern "C" fn tuner_btn_event_cb(e: *mut lv_event_t) {
     nano_tuner_set_active(!t.active);
 }
 
-pub(super) unsafe extern "C" fn bpm_hdr_btn_event_cb(e: *mut lv_event_t) {
+pub(super) extern "C" fn bpm_hdr_btn_event_cb(e: *mut lv_event_t) {
     if lv::event_code(e) != lv::EVENT_CLICKED || !ui().ble_connected {
         return;
     }
@@ -74,14 +80,14 @@ pub(super) unsafe extern "C" fn bpm_hdr_btn_event_cb(e: *mut lv_event_t) {
     update_chain_blocks_locked(amp_state(), fx_state());
 }
 
-pub(super) unsafe extern "C" fn tempo_tap_btn_event_cb(e: *mut lv_event_t) {
+pub(super) extern "C" fn tempo_tap_btn_event_cb(e: *mut lv_event_t) {
     if lv::event_code(e) != lv::EVENT_CLICKED || !ui().ble_connected {
         return;
     }
     nano_state_tempo_tap();
 }
 
-pub(super) unsafe extern "C" fn tempo_scope_event_cb(e: *mut lv_event_t) {
+pub(super) extern "C" fn tempo_scope_event_cb(e: *mut lv_event_t) {
     let u = ui();
     if lv::event_code(e) != lv::EVENT_VALUE_CHANGED || u.tempo_scope_sw.is_null() {
         return;

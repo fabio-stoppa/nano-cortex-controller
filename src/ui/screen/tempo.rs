@@ -53,8 +53,11 @@ pub(super) fn build_tuner_panel(parent: *mut lv_obj_t) {
     lv::set_style_text_font(u.tuner_cents, lv::font_lg(), 0);
     lv::set_style_pad_bottom(u.tuner_cents, 16, 0);
 
+    let meter_w = (lv::hor_res() - 48).clamp(200, TUNER_METER_W);
+    u.tuner_meter_w = meter_w;
+
     u.tuner_meter = lv::obj_create(body);
-    lv::set_size(u.tuner_meter, TUNER_METER_W, TUNER_METER_H);
+    lv::set_size(u.tuner_meter, meter_w, TUNER_METER_H);
     lv::set_style_bg_color(u.tuner_meter, lv::color_hex(0x1A1A1A), 0);
     lv::set_style_bg_opa(u.tuner_meter, lv::OPA_COVER, 0);
     lv::set_style_border_width(u.tuner_meter, 1, 0);
@@ -93,7 +96,7 @@ pub(super) fn build_tuner_panel(parent: *mut lv_obj_t) {
     lv::set_style_border_width(u.tuner_meter_needle, 0, 0);
     lv::set_style_radius(u.tuner_meter_needle, 3, 0);
     lv::set_style_pad_all(u.tuner_meter_needle, 0, 0);
-    lv::set_pos(u.tuner_meter_needle, (TUNER_METER_W - TUNER_NEEDLE_W) / 2, 0);
+    lv::set_pos(u.tuner_meter_needle, (meter_w - TUNER_NEEDLE_W) / 2, 0);
     lv::remove_flag(u.tuner_meter_needle, lv::FLAG_SCROLLABLE);
     lv::remove_flag(u.tuner_meter_needle, lv::FLAG_CLICKABLE);
 

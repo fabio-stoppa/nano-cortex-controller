@@ -223,7 +223,7 @@ pub(super) fn build_fx_param_cell(i: usize) {
     };
 }
 
-pub(super) unsafe extern "C" fn fx_build_timer_cb(timer: *mut lv_timer_t) {
+pub(super) extern "C" fn fx_build_timer_cb(timer: *mut lv_timer_t) {
     let u = ui();
     let fx = unsafe { fx_state().as_ref() };
     let Some(fx) = fx.filter(|_| fx_panel_is_visible()) else {

@@ -91,7 +91,7 @@ pub fn nano_ui_dispatch_if_pending() {
     }
 }
 
-pub(super) unsafe extern "C" fn ui_dispatch_timer_cb(_timer: *mut lv_timer_t) {
+pub(super) extern "C" fn ui_dispatch_timer_cb(_timer: *mut lv_timer_t) {
     note_lvgl_task();
     nano_ui_dispatch_if_pending();
 

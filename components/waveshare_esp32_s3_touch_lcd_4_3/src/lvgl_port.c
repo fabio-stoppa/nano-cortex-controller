@@ -11,6 +11,7 @@
 #include "esp_lcd_touch.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "lvgl.h"
 #include "bsp/lvgl_port.h"
 #include "bsp/board.h"
@@ -25,6 +26,81 @@ IRAM_ATTR static bool rgb_lcd_on_vsync_event(esp_lcd_panel_handle_t panel, const
 static const char *TAG = "lv_port";                      // Tag for logging
 static SemaphoreHandle_t lvgl_mux;                       // LVGL mutex for synchronization
 static TaskHandle_t lvgl_task_handle = NULL;             // Handle for the LVGL task
+#if LVGL_VERSION_MAJOR >= 9
+static lv_display_t *s_disp = NULL;
+#else
+static lv_disp_t *s_disp = NULL;
+#endif
+static esp_lcd_touch_handle_t s_tp = NULL;
+static uint16_t s_rotation_degree = 0;
+
+static void apply_touch_rotation(uint16_t degree)
+{
+    if (!s_tp) {
+        return;
+    }
+    /* Reset mirrors, then apply the mapping for the chosen orientation. */
+    esp_lcd_touch_set_swap_xy(s_tp, false);
+    esp_lcd_touch_set_mirror_x(s_tp, false);
+    esp_lcd_touch_set_mirror_y(s_tp, false);
+    switch (degree) {
+    case 90:
+        esp_lcd_touch_set_swap_xy(s_tp, true);
+        esp_lcd_touch_set_mirror_y(s_tp, true);
+        break;
+    case 180:
+        esp_lcd_touch_set_mirror_x(s_tp, true);
+        esp_lcd_touch_set_mirror_y(s_tp, true);
+        break;
+    case 270:
+        esp_lcd_touch_set_swap_xy(s_tp, true);
+        esp_lcd_touch_set_mirror_x(s_tp, true);
+        break;
+    default:
+        break;
+    }
+}
+
+esp_err_t lvgl_port_set_rotation(uint16_t degree)
+{
+    if (!s_disp) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (degree != 0 && degree != 90 && degree != 180 && degree != 270) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (degree == s_rotation_degree) {
+        return ESP_OK;
+    }
+
+#if LVGL_VERSION_MAJOR >= 9
+    lv_display_rotation_t rot = LV_DISPLAY_ROTATION_0;
+    if (degree == 90) {
+        rot = LV_DISPLAY_ROTATION_90;
+    } else if (degree == 180) {
+        rot = LV_DISPLAY_ROTATION_180;
+    } else if (degree == 270) {
+        rot = LV_DISPLAY_ROTATION_270;
+    }
+    lv_display_set_rotation(s_disp, rot);
+#else
+    (void)degree;
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+
+    /* LVGL remaps indev coords for software rotation; do not also swap the
+     * touch controller axes here or points will be transformed twice. */
+    s_rotation_degree = degree;
+#if LVGL_VERSION_MAJOR >= 9
+    ESP_LOGI(TAG, "Display rotation set to %u (logical %dx%d)",
+             (unsigned)degree,
+             (int)lv_display_get_horizontal_resolution(s_disp),
+             (int)lv_display_get_vertical_resolution(s_disp));
+#else
+    ESP_LOGI(TAG, "Display rotation set to %u", (unsigned)degree);
+#endif
+    return ESP_OK;
+}
 
 #if LVGL_PORT_ROTATION_DEGREE != 0
 // Function to get the next frame buffer for double buffering
@@ -405,42 +481,76 @@ void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color
 #else
 
 #if LVGL_VERSION_MAJOR >= 9
+/* Scratch buffer for software-rotated partial flushes (RGB565). */
+static uint16_t *s_rot_buf = NULL;
+static size_t s_rot_buf_px = 0;
+
 static void flush_callback(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 {
     esp_lcd_panel_handle_t panel_handle = (esp_lcd_panel_handle_t)lv_display_get_user_data(disp);
-    lv_color_t *color_map = (lv_color_t *)px_map;
+    lv_display_rotation_t rotation = lv_display_get_rotation(disp);
+
+    if (rotation == LV_DISPLAY_ROTATION_0) {
+        esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px_map);
+    } else {
+        /* lv_display_set_rotation only swaps logical resolution — rotate pixels here. */
+        lv_color_format_t cf = lv_display_get_color_format(disp);
+        lv_area_t rotated_area = *area;
+        lv_display_rotate_area(disp, &rotated_area);
+
+        const int32_t src_w = lv_area_get_width(area);
+        const int32_t src_h = lv_area_get_height(area);
+        const int32_t dst_w = lv_area_get_width(&rotated_area);
+        const int32_t dst_h = lv_area_get_height(&rotated_area);
+        const uint32_t src_stride = lv_draw_buf_width_to_stride(src_w, cf);
+        const uint32_t dst_stride = lv_draw_buf_width_to_stride(dst_w, cf);
+        const size_t need_px = (size_t)dst_w * (size_t)dst_h;
+
+        if (s_rot_buf == NULL || s_rot_buf_px < need_px) {
+            if (s_rot_buf) {
+                heap_caps_free(s_rot_buf);
+                s_rot_buf = NULL;
+                s_rot_buf_px = 0;
+            }
+            s_rot_buf = heap_caps_malloc(need_px * sizeof(uint16_t),
+                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (s_rot_buf == NULL) {
+                s_rot_buf = heap_caps_malloc(need_px * sizeof(uint16_t),
+                                             MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            }
+            assert(s_rot_buf);
+            s_rot_buf_px = need_px;
+        }
+
+        lv_draw_sw_rotate(px_map, (uint8_t *)s_rot_buf, src_w, src_h, src_stride, dst_stride,
+                          rotation, cf);
+        esp_lcd_panel_draw_bitmap(panel_handle, rotated_area.x1, rotated_area.y1,
+                                  rotated_area.x2 + 1, rotated_area.y2 + 1, s_rot_buf);
+    }
+
+    if (lv_display_flush_is_last(disp)) {
+        ulTaskNotifyValueClear(NULL, ULONG_MAX);
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    }
+    lv_display_flush_ready(disp);
+}
 #else
 static void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map)
 {
     esp_lcd_panel_handle_t panel_handle = (esp_lcd_panel_handle_t)drv->user_data;
-#endif
-    const int offsetx1 = area->x1; // Start X coordinate of the area to flush
-    const int offsetx2 = area->x2; // End X coordinate of the area to flush
-    const int offsety1 = area->y1; // Start Y coordinate of the area to flush
-    const int offsety2 = area->y2; // End Y coordinate of the area to flush
+    const int offsetx1 = area->x1;
+    const int offsetx2 = area->x2;
+    const int offsety1 = area->y1;
+    const int offsety2 = area->y2;
 
-    /* Just copy data from the color map to the RGB frame buffer */
     esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
-    #if LVGL_VERSION_MAJOR >= 9
-    bool is_last = lv_display_flush_is_last(disp);
-    #else
-        bool is_last = lv_disp_flush_is_last(drv);
-    #endif
-
-        if (is_last) {
-                /* Clear notification first to avoid clearing a fast VSYNC ISR event */
-                ulTaskNotifyValueClear(NULL, ULONG_MAX);
-                /* Wait for the current frame buffer to complete transmission (VSYNC) */
-                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        }
-
-
-#if LVGL_VERSION_MAJOR >= 9
-    lv_display_flush_ready(disp);
-#else
+    if (lv_disp_flush_is_last(drv)) {
+        ulTaskNotifyValueClear(NULL, ULONG_MAX);
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    }
     lv_disp_flush_ready(drv);
-#endif
 }
+#endif
 
 #endif /* LVGL_PORT_AVOID_TEAR_ENABLE */
 
@@ -663,6 +773,13 @@ esp_err_t lvgl_port_init(esp_lcd_panel_handle_t lcd_handle, esp_lcd_touch_handle
 #endif
 
     assert(disp); // Ensure the display initialization was successful
+    s_disp = disp;
+    s_tp = tp_handle;
+#if LVGL_PORT_ROTATION_DEGREE != 0
+    s_rotation_degree = LVGL_PORT_ROTATION_DEGREE;
+#else
+    s_rotation_degree = 0;
+#endif
 
     esp_lcd_rgb_panel_event_callbacks_t cbs = {
     #if RGB_BOUNCE_BUFFER_SIZE > 0
@@ -678,19 +795,8 @@ esp_err_t lvgl_port_init(esp_lcd_panel_handle_t lcd_handle, esp_lcd_touch_handle
         lv_indev_t *indev = indev_init(tp_handle); // Initialize the touchpad input device
         assert(indev); // Ensure the input device initialization was successful
 
-
-        // Set touch panel orientation based on rotation
-
-#if LVGL_PORT_ROTATION_DEGREE == 90
-        esp_lcd_touch_set_swap_xy(tp_handle, true); // Swap X and Y coordinates
-        esp_lcd_touch_set_mirror_y(tp_handle, true); // Mirror Y coordinates
-#elif LVGL_PORT_ROTATION_DEGREE == 180
-        esp_lcd_touch_set_mirror_x(tp_handle, true); // Mirror X coordinates
-        esp_lcd_touch_set_mirror_y(tp_handle, true); // Mirror Y coordinates
-#elif LVGL_PORT_ROTATION_DEGREE == 270
-        esp_lcd_touch_set_swap_xy(tp_handle, true); // Swap X and Y coordinates
-        esp_lcd_touch_set_mirror_x(tp_handle, true); // Mirror X coordinates
-#endif
+        // Compile-time rotation (avoid-tear path) still needs the matching touch map.
+        apply_touch_rotation(s_rotation_degree);
     }
 
     lvgl_mux = xSemaphoreCreateRecursiveMutex(); // Create a recursive mutex for LVGL

@@ -19,7 +19,9 @@ use super::rx::{
     schedule_state_parse,
 };
 use super::tempo::{on_tempo_notify, tempo_bpm_f, write_tempo_tap_bpm};
-use super::timers::{ensure_timers, schedule_refresh};
+use super::timers::{
+    cancel_tempo_auto_exit, ensure_timers, schedule_refresh, schedule_tempo_auto_exit,
+};
 
 const STATE_REQUEST_DELAY_US: u64 = 2200 * 1000;
 const TUNER_FAST_SYNC_US: u64 = 400 * 1000;
@@ -31,6 +33,7 @@ pub fn nano_state_reset() {
     reset_amp_sync();
     crate::tuner::nano_tuner_reset();
     crate::fx::nano_fx_reset();
+    cancel_tempo_auto_exit();
     let s = st();
     s.tempo_mode_active = false;
     s.tempo_ignore_exit_echo_us = 0;
@@ -498,6 +501,7 @@ pub fn nano_state_tempo_enter() -> bool {
 
 /// Close Tempo Mode screen: best-effort exit-shaped C304 write.
 pub fn nano_state_tempo_exit() -> bool {
+    cancel_tempo_auto_exit();
     let s = st();
     s.tap_count = 0;
     s.tempo_mode_active = false;
@@ -563,5 +567,7 @@ pub fn nano_state_tempo_tap() -> bool {
     s.tempo_mode_active = true;
     // Update readout now; phase-lock on C305 echo so we match the Nano LED.
     crate::ui::screen::nano_ui_set_bpm(bpm, true);
+    // Footswitch / TAP: leave Tempo Mode a few seconds after the last tap.
+    schedule_tempo_auto_exit();
     true
 }

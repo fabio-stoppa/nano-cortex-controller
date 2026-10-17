@@ -113,6 +113,9 @@ pub(super) struct Ctx {
     pub(super) gattc_if: esp_gatt_if_t,
     pub(super) conn_id: u16,
     pub(super) remote_bda: esp_bd_addr_t,
+    /// BDA we called `gattc_open` for — ignore CONNECT events for other peers
+    /// (Bluedroid delivers CONNECT to every GATTC app).
+    pub(super) pending_bda: Option<esp_bd_addr_t>,
     pub(super) connected: bool,
     pub(super) scanning: bool,
     pub(super) a002_start: u16,
@@ -147,6 +150,7 @@ impl Ctx {
             gattc_if: ESP_GATT_IF_NONE as esp_gatt_if_t,
             conn_id: 0,
             remote_bda: [0; 6],
+            pending_bda: None,
             connected: false,
             scanning: false,
             a002_start: INVALID_HANDLE,
@@ -303,16 +307,41 @@ pub(super) fn is_connected(s: &Ctx) -> bool {
     s.connected && s.c304_handle != INVALID_HANDLE && s.notify_enabled
 }
 
+pub(super) fn need_scan(s: &Ctx) -> bool {
+    // Prefer full Nano link (C304 + notifies), not raw GATT connect — a FootCtrl
+    // CONNECT used to set `s.connected` and stop us hunting for the Nano.
+    let need_nano = !is_connected(s);
+    // Hunt for FootCtrl and/or FootCtrlPlus after Nano is fully up.
+    let need_choc = is_connected(s) && crate::ble::midi_fs::need_peer();
+    need_nano || need_choc
+}
+
+pub(super) fn bda_eq(a: &esp_bd_addr_t, b: &esp_bd_addr_t) -> bool {
+    a == b
+}
+
 pub(super) fn start_scan(s: &mut Ctx) {
-    if s.scanning || s.connected {
+    if s.scanning || !need_scan(s) {
         return;
     }
     let err = unsafe { esp_ble_gap_start_scanning(0) };
     if err == ESP_OK {
         s.scanning = true;
         publish_link(s);
-        info!(target: TAG, "Scanning for \"{}\"...", String::from_utf8_lossy(NAME_PREFIX));
+        let nano = if is_connected(s) { "" } else { " Nano Cortex" };
+        let choc = if !is_connected(s) {
+            "" // Nano first — don't advertise FootCtrl until Nano is up
+        } else if crate::ble::midi_fs::need_peer() {
+            " FootCtrl/Plus"
+        } else {
+            ""
+        };
+        info!(target: TAG, "Scanning for{nano}{choc}...");
     } else {
         error!(target: TAG, "Scan start failed: {}", err_name(err));
     }
+}
+
+pub(super) fn resume_scan_if_needed() {
+    start_scan(ctx());
 }

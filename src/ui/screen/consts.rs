@@ -31,9 +31,41 @@ pub(super) const CHAIN_TAB_BORDER_W: i32 = 1;
 pub(super) const CHAIN_TAB_BORDER_SEL: i32 = 2;
 
 pub(super) const CHAIN_RAIL_W: i32 = 112;
+/// Top chain strip height for portrait chrome layout.
+pub(super) const CHAIN_RAIL_H: i32 = 52;
 pub(super) const CHAIN_TAB_W: i32 = 104;
 pub(super) const CHAIN_TAB_H: i32 = 64;
+pub(super) const CHAIN_TAB_H_VERT: i32 = 40;
 pub(super) const CHAIN_ICON_W: i32 = 94;
+
+/// Controller orientation (chosen on the BLE connecting overlay).
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(super) enum LayoutMode {
+    /// Landscape 800×480 (rotation 0).
+    Horizontal = 0,
+    /// Portrait 480×800 (rotation 90°).
+    Vertical = 1,
+    /// Portrait flipped 180° from Vertical (rotation 270°).
+    VerticalFlip = 2,
+    /// Landscape flipped 180° (rotation 180°).
+    HorizontalFlip = 3,
+}
+
+impl LayoutMode {
+    pub(super) fn is_portrait(self) -> bool {
+        matches!(self, LayoutMode::Vertical | LayoutMode::VerticalFlip)
+    }
+
+    pub(super) fn from_u8(v: u8) -> LayoutMode {
+        match v {
+            1 => LayoutMode::Vertical,
+            2 => LayoutMode::VerticalFlip,
+            3 => LayoutMode::HorizontalFlip,
+            _ => LayoutMode::Horizontal,
+        }
+    }
+}
 
 pub(super) const CHAIN_PRE1: usize = 0;
 pub(super) const CHAIN_PRE2: usize = 1;

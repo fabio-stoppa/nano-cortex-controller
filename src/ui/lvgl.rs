@@ -29,6 +29,7 @@ unsafe extern "C" {
     ) -> esp_err_t;
     fn waveshare_rgb_lcd_bl_on() -> esp_err_t;
     fn lvgl_port_init(lcd_handle: *mut c_void, tp_handle: *mut c_void) -> esp_err_t;
+    fn lvgl_port_set_rotation(degree: u16) -> esp_err_t;
     fn lvgl_port_lock(timeout_ms: i32) -> bool;
     fn lvgl_port_unlock();
 }
@@ -42,6 +43,10 @@ pub fn rgb_lcd_init() -> (esp_err_t, *mut c_void, *mut c_void) {
 
 pub fn port_init(panel: *mut c_void, touch: *mut c_void) -> esp_err_t {
     unsafe { lvgl_port_init(panel, touch) }
+}
+
+pub fn port_set_rotation(degree: u16) -> esp_err_t {
+    unsafe { lvgl_port_set_rotation(degree) }
 }
 
 pub fn bl_on() -> esp_err_t {
@@ -143,12 +148,25 @@ pub const SYMBOL_BLUETOOTH: &str = "\u{F293}";
 
 /* ---------------------------------------------------------------- fonts */
 
+pub fn font_xs() -> *const lv_font_t {
+    &raw const sys::lv_font_montserrat_14
+}
+
 pub fn font_sm() -> *const lv_font_t {
     &raw const sys::lv_font_montserrat_16
 }
 
 pub fn font_chain() -> *const lv_font_t {
     &raw const sys::lv_font_montserrat_18
+}
+
+/// Chain tab label font — smaller in portrait so 6 top tabs fit.
+pub fn font_chain_for_mode(portrait: bool) -> *const lv_font_t {
+    if portrait {
+        font_xs()
+    } else {
+        font_chain()
+    }
 }
 
 pub fn font_md() -> *const lv_font_t {
@@ -573,6 +591,10 @@ pub fn get_child(obj: *const lv_obj_t, idx: i32) -> *mut lv_obj_t {
     unsafe { sys::lv_obj_get_child(obj, idx) }
 }
 
+pub fn get_parent(obj: *const lv_obj_t) -> *mut lv_obj_t {
+    unsafe { sys::lv_obj_get_parent(obj) }
+}
+
 pub fn obj_clean(obj: *mut lv_obj_t) {
     unsafe { sys::lv_obj_clean(obj) }
 }
@@ -628,7 +650,7 @@ pub fn event_current_target(e: *mut lv_event_t) -> *mut lv_obj_t {
 
 pub fn add_event_cb(
     obj: *mut lv_obj_t,
-    cb: unsafe extern "C" fn(*mut lv_event_t),
+    cb: extern "C" fn(*mut lv_event_t),
     filter: sys::lv_event_code_t,
     user_data: usize,
 ) {

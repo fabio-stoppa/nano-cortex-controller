@@ -22,7 +22,7 @@ const NO_AFFINITY: BaseType_t = 0x7FFF_FFFF;
 const NOTIFY_INDEX: UBaseType_t = 0;
 const PORT_MAX_DELAY: TickType_t = TickType_t::MAX;
 
-unsafe extern "C" fn parse_worker(_arg: *mut c_void) {
+extern "C" fn parse_worker(_arg: *mut c_void) {
     loop {
         unsafe { ulTaskGenericNotifyTake(NOTIFY_INDEX, PD_TRUE, PORT_MAX_DELAY) };
         parse_state_buffer();
@@ -51,7 +51,7 @@ fn ensure_parse_task() {
     }
 }
 
-unsafe extern "C" fn parse_timer_cb(_arg: *mut c_void) {
+extern "C" fn parse_timer_cb(_arg: *mut c_void) {
     ensure_parse_task();
     let s = st();
     if !s.parse_task.is_null() {
@@ -69,11 +69,11 @@ unsafe extern "C" fn parse_timer_cb(_arg: *mut c_void) {
     }
 }
 
-unsafe extern "C" fn refresh_timer_cb(_arg: *mut c_void) {
+extern "C" fn refresh_timer_cb(_arg: *mut c_void) {
     request_current_state_now("Debounced amp refresh");
 }
 
-unsafe extern "C" fn poll_timer_cb(_arg: *mut c_void) {
+extern "C" fn poll_timer_cb(_arg: *mut c_void) {
     let s = st();
     if is_tuner_active() {
         return;
@@ -83,7 +83,7 @@ unsafe extern "C" fn poll_timer_cb(_arg: *mut c_void) {
     }
 }
 
-unsafe extern "C" fn tuner_fast_sync_timer_cb(_arg: *mut c_void) {
+extern "C" fn tuner_fast_sync_timer_cb(_arg: *mut c_void) {
     let s = st();
     if is_tuner_active() {
         s.pending_tuner_sync = true;
@@ -98,7 +98,7 @@ unsafe extern "C" fn tuner_fast_sync_timer_cb(_arg: *mut c_void) {
     send_state_request("Tuner fast sync", false);
 }
 
-unsafe extern "C" fn tuner_watch_poll_cb(_arg: *mut c_void) {
+extern "C" fn tuner_watch_poll_cb(_arg: *mut c_void) {
     let s = st();
     if is_tuner_active() {
         nano_state_tuner_watch_update(true);
@@ -110,6 +110,40 @@ unsafe extern "C" fn tuner_watch_poll_cb(_arg: *mut c_void) {
 
     request_current_state_now("Tuner watch");
 }
+
+/// Leave Tempo Mode after the last footswitch/UI tap goes idle.
+extern "C" fn tempo_auto_exit_cb(_arg: *mut c_void) {
+    if !st().tempo_mode_active {
+        return;
+    }
+    info!(target: TAG, "Tempo Mode auto-exit (tap idle)");
+    let _ = crate::state::nano_state_tempo_exit();
+    crate::ui::screen::nano_ui_set_tempo_mode(false);
+}
+
+/// Re-arm auto-exit; each new tap postpones closing Tempo Mode.
+pub(super) fn schedule_tempo_auto_exit() {
+    let s = st();
+    if s.tempo_auto_exit_timer.is_null() {
+        return;
+    }
+    unsafe {
+        esp_timer_stop(s.tempo_auto_exit_timer);
+        esp_timer_start_once(s.tempo_auto_exit_timer, TEMPO_AUTO_EXIT_US);
+    }
+}
+
+pub(super) fn cancel_tempo_auto_exit() {
+    let s = st();
+    if s.tempo_auto_exit_timer.is_null() {
+        return;
+    }
+    unsafe {
+        esp_timer_stop(s.tempo_auto_exit_timer);
+    }
+}
+
+const TEMPO_AUTO_EXIT_US: u64 = 3500 * 1000;
 
 /// Arm (or re-arm) the parse timer with an explicit quiet-window.
 pub(super) fn schedule_parse_in(delay_us: u64) {
@@ -135,7 +169,7 @@ pub(super) fn schedule_refresh() {
     }
 }
 
-unsafe extern "C" fn sync_timer_cb(_arg: *mut c_void) {
+extern "C" fn sync_timer_cb(_arg: *mut c_void) {
     finish_fe_capture();
     info!(target: TAG, "Initial sync timer — requesting preset state");
     send_state_request("Current preset state request", true);
@@ -143,7 +177,7 @@ unsafe extern "C" fn sync_timer_cb(_arg: *mut c_void) {
 
 fn create_timer(
     handle: &mut esp_timer_handle_t,
-    cb: unsafe extern "C" fn(*mut c_void),
+    cb: extern "C" fn(*mut c_void),
     name: &CStr,
 ) {
     if !handle.is_null() {
@@ -171,4 +205,9 @@ pub(super) fn ensure_timers() {
         c"nano_tsync",
     );
     create_timer(&mut s.tuner_watch_timer, tuner_watch_poll_cb, c"nano_twatch");
+    create_timer(
+        &mut s.tempo_auto_exit_timer,
+        tempo_auto_exit_cb,
+        c"nano_texit",
+    );
 }

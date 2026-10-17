@@ -77,7 +77,7 @@ pub(super) fn clear_model_write_trust() {
     s.block_on_asserted_us = [0; NANO_FX_BLOCK_COUNT];
 }
 
-fn create_timer(handle: &mut esp_timer_handle_t, cb: unsafe extern "C" fn(*mut c_void), name: &CStr) {
+fn create_timer(handle: &mut esp_timer_handle_t, cb: extern "C" fn(*mut c_void), name: &CStr) {
     if !handle.is_null() {
         return;
     }
@@ -109,7 +109,7 @@ pub(super) fn schedule_amount_ui() {
     }
 }
 
-unsafe extern "C" fn amount_ui_cb(_arg: *mut c_void) {
+extern "C" fn amount_ui_cb(_arg: *mut c_void) {
     let s = fx();
     let block_id = if s.amount_log_block >= 0 {
         s.amount_log_block
@@ -144,7 +144,7 @@ unsafe extern "C" fn amount_ui_cb(_arg: *mut c_void) {
     enqueue_param_refresh(block_id as u32);
 }
 
-unsafe extern "C" fn refresh_timeout_cb(_arg: *mut c_void) {
+extern "C" fn refresh_timeout_cb(_arg: *mut c_void) {
     let s = fx();
     let was_amount = s.amount_refresh;
     if was_amount {
@@ -170,11 +170,11 @@ unsafe extern "C" fn refresh_timeout_cb(_arg: *mut c_void) {
     }
 }
 
-unsafe extern "C" fn refresh_gap_cb(_arg: *mut c_void) {
+extern "C" fn refresh_gap_cb(_arg: *mut c_void) {
     send_next_refresh();
 }
 
-unsafe extern "C" fn begin_refresh_cb(_arg: *mut c_void) {
+extern "C" fn begin_refresh_cb(_arg: *mut c_void) {
     run_begin_param_refresh();
 }
 

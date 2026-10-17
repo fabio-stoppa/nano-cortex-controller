@@ -120,12 +120,16 @@ pub fn nano_ble_start() -> esp_err_t {
             esp_ble_gattc_app_register(PROFILE_APP_ID),
             "esp_ble_gattc_app_register",
         );
+        check(
+            crate::ble::midi_fs::register_app(),
+            "midi_fs::register_app",
+        );
     }
 
     if !c305_queue_init(s) {
         return ESP_ERR_NO_MEM;
     }
 
-    info!(target: TAG, "BLE stack ready");
+    info!(target: TAG, "BLE stack ready (Nano + Chocolate MIDI)");
     ESP_OK
 }

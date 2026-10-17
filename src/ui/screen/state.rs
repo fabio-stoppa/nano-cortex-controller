@@ -2,7 +2,7 @@
 
 use super::*;
 use super::consts::{
-    CHAIN_AMP, CHAIN_BLOCK_COUNT, CHAIN_LABEL_MAX, KNOB_COUNT, NANO_AMP_CAPTURE_NAME_MAX,
+    CHAIN_AMP, CHAIN_BLOCK_COUNT, CHAIN_LABEL_MAX, KNOB_COUNT, LayoutMode, NANO_AMP_CAPTURE_NAME_MAX,
     NANO_PRESET_NAME_MAX,
 };
 #[derive(Clone, Copy)]
@@ -59,6 +59,11 @@ pub(super) struct Ui {
     pub(super) connecting_status: *mut lv_obj_t,
     /// Keep the overlay up through first amp + FX param sync after connect.
     pub(super) connecting_await_ready: bool,
+    pub(super) layout_mode: LayoutMode,
+    pub(super) layout_horiz_btn: *mut lv_obj_t,
+    pub(super) layout_horiz_flip_btn: *mut lv_obj_t,
+    pub(super) layout_vert_btn: *mut lv_obj_t,
+    pub(super) layout_vert_flip_btn: *mut lv_obj_t,
 
     pub(super) tuner_note: *mut lv_obj_t,
     pub(super) tuner_cents: *mut lv_obj_t,
@@ -67,6 +72,7 @@ pub(super) struct Ui {
     pub(super) tuner_meter: *mut lv_obj_t,
     pub(super) tuner_meter_center: *mut lv_obj_t,
     pub(super) tuner_meter_needle: *mut lv_obj_t,
+    pub(super) tuner_meter_w: i32,
 
     pub(super) knobs: [AmpKnobUi; KNOB_COUNT],
     pub(super) ui_sync: bool,
@@ -104,9 +110,12 @@ pub(super) struct Ui {
     pub(super) header_bar: *mut lv_obj_t,
     pub(super) preset_lbl: *mut lv_obj_t,
     pub(super) chain_bar: *mut lv_obj_t,
+    pub(super) chain_list: *mut lv_obj_t,
     pub(super) content_root: *mut lv_obj_t,
     pub(super) content_w_normal: i32,
+    pub(super) content_h_normal: i32,
     pub(super) content_x_normal: i32,
+    pub(super) content_y_normal: i32,
     pub(super) body_h: i32,
     pub(super) amp_panel: *mut lv_obj_t,
     pub(super) fx_panel: *mut lv_obj_t,
@@ -194,6 +203,7 @@ impl Ui {
         u.fx_drag_param = -1;
         u.async_fx_focus = -1;
         u.connecting_await_ready = true;
+        u.layout_mode = LayoutMode::Horizontal;
         u
     }
 }

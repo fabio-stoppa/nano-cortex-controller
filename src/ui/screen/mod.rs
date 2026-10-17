@@ -60,6 +60,7 @@ mod header;
 mod helpers;
 mod params;
 mod picker;
+mod prefs;
 mod state;
 mod tempo;
 mod tuner;

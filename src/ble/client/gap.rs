@@ -1,5 +1,5 @@
 //! GAP scan lifecycle: params-set, scan start/stop, and advertisement
-//! filtering for the Nano Cortex name prefix.
+//! filtering for Nano Cortex + M-Vave Chocolate (FootCtrl).
 
 use super::*;
 use super::ctx::*;
@@ -8,7 +8,7 @@ use super::ctx::*;
 // enum). Rust wants SCREAMING_SNAKE for consts-in-patterns; we keep the
 // generated identifiers so arms match the C headers verbatim.
 #[allow(non_upper_case_globals)]
-pub(super) unsafe extern "C" fn gap_cb(event: esp_gap_ble_cb_event_t, param: *mut esp_ble_gap_cb_param_t) {
+pub(super) extern "C" fn gap_cb(event: esp_gap_ble_cb_event_t, param: *mut esp_ble_gap_cb_param_t) {
     let s = ctx();
 
     match event {
@@ -24,8 +24,7 @@ pub(super) unsafe extern "C" fn gap_cb(event: esp_gap_ble_cb_event_t, param: *mu
 
         esp_gap_ble_cb_event_t_ESP_GAP_BLE_SCAN_RESULT_EVT => {
             let scan_rst = unsafe { &mut (*param).scan_rst };
-            if scan_rst.search_evt != esp_gap_search_evt_t_ESP_GAP_SEARCH_INQ_RES_EVT || s.connected
-            {
+            if scan_rst.search_evt != esp_gap_search_evt_t_ESP_GAP_SEARCH_INQ_RES_EVT {
                 return;
             }
 
@@ -38,7 +37,7 @@ pub(super) unsafe extern "C" fn gap_cb(event: esp_gap_ble_cb_event_t, param: *mu
                     &mut adv_name_len,
                 )
             };
-            if adv_name.is_null() || (adv_name_len as usize) < NAME_PREFIX.len() {
+            if adv_name.is_null() || adv_name_len == 0 {
                 return;
             }
             let Some(adv_name) = (unsafe {
@@ -46,6 +45,23 @@ pub(super) unsafe extern "C" fn gap_cb(event: esp_gap_ble_cb_event_t, param: *mu
             }) else {
                 return;
             };
+
+            // Chocolate — exact name match (FootCtrl / FootCtrlPlus).
+            if crate::ble::midi_fs::is_footctrl_name(adv_name) {
+                if crate::ble::midi_fs::on_adv_match(
+                    adv_name,
+                    scan_rst.bda.as_mut_ptr(),
+                    scan_rst.ble_addr_type,
+                ) {
+                    s.scanning = false;
+                    publish_link(s);
+                }
+                return;
+            }
+
+            if s.connected || (adv_name_len as usize) < NAME_PREFIX.len() {
+                return;
+            }
             if !adv_name.starts_with(NAME_PREFIX) {
                 return;
             }
@@ -53,6 +69,9 @@ pub(super) unsafe extern "C" fn gap_cb(event: esp_gap_ble_cb_event_t, param: *mu
             info!(target: TAG, "Found Nano Cortex, connecting...");
             unsafe { esp_ble_gap_stop_scanning() };
             s.scanning = false;
+            let mut bda = [0u8; 6];
+            bda.copy_from_slice(&scan_rst.bda);
+            s.pending_bda = Some(bda);
             publish_link(s);
             unsafe {
                 esp_ble_gattc_open(

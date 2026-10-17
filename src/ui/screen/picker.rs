@@ -29,14 +29,14 @@ pub(super) fn fx_block_matches_model(
         && block.model_id_raw[..model.id_len as usize] == model.id[..model.id_len as usize]
 }
 
-pub(super) unsafe extern "C" fn fx_model_picker_backdrop_event_cb(e: *mut lv_event_t) {
+pub(super) extern "C" fn fx_model_picker_backdrop_event_cb(e: *mut lv_event_t) {
     if lv::event_code(e) != lv::EVENT_CLICKED {
         return;
     }
     fx_model_picker_close();
 }
 
-pub(super) unsafe extern "C" fn fx_model_picker_tile_event_cb(e: *mut lv_event_t) {
+pub(super) extern "C" fn fx_model_picker_tile_event_cb(e: *mut lv_event_t) {
     if lv::event_code(e) != lv::EVENT_CLICKED {
         return;
     }
@@ -334,7 +334,7 @@ pub(super) fn fx_model_picker_show() {
     ui_bring_chrome_to_front();
 }
 
-pub(super) unsafe extern "C" fn fx_model_header_btn_event_cb(e: *mut lv_event_t) {
+pub(super) extern "C" fn fx_model_header_btn_event_cb(e: *mut lv_event_t) {
     if lv::event_code(e) != lv::EVENT_CLICKED {
         return;
     }

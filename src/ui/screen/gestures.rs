@@ -121,7 +121,7 @@ pub(super) fn param_gesture_end() {
     u.param_gesture.mode = PARAM_GESTURE_NONE;
 }
 
-pub(super) unsafe extern "C" fn param_cell_event_cb(e: *mut lv_event_t) {
+pub(super) extern "C" fn param_cell_event_cb(e: *mut lv_event_t) {
     let packed = lv::event_user_data(e);
     let cell = lv::event_current_target(e);
     let code = lv::event_code(e);

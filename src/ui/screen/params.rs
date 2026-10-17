@@ -1,10 +1,11 @@
 /* --------------------------------------------------------- param plumbing */
 
 use super::*;
+use super::build::param_grid_visible;
 use super::chain::{chain_slot_is_fx, ui_passive_container, ui_scroll_container};
 use super::consts::{
     CHAIN_AMP, PARAM_CELL_PAD, PARAM_CELL_ROW_GAP, PARAM_GRID_GAP, PARAM_GRID_PAD,
-    PARAM_LABEL_MAX_LEN, PARAM_SLIDER_INSET_H, PEDAL_PARAM_GRID_VISIBLE,
+    PARAM_LABEL_MAX_LEN, PARAM_SLIDER_INSET_H,
 };
 use super::helpers::{c_str, fx_state, pct};
 use super::state::ui;
@@ -34,14 +35,16 @@ pub(super) fn style_param_name_label(lbl: *mut lv_obj_t) {
     lv::label_set_long_mode(lbl, lv::LABEL_LONG_DOT);
     lv::set_style_text_align(lbl, lv::TEXT_ALIGN_CENTER, 0);
     lv::set_style_text_color(lbl, lv::color_hex(0xB0B0B0), 0);
-    lv::set_style_text_font(lbl, lv::font_md(), 0);
+    let portrait = ui().layout_mode.is_portrait();
+    lv::set_style_text_font(lbl, if portrait { lv::font_sm() } else { lv::font_md() }, 0);
 }
 
 pub(super) fn style_param_value_label(lbl: *mut lv_obj_t) {
     lv::set_width(lbl, param_label_width());
     lv::set_style_text_align(lbl, lv::TEXT_ALIGN_CENTER, 0);
     lv::set_style_text_color(lbl, lv::color_hex(0xFFFFFF), 0);
-    lv::set_style_text_font(lbl, lv::font_md(), 0);
+    let portrait = ui().layout_mode.is_portrait();
+    lv::set_style_text_font(lbl, if portrait { lv::font_sm() } else { lv::font_md() }, 0);
 }
 
 pub(super) fn style_grid_scrollbar(obj: *mut lv_obj_t, active: bool) {
@@ -87,7 +90,7 @@ pub(super) fn update_pedal_params_grid_scroll(row: *mut lv_obj_t, param_count: u
     }
 
     let u = ui();
-    let overflow = param_count > PEDAL_PARAM_GRID_VISIBLE;
+    let overflow = param_count > param_grid_visible();
     if u.pedal_params_scroll_inited
         && u.pedal_params_scroll_row == row
         && overflow == u.pedal_params_scroll_on
@@ -154,19 +157,23 @@ pub(super) fn create_pedal_params_grid(panel: *mut lv_obj_t) -> *mut lv_obj_t {
 }
 
 pub(super) fn style_param_cell(cell: *mut lv_obj_t, w: i32, h: i32) {
+    let portrait = ui().layout_mode.is_portrait();
+    let pad = if portrait { 2 } else { PARAM_CELL_PAD };
+    let row_gap = if portrait { 3 } else { PARAM_CELL_ROW_GAP };
     lv::set_size(cell, w, h);
     lv::set_style_bg_color(cell, lv::color_hex(0x1A1A1A), 0);
     lv::set_style_bg_opa(cell, lv::OPA_COVER, 0);
     lv::set_style_border_color(cell, lv::color_hex(0x404040), 0);
     lv::set_style_border_width(cell, 1, 0);
     lv::set_style_radius(cell, 4, 0);
-    lv::set_style_pad_all(cell, PARAM_CELL_PAD, 0);
-    lv::set_style_pad_row(cell, PARAM_CELL_ROW_GAP, 0);
+    lv::set_style_pad_all(cell, pad, 0);
+    lv::set_style_pad_row(cell, row_gap, 0);
 }
 
 pub(super) fn style_compact_h_slider(slider: *mut lv_obj_t, width: i32, min_v: i32, max_v: i32) {
+    let portrait = ui().layout_mode.is_portrait();
     lv::set_width(slider, width);
-    lv::set_height(slider, 18);
+    lv::set_height(slider, if portrait { 12 } else { 18 });
     lv::slider_set_range(slider, min_v, max_v);
     lv::set_style_bg_color(slider, lv::color_hex(0x1E1E1E), lv::PART_MAIN);
     lv::set_style_bg_opa(slider, lv::OPA_COVER, lv::PART_MAIN);

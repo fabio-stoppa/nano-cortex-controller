@@ -305,11 +305,19 @@ pub(super) fn gattc_handler(
 
         esp_gattc_cb_event_t_ESP_GATTC_CONNECT_EVT => {
             let connect = unsafe { (*param).connect };
+            // Bluedroid reports CONNECT to every GATTC app — ignore peers we did not open.
+            let Some(pending) = s.pending_bda else {
+                return;
+            };
+            if !bda_eq(&pending, &connect.remote_bda) {
+                return;
+            }
             s.connected = true;
             s.scanning = false;
             s.conn_id = connect.conn_id;
             s.gattc_if = gattc_if;
             s.remote_bda = connect.remote_bda;
+            s.pending_bda = None;
             reset_handles(s);
             publish_link(s);
             info!(target: TAG, "Connected to Nano Cortex");
@@ -325,6 +333,17 @@ pub(super) fn gattc_handler(
             unsafe {
                 esp_ble_gap_update_conn_params(&mut conn);
                 esp_ble_gattc_send_mtu_req(gattc_if, connect.conn_id);
+            }
+        }
+
+        esp_gattc_cb_event_t_ESP_GATTC_OPEN_EVT => {
+            let open = unsafe { (*param).open };
+            if open.status != esp_gatt_status_t_ESP_GATT_OK {
+                error!(target: TAG, "Nano open failed status={}", open.status);
+                s.pending_bda = None;
+                s.connected = false;
+                reset_handles(s);
+                crate::ble::client::resume_scan_if_needed();
             }
         }
 
@@ -441,6 +460,8 @@ pub(super) fn gattc_handler(
                 info!(target: TAG, "GATT subscriptions enabled (C305/C306/…) — syncing");
                 crate::ui::screen::nano_ui_set_ble_connected(true);
                 crate::state::nano_state_begin_sync();
+                // Keep hunting for Chocolate after Nano is ready.
+                crate::ble::client::resume_scan_if_needed();
             }
         }
 
@@ -488,8 +509,9 @@ pub(super) fn gattc_handler(
             let reason = unsafe { (*param).disconnect.reason };
             warn!(target: TAG, "Disconnected reason=0x{reason:02x} — will rescan");
             s.connected = false;
+            s.pending_bda = None;
             publish_link(s); // drop LINK_UP before tearing handles / sleeping
-            s.gattc_if = ESP_GATT_IF_NONE as esp_gatt_if_t;
+            // Keep gattc_if — required for the next esp_ble_gattc_open.
             reset_handles(s);
             drain_rx_queue(s);
             crate::ui::screen::nano_ui_set_ble_connected(false);
@@ -503,17 +525,33 @@ pub(super) fn gattc_handler(
     }
 }
 
-pub(super) unsafe extern "C" fn gattc_cb(
+pub(super) extern "C" fn gattc_cb(
     event: esp_gattc_cb_event_t,
     gattc_if: esp_gatt_if_t,
     param: *mut esp_ble_gattc_cb_param_t,
 ) {
-    let s = ctx();
-    if event == esp_gattc_cb_event_t_ESP_GATTC_REG_EVT
-        && unsafe { (*param).reg.status } == esp_gatt_status_t_ESP_GATT_OK
-    {
-        s.gattc_if = gattc_if;
+    // Dual GATTC apps share one callback — route by app_id on REG, else by if.
+    if event == esp_gattc_cb_event_t_ESP_GATTC_REG_EVT {
+        let app_id = unsafe { (*param).reg.app_id };
+        if app_id == crate::ble::midi_fs::profile_app_id() {
+            crate::ble::midi_fs::gattc_handler(event, gattc_if, param);
+            return;
+        }
+        let s = ctx();
+        if unsafe { (*param).reg.status } == esp_gatt_status_t_ESP_GATT_OK {
+            s.gattc_if = gattc_if;
+        }
+        gattc_handler(s, event, gattc_if, param);
+        return;
     }
+
+    let midi_if = crate::ble::midi_fs::gattc_if();
+    if midi_if != ESP_GATT_IF_NONE as esp_gatt_if_t && gattc_if == midi_if {
+        crate::ble::midi_fs::gattc_handler(event, gattc_if, param);
+        return;
+    }
+
+    let s = ctx();
     if gattc_if == ESP_GATT_IF_NONE as esp_gatt_if_t || gattc_if == s.gattc_if {
         gattc_handler(s, event, gattc_if, param);
     }
