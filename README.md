@@ -76,3 +76,9 @@ cd crates/nano-wire && cargo +stable test --target x86_64-unknown-linux-gnu
 - Disconnect **Cortex Cloud** before connecting — one BLE client at a time.
 - Back up presets in the official app before writing from custom firmware.
 - Only `components/nano/bt_cfg_helper.c` is still C (`BT_CONTROLLER_INIT_CONFIG_DEFAULT` macro shim).
+
+## License
+
+[MIT](LICENSE). The vendored Waveshare board support keeps its own MIT license in `components/waveshare_esp32_s3_touch_lcd_4_3/LICENSE`.
+
+Neural DSP and Nano Cortex are trademarks of Neural DSP Technologies Oy. This project is not affiliated with or endorsed by Neural DSP.
