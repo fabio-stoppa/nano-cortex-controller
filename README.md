@@ -1,94 +1,84 @@
-# Nano Cortex — ESP32 firmware (C / ESP-IDF)
+# Nano Cortex — ESP32 firmware (Rust + ESP-IDF)
 
-Minimal firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**, ported from [`this project`](https://github.com/choldy/nano-cortex-web-editor).
+Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**, ported from [`this project`](https://github.com/choldy/nano-cortex-web-editor).
 
-**Stack:** plain ESP-IDF C — no Rust toolchain.
+**Stack:** Rust firmware on ESP-IDF — protocol, BLE, state, FX, tuner, amp catalog, and LVGL UI. Only `bt_cfg_helper.c` remains C (BT init macro shim).
 
-## What it does today
+## What it does
 
-- Boots and logs over USB serial
-- **800×480 LCD** — LVGL amp panel (Gain / Level / Bass / Mid / Treble) with live BLE updates
-- **Scans for "Neural DSP Nano Cortex"** and connects over BLE
-- Discovers services A002/A003, C304 (write) and C305 (notify)
-- On connect, sends metadata + preset state requests (same as the web editor)
-- Parses amp knobs from preset state + hardware knob notifications
-
-**Not yet:** touch control to write knobs, Amount knob, FX blocks, preset picker UI.
-
-## Before testing BLE
-
-1. Power on the Nano Cortex with Bluetooth enabled
-2. **Disconnect Cortex Cloud** (or close the browser editor) — only one BLE client at a time
-3. Flash this firmware and watch serial for `Found Nano Cortex, connecting...`
+- Boots over USB serial (Rust `app_main`)
+- **Protocol in Rust** — C304 builders + C305/protobuf parsers (`crates/nano-wire`)
+- **BLE in Rust** — Bluedroid GATT client (`src/ble/`)
+- **State / FX / tuner / amp / UI in Rust** — `src/state/`, `src/fx/`, `src/tuner/`, `src/amp/`, `src/ui/`
+- **800×480 LCD** — LVGL amp / FX / tuner / tempo UI
+- Syncs amp knobs, gate, FX blocks, BPM, tuner
 
 ## Prerequisites
 
-1. **ESP-IDF v5.3+** — [Install guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/get-started/index.html)
-
-   ```bash
-   # After installing ESP-IDF:
-   . ~/esp/esp-idf/export.sh
-   ```
-
-   If you already built the old Rust firmware, this repo may have ESP-IDF under `firmware/.embuild/` — `flash.sh` will use that automatically.
-
-2. **Arch Linux:** `esp-clang` needs legacy libxml2:
-
-   ```bash
-   sudo pacman -S libxml2-legacy
-   ```
-
-3. **Hardware:** Waveshare ESP32-S3-Touch-LCD-4.3B + Nano Cortex (firmware 2.2.1 tested in browser)
+1. **Rust esp toolchain** — `espup install` (channel `esp` via `rust-toolchain.toml`)
+2. **espflash** + **ldproxy** — `cargo install espflash ldproxy`
+3. **Hardware:** Waveshare ESP32-S3-Touch-LCD-4.3B + Nano Cortex
 
 ## Build and flash
 
 ```bash
-cd firmware
-idf.py set-target esp32s3   # first time only
-idf.py build
-./flash.sh                  # or: idf.py -p /dev/ttyACM1 flash
+cargo build --release
+./flash.sh                 # or: espflash flash --port /dev/ttyACM0 --partition-table partitions.csv \
+                           #        target/xtensa-esp32s3-espidf/release/nano-cortex-controller
 ```
 
 Monitor (keep DTR/RTS off on Waveshare):
 
 ```bash
-python -m serial.tools.miniterm /dev/ttyACM1 115200 --rts 0 --dtr 0
+python -m serial.tools.miniterm /dev/ttyACM0 115200 --rts 0 --dtr 0
 ```
 
-Expected log:
+Expected early log:
 
 ```
-I (xxx) nano: Nano Cortex C MVP starting
-I (xxx) nano: TX FE metadata: 06 C0 08 03 01 00 00 00
-I (xxx) nano: TX preset state: 0C C0 08 03 18 01 ...
-I (xxx) nano: TX amp gain=200: 0B C0 18 00 20 C8 01 ...
+I (xxx) nano_cortex_controller: firmware build 2026-07-26-rust7 (...)
+I (xxx) nano_ui: UI ready (800x480, left chain rail + panels)
+I (xxx) nano_ble: Connected to Nano Cortex
+I (xxx) nano_state: STATE INITIAL — protobuf scan (... bytes, rust)
 ```
 
 ## Project layout
 
 ```
-firmware/
-├── CMakeLists.txt
-├── sdkconfig.defaults      # PSRAM + USB serial console
-├── main/
-│   ├── main.c              # app entry
-│   ├── nano_ui.c           # LVGL amp panel
-│   ├── nano_protocol.c     # packets from index.html
-│   └── ...
-├── partitions.csv          # 2 MB app partition (LVGL + BLE)
-└── flash.sh
+├── Cargo.toml / src/main.rs     # Rust entry
+├── src/ble/                     # GATT client
+├── src/state/ src/fx/           # Preset/amp state machine + FX engine
+├── src/tuner/ src/amp/          # Tuner + factory capture catalog
+├── src/ui/                      # LVGL UI
+├── crates/nano-wire/            # Protocol builders + parsers (host-testable)
+├── components/nano/             # bt_cfg_helper.c shim only
+├── components/waveshare_.../    # Vendored BSP (IDF 5.3 LCD callback patch)
+├── sdkconfig.defaults
+└── partitions.csv               # 2 MB app partition
 ```
 
-## BLE constants (from index.html)
+The Waveshare BSP stays vendored: registry `1.0.7` uses `on_frame_buf_complete`, which ESP-IDF 5.3.2 does not provide. The local tree keeps `on_bounce_frame_finish`.
 
-| Item | UUID |
-|------|------|
-| Services | `0000a002-...`, `0000a003-...` |
-| C304 write | `0000c304-...` |
-| C305 notify | `0000c305-...` |
-| Device name | `Neural DSP Nano Cortex` |
+Host-test the protocol crate:
+
+```bash
+cd crates/nano-wire && cargo +stable test --target x86_64-unknown-linux-gnu
+```
+
+## Before testing BLE
+
+1. Power on the Nano Cortex with Bluetooth enabled
+2. **Disconnect Cortex Cloud** (or close the browser editor) — only one BLE client at a time
+3. Flash and watch serial for `Found Nano Cortex, connecting...`
 
 ## Notes
 
 - Disconnect **Cortex Cloud** before connecting — one BLE client at a time.
 - Back up presets in the official app before writing from custom firmware.
+- Only `components/nano/bt_cfg_helper.c` is still C (`BT_CONTROLLER_INIT_CONFIG_DEFAULT` macro shim).
+
+## License
+
+[MIT](LICENSE). The vendored Waveshare board support keeps its own MIT license in `components/waveshare_esp32_s3_touch_lcd_4_3/LICENSE`.
+
+Neural DSP and Nano Cortex are trademarks of Neural DSP Technologies Oy. This project is not affiliated with or endorsed by Neural DSP.

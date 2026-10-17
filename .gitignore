@@ -1,8 +1,25 @@
+# ESP-IDF / embuild (legacy CMake + cargo-esp)
 build/
 .embuild/
 sdkconfig
 sdkconfig.old
+sdkconfig.gen.defaults
 managed_components/
 dependencies.lock
-tools/
+
+# Rust
+/target/
+**/target/
+
+# IDE / local tooling
+.idea/
+cmake-build-debug/
+*.iml
+.vscode/
+
+# Migration leftovers (do not re-add)
 recovered/
+tools/
+
+# IDF component-manager local metadata
+**/.component_hash

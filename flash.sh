@@ -1,93 +1,137 @@
 #!/usr/bin/env bash
-# Build and flash Nano Cortex firmware (ESP-IDF C) to Waveshare ESP32-S3 4.3B
+# Nano Cortex build / flash / monitor helper
+#
+# Usage:
+#   ./flash.sh build   [dev|release]         — compile only
+#   ./flash.sh flash   [dev|release] [port]  — flash only (no monitor)
+#   ./flash.sh monitor [port]                — open serial monitor only
+#   ./flash.sh run     [dev|release] [port]  — build → flash → monitor
+#   ./flash.sh         [dev|release] [port]  — alias for 'run'
+#
+# Port resolution order: explicit arg > $NANO_PORT env var > /dev/ttyACM0 > /dev/ttyUSB0
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
-source_idf() {
-  if [[ -n "${IDF_PATH:-}" ]]; then
-    return 0
-  fi
-  LOCAL_IDF="$ROOT/.embuild/espressif/esp-idf/v5.3.2"
-  if [[ -f "$LOCAL_IDF/export.sh" ]]; then
-    export IDF_TOOLS_PATH="$ROOT/.embuild/espressif"
-    # shellcheck disable=SC1091
-    source "$LOCAL_IDF/export.sh"
-  elif [[ -f "$HOME/esp/esp-idf/export.sh" ]]; then
-    # shellcheck disable=SC1091
-    source "$HOME/esp/esp-idf/export.sh"
-  else
-    echo "ERROR: ESP-IDF not found. Install ESP-IDF v5.3+ and run export.sh, or build once with Rust embuild."
-    exit 1
-  fi
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+find_port() {
+    if [[ -n "${NANO_PORT:-}" ]]; then
+        echo "$NANO_PORT"
+        return
+    fi
+    for p in /dev/ttyACM0 /dev/ttyUSB0 /dev/ttyACM1 /dev/ttyUSB1; do
+        if [[ -e "$p" ]]; then
+            echo "$p"
+            return
+        fi
+    done
+    echo ""
 }
 
-PORT="${1:-}"
-MODE="${2:-}"
-if [[ -z "$PORT" ]]; then
-  PORT="$(ls /dev/ttyACM* 2>/dev/null | head -1 || true)"
-fi
-if [[ -z "$PORT" ]]; then
-  echo "ERROR: No /dev/ttyACM* port found. Plug in the board and retry."
-  exit 1
-fi
-echo "Using port: $PORT"
+require_port() {
+    local port="$1"
+    if [[ -z "$port" ]]; then
+        echo "ERROR: No device port found." >&2
+        echo "  Plug in the board, or set NANO_PORT=/dev/ttyACMx" >&2
+        exit 1
+    fi
+}
 
-if [[ "$MODE" == "tuner" || "$MODE" == "hunt" || "$MODE" == "monitor" ]]; then
-  source_idf
-  echo "NOTE: '$MODE' is monitor-only — firmware is NOT updated."
-  echo "      To flash first, run:  ./flash.sh $PORT"
-  echo ""
-fi
+elf_path() {
+    local profile="$1"
+    local subdir
+    if [[ "$profile" == "release" ]]; then
+        subdir="release"
+    else
+        subdir="debug"
+    fi
+    echo "$ROOT/target/xtensa-esp32s3-espidf/$subdir/nano-cortex-controller"
+}
 
-if [[ "$MODE" == "tuner" ]]; then
-  echo "==> Monitor (nano_tuner INFO+, others WARN+ only)..."
-  idf.py -p "$PORT" monitor --print-filter="nano_tuner:I *:W"
-  exit 0
-fi
+do_build() {
+    local profile="${1:-dev}"
+    echo "--- build ($profile) ---"
+    if [[ "$profile" == "release" ]]; then
+        cargo build --release
+    else
+        cargo build
+    fi
+}
 
-if [[ "$MODE" == "hunt" ]]; then
-  echo "==> Monitor (BPM/BLE hunt: nano_state + nano_ble + nano_tuner INFO)"
-  echo "    Look for: 'BPM hunt:', field 56, C1 dump chunks, suspicious amp-hw / unknown C305"
-  idf.py -p "$PORT" monitor --print-filter="nano_ble:I nano_tuner:I nano_state:I nano:I *:W"
-  exit 0
-fi
+do_flash() {
+    local profile="${1:-dev}"
+    local port="${2:-}"
+    [[ -z "$port" ]] && port="$(find_port)"
+    require_port "$port"
+    local elf
+    elf="$(elf_path "$profile")"
+    if [[ ! -f "$elf" ]]; then
+        echo "ERROR: ELF not found at $elf — run build first." >&2
+        exit 1
+    fi
+    echo "--- flash ($profile) → $port ---"
+    espflash flash --port "$port" --baud 921600 "$elf"
+}
 
-if [[ "$MODE" == "monitor" ]]; then
-  echo "==> Monitor (full INFO logs)..."
-  idf.py -p "$PORT" monitor
-  exit 0
-fi
+do_monitor() {
+    local port="${1:-}"
+    [[ -z "$port" ]] && port="$(find_port)"
+    require_port "$port"
+    echo "--- monitor → $port ---"
+    espflash monitor --port "$port"
+}
 
-source_idf
+do_run() {
+    local profile="${1:-dev}"
+    local port="${2:-}"
+    [[ -z "$port" ]] && port="$(find_port)"
+    require_port "$port"
+    do_build "$profile"
+    local elf
+    elf="$(elf_path "$profile")"
+    echo "--- flash + monitor ($profile) → $port ---"
+    espflash flash --port "$port" --baud 921600 --monitor "$elf"
+}
 
-if [[ ! -f sdkconfig ]]; then
-  echo "==> Setting target esp32s3..."
-  idf.py set-target esp32s3
-fi
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
 
-WS_LVGL="$ROOT/managed_components/bobscott45__waveshare_esp32_s3_touch_lcd_4_3/src/lvgl_port.c"
-if [[ -f "$WS_LVGL" ]] && grep -q 'on_frame_buf_complete' "$WS_LVGL"; then
-  echo "==> Patching Waveshare BSP for ESP-IDF 5.3..."
-  sed -i 's/on_frame_buf_complete = rgb_lcd_on_vsync_event/on_bounce_frame_finish = rgb_lcd_on_vsync_event/' "$WS_LVGL"
-fi
+CMD="${1:-run}"
+shift || true
 
-echo "==> Building..."
-idf.py build
-
-echo "==> Flashing to $PORT..."
-idf.py -p "$PORT" flash
-
-echo ""
-echo "Flash complete. Boot should log:  nano: firmware build ..."
-echo "Monitor (full logs):"
-echo "  ./flash.sh $PORT monitor"
-echo "Tuner-only monitor:"
-echo "  ./flash.sh $PORT tuner"
-echo "BLE hunt (all GATT notifies + diverted C305):"
-echo "  ./flash.sh $PORT hunt"
-echo "Or:"
-echo "  idf.py -p $PORT monitor"
-echo "Or miniterm:"
-echo "  python -m serial.tools.miniterm $PORT 115200 --rts 0 --dtr 0"
+case "$CMD" in
+    build)
+        PROFILE="${1:-dev}"; shift || true
+        do_build "$PROFILE"
+        ;;
+    flash)
+        PROFILE="${1:-dev}"; shift || true
+        PORT="${1:-}";       shift || true
+        do_flash "$PROFILE" "$PORT"
+        ;;
+    monitor)
+        PORT="${1:-}"; shift || true
+        do_monitor "$PORT"
+        ;;
+    run)
+        PROFILE="${1:-dev}"; shift || true
+        PORT="${1:-}";       shift || true
+        do_run "$PROFILE" "$PORT"
+        ;;
+    dev|release)
+        # Bare ./flash.sh dev [port] or ./flash.sh release [port]
+        PROFILE="$CMD"
+        PORT="${1:-}"; shift || true
+        do_run "$PROFILE" "$PORT"
+        ;;
+    *)
+        echo "Unknown command: $CMD" >&2
+        echo "Usage: ./flash.sh {build|flash|monitor|run} [dev|release] [port]" >&2
+        exit 1
+        ;;
+esac
