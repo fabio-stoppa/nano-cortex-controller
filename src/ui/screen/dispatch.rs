@@ -10,6 +10,7 @@ use super::consts::{
 use super::fx_panel::apply_fx_locked;
 use super::helpers::{amp_state, c_buf_str, set_label_if_changed};
 use super::state::{assert_lvgl_task, note_lvgl_task, ui, with_inbox};
+use super::presets;
 use super::tuner::{apply_tuner_locked, async_apply_amp_cb, async_apply_tuner_cb, paint_tuner_live_locked};
 pub(super) fn ui_run_pending_updates(mask: u8) {
     assert_lvgl_task("ui_run_pending_updates");
@@ -200,6 +201,7 @@ pub(super) fn refresh_preset_label_locked() {
     };
 
     set_label_if_changed(u.preset_lbl, &text);
+    presets::paint_save_locked();
 }
 
 pub(super) fn async_apply_preset_cb() {

@@ -106,6 +106,19 @@ pub fn nano_ui_set_tuner(tuner: &NanoTunerC) {
     });
 }
 
+/// Type 115 dirty flag. Safe from any task.
+pub fn nano_ui_set_preset_dirty(dirty: bool) {
+    with_inbox(|u| {
+        if u.preset_dirty == dirty {
+            return;
+        }
+        u.preset_dirty = dirty;
+        u.async_preset_pending = true;
+        u.dispatch_mask |= UI_DISP_PRESET;
+        ui_request_dispatch();
+    });
+}
+
 /// Update header preset name (safe from any task).
 pub fn nano_ui_set_preset_name(name: &str) {
     let incoming = name;

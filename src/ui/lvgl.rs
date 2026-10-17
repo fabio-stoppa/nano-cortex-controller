@@ -213,6 +213,13 @@ pub fn screen_active() -> *mut lv_obj_t {
 
 /* ------------------------------------------------------------- widgets */
 
+pub fn obj_delete(obj: *mut lv_obj_t) {
+    if obj.is_null() {
+        return;
+    }
+    unsafe { sys::lv_obj_delete(obj) };
+}
+
 pub fn obj_create(parent: *mut lv_obj_t) -> *mut lv_obj_t {
     unsafe { sys::lv_obj_create(parent) }
 }

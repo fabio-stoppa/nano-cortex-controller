@@ -34,8 +34,11 @@ fn ensure_parse_task() {
     if !s.parse_task.is_null() {
         return;
     }
+    // Internal RAM is tight once the Bluetooth controller stacks are large
+    // enough for the Nano link. The parse stack can live in PSRAM.
+    let caps = (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) as UBaseType_t;
     let ok = unsafe {
-        xTaskCreatePinnedToCore(
+        xTaskCreatePinnedToCoreWithCaps(
             Some(parse_worker),
             c"nano_parse".as_ptr(),
             PARSE_TASK_STACK,
@@ -43,6 +46,7 @@ fn ensure_parse_task() {
             PARSE_TASK_PRIO,
             &mut s.parse_task,
             NO_AFFINITY,
+            caps,
         )
     };
     if ok != PD_PASS {

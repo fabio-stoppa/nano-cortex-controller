@@ -61,6 +61,7 @@ mod helpers;
 mod params;
 mod picker;
 mod prefs;
+mod presets;
 mod state;
 mod tempo;
 mod tuner;
@@ -68,7 +69,8 @@ mod writes;
 
 pub use api::{
     nano_ui_bpm_tap, nano_ui_select_fx_block, nano_ui_set_amp, nano_ui_set_ble_connected,
-    nano_ui_set_bpm, nano_ui_set_fx, nano_ui_set_preset_name, nano_ui_set_tempo_mode,
+    nano_ui_set_bpm, nano_ui_set_fx, nano_ui_set_preset_dirty, nano_ui_set_preset_name,
+    nano_ui_set_tempo_mode,
     nano_ui_set_tuner, nano_ui_start,
 };
 pub use dispatch::nano_ui_dispatch_if_pending;

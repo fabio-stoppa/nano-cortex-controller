@@ -4,6 +4,7 @@
 mod amp;
 mod ble;
 mod fx;
+mod link_stubs;
 mod memsafe;
 mod state;
 mod syncutil;
@@ -59,6 +60,20 @@ fn sdkconfig_bool(name: &str) -> Option<bool> {
 
 fn main() {
     // Keep module entry symbols in the final binary for cross-module callers.
+    // The I2C names must stay defined here so the legacy driver object is not linked.
+    core::hint::black_box((
+        link_stubs::i2c_driver_delete as *const (),
+        link_stubs::i2c_cmd_link_create as *const (),
+        link_stubs::i2c_cmd_link_delete as *const (),
+        link_stubs::i2c_master_cmd_begin as *const (),
+        link_stubs::i2c_master_start as *const (),
+        link_stubs::i2c_master_stop as *const (),
+        link_stubs::i2c_master_write as *const (),
+        link_stubs::i2c_master_write_byte as *const (),
+        link_stubs::i2c_master_read as *const (),
+        link_stubs::i2c_slave_read_buffer as *const (),
+        link_stubs::i2c_slave_write_buffer as *const (),
+    ));
     ble::ensure_linked();
     state::ensure_linked();
     fx::ensure_linked();

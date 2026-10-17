@@ -4,6 +4,7 @@
 //! directly with slices and owned values.
 
 pub mod builders;
+pub mod editor;
 pub mod parsers;
 pub mod types;
 pub mod varint;

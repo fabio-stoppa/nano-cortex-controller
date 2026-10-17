@@ -1,5 +1,29 @@
 //! Protobuf-style varint encode/decode.
 
+/// Protobuf `int32`: negatives are sign-extended to a 10-byte varint (`-1` is
+/// `FF FF FF FF FF FF FF FF FF 01`).
+pub fn encode_int32(value: i32, out: &mut [u8]) -> Option<usize> {
+    if value >= 0 {
+        return encode_varint(value as u32, out);
+    }
+    let mut x = value as u64;
+    let mut n = 0;
+    loop {
+        if n >= out.len() || n >= 10 {
+            return None;
+        }
+        let mut byte = (x & 0x7F) as u8;
+        x >>= 7;
+        if x == 0 {
+            out[n] = byte;
+            return Some(n + 1);
+        }
+        byte |= 0x80;
+        out[n] = byte;
+        n += 1;
+    }
+}
+
 pub fn encode_varint(mut value: u32, out: &mut [u8]) -> Option<usize> {
     let mut n = 0;
     while value >= 0x80 {

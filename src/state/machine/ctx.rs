@@ -144,6 +144,12 @@ pub(super) struct State {
     pub(super) parse_task: TaskHandle_t,
     pub(super) tap_times: [i64; TAP_HISTORY_MAX],
     pub(super) tap_count: usize,
+    /// 1-based preset slot currently loaded. 0 until a dump or a select names it.
+    pub(super) preset_slot: u8,
+    pub(super) preset_name: String,
+    pub(super) preset_dirty: bool,
+    /// 0-based preset index on IA, IB, IIA, IIB. -1 when that field was absent.
+    pub(super) foot_slots: [i16; 4],
 }
 
 impl State {
@@ -189,6 +195,10 @@ impl State {
             parse_task: ptr::null_mut(),
             tap_times: [0; TAP_HISTORY_MAX],
             tap_count: 0,
+            preset_slot: 0,
+            preset_name: String::new(),
+            preset_dirty: false,
+            foot_slots: [-1; 4],
         }
     }
 }

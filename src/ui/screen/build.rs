@@ -17,6 +17,7 @@ use super::consts::{
     UI_EDGE_PAD,
 };
 use super::dispatch::ui_init_dispatch;
+use super::presets;
 use super::fx_panel::{apply_fx_locked, build_fx_panel};
 use super::gestures::param_cell_event_cb;
 use super::helpers::{amp_state, fx_state, tuner_state};
@@ -152,7 +153,7 @@ pub(super) fn build_header_bar(screen: *mut lv_obj_t) {
 
     let narrow = lv::hor_res() < 600;
     let left_w = if narrow { 108 } else { 196 };
-    let preset_w = if narrow { 96 } else { 184 };
+    let preset_w: i32 = if narrow { 96 } else { 184 };
     let right_w = if narrow { 128 } else { 200 };
 
     let left = lv::obj_create(header);
@@ -172,11 +173,26 @@ pub(super) fn build_header_bar(screen: *mut lv_obj_t) {
 
     u.preset_lbl = lv::label_create(left);
     lv::label_set_text(u.preset_lbl, "-");
-    lv::set_width(u.preset_lbl, preset_w);
+    lv::set_width(u.preset_lbl, preset_w.saturating_sub(52));
+    lv::add_flag(u.preset_lbl, lv::FLAG_CLICKABLE);
+    lv::add_event_cb(u.preset_lbl, presets::preset_label_event_cb, lv::EVENT_CLICKED, 0);
     lv::label_set_long_mode(u.preset_lbl, lv::LABEL_LONG_DOT);
     lv::set_style_text_color(u.preset_lbl, lv::color_hex(0x909090), 0);
     lv::set_style_text_font(u.preset_lbl, lv::font_sm(), 0);
     lv::set_style_text_align(u.preset_lbl, lv::TEXT_ALIGN_LEFT, 0);
+
+    u.save_btn = lv::button_create(left);
+    lv::set_size(u.save_btn, 48, 28);
+    lv::set_style_radius(u.save_btn, 6, 0);
+    lv::set_style_bg_color(u.save_btn, lv::color_hex(0x1A1A1A), 0);
+    lv::set_style_border_width(u.save_btn, 0, 0);
+    lv::set_style_pad_all(u.save_btn, 0, 0);
+    let save_lbl = lv::label_create(u.save_btn);
+    lv::label_set_text(save_lbl, "Save");
+    lv::set_style_text_font(save_lbl, lv::font_xs(), 0);
+    lv::set_style_text_color(save_lbl, lv::color_hex(0xC8C8C8), 0);
+    lv::center(save_lbl);
+    lv::add_event_cb(u.save_btn, presets::save_btn_event_cb, lv::EVENT_CLICKED, 0);
 
     let center = lv::obj_create(header);
     lv::set_height(center, HEADER_H);
@@ -584,6 +600,8 @@ fn clear_widget_ptrs_for_rebuild() {
     u.cap_vol = u.gate_on;
     u.header_bar = ptr::null_mut();
     u.preset_lbl = ptr::null_mut();
+    u.save_btn = ptr::null_mut();
+    u.preset_list = ptr::null_mut();
     u.chain_bar = ptr::null_mut();
     u.chain_list = ptr::null_mut();
     u.content_root = ptr::null_mut();

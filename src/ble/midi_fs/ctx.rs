@@ -105,14 +105,14 @@ impl Peer {
         self.connected && self.notify_enabled && self.midi_handle != INVALID_HANDLE
     }
 
-    fn reset_handles(&mut self) {
+    pub(super) fn reset_handles(&mut self) {
         self.notify_enabled = false;
         self.midi_start = INVALID_HANDLE;
         self.midi_end = INVALID_HANDLE;
         self.midi_handle = INVALID_HANDLE;
     }
 
-    fn clear(&mut self) {
+    pub(super) fn clear(&mut self) {
         *self = Self::empty();
     }
 }

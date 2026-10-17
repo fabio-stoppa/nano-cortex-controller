@@ -118,6 +118,31 @@ fn update_preset_label_locked(state: &[u8]) {
         }
     }
 
+    let foot = [
+        parsers::field_varint(state, 14).map(|v| v as i16).unwrap_or(-1),
+        parsers::field_varint(state, 15).map(|v| v as i16).unwrap_or(-1),
+        parsers::field_varint(state, 38).map(|v| v as i16).unwrap_or(-1),
+        parsers::field_varint(state, 39).map(|v| v as i16).unwrap_or(-1),
+    ];
+    let mut slot = 0u8;
+    if s.preset_catalog.valid && label != "-" {
+        for (i, name) in s.preset_catalog.names.iter().enumerate() {
+            if c_bytes_to_string(name) == label {
+                slot = (i + 1) as u8;
+                break;
+            }
+        }
+    }
+    if slot == 0 {
+        if let Some(v) = parsers::field_varint(state, 1) {
+            if (1..=PRESET_COUNT as u32).contains(&v) {
+                slot = v as u8;
+            } else if v < PRESET_COUNT as u32 {
+                slot = (v + 1) as u8;
+            }
+        }
+    }
+    super::editor::note_loaded_preset(&label, slot, foot);
     crate::ui::screen::nano_ui_set_preset_name(&label);
 }
 

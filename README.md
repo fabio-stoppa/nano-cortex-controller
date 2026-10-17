@@ -1,6 +1,6 @@
 # Nano Cortex — ESP32 firmware (Rust + ESP-IDF)
 
-Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**, ported from [`this project`](https://github.com/choldy/nano-cortex-web-editor).
+Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the controller ideas come from the community projects in [Credits](#credits).
 
 **Stack:** Rust firmware on ESP-IDF — protocol, BLE, state, FX, tuner, amp catalog, and LVGL UI. Only `bt_cfg_helper.c` remains C (BT init macro shim).
 
@@ -76,6 +76,13 @@ cd crates/nano-wire && cargo +stable test --target x86_64-unknown-linux-gnu
 - Disconnect **Cortex Cloud** before connecting — one BLE client at a time.
 - Back up presets in the official app before writing from custom firmware.
 - Only `components/nano/bt_cfg_helper.c` is still C (`BT_CONTROLLER_INIT_CONFIG_DEFAULT` macro shim).
+
+## Credits
+
+- [Builty](https://github.com/Builty/TonexOneController) — Tonex One controller. The Waveshare control surface this kind of board grew from.
+- [choldy](https://github.com/choldy/nano-cortex-web-editor) — Nano Cortex web editor. The BLE protocol this firmware was ported from.
+- [DrD85](https://github.com/DrD85/nano-cortex-editor) — Nano Cortex editor. Preset, library, cab, expression, and settings frames.
+- [AJs-Creations](https://github.com/AJs-Creations/nano-cortex-editor) — those frames checked on a Nano running NanOS 2.2.1, including the cab-mic library index.
 
 ## License
 

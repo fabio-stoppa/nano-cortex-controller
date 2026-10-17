@@ -19,6 +19,7 @@ pub fn ensure_linked() {
         screen::nano_ui_set_ble_connected as *const (),
         screen::nano_ui_set_tuner as *const (),
         screen::nano_ui_set_preset_name as *const (),
+        screen::nano_ui_set_preset_dirty as *const (),
         screen::nano_ui_set_bpm as *const (),
         screen::nano_ui_bpm_tap as *const (),
         screen::nano_ui_set_tempo_mode as *const (),

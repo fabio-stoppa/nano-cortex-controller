@@ -109,6 +109,9 @@ pub(super) struct Ui {
 
     pub(super) header_bar: *mut lv_obj_t,
     pub(super) preset_lbl: *mut lv_obj_t,
+    pub(super) save_btn: *mut lv_obj_t,
+    pub(super) preset_list: *mut lv_obj_t,
+    pub(super) preset_dirty: bool,
     pub(super) chain_bar: *mut lv_obj_t,
     pub(super) chain_list: *mut lv_obj_t,
     pub(super) content_root: *mut lv_obj_t,

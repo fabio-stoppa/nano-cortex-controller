@@ -83,6 +83,11 @@ fn feed_c305(data: &[u8]) {
         }
     }
 
+    if let Some(dirty) = nano_wire::editor::preset_dirty(data) {
+        super::editor::note_preset_dirty(dirty);
+        return;
+    }
+
     if len >= 2 && data[0] == 0x10 && data[1] == 0xC0 {
         if tuner_live {
             debug!(target: TAG, "C305 diverted (preset ACK) len={len}");
