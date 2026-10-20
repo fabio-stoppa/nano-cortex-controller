@@ -4,6 +4,9 @@
 //! 2026-10-09 phone-app trace on NanOS 2.2.1. Single-packet only: the length
 //! byte is one octet, so a frame that would exceed 255 bytes is rejected.
 
+#[cfg(not(test))]
+use alloc::vec::Vec;
+
 use crate::varint::{encode_int32, encode_varint, read_varint};
 
 pub const MSG_SAVE_PRESET: u32 = 3;
@@ -285,13 +288,14 @@ pub fn assign_footswitch_payload(which: Footswitch, index: u8, buf: &mut [u8]) -
     if !p.push(0x18) || !p.push(0x00) || !p.push(0x20) || !p.int32(-1) {
         return 0;
     }
-    for slot in [Footswitch::Ia, Footswitch::Ib, Footswitch::Iia, Footswitch::Iib] {
+    for slot in [
+        Footswitch::Ia,
+        Footswitch::Ib,
+        Footswitch::Iia,
+        Footswitch::Iib,
+    ] {
         let tag = (slot as u8) << 3;
-        let value = if slot == which {
-            i32::from(index)
-        } else {
-            -1
-        };
+        let value = if slot == which { i32::from(index) } else { -1 };
         if !p.push(tag) || !p.int32(value) {
             return 0;
         }
@@ -368,7 +372,11 @@ pub fn delete_preset_payload(index: u8, buf: &mut [u8]) -> usize {
 
 /// Type 76. Factory and user captures and IRs.
 pub fn library_request_payload(buf: &mut [u8]) -> usize {
-    finish(&[0x18, 0x01, 0x20, 0x01, 0x28, 0x01, 0x30, 0x01], MSG_LIBRARY, buf)
+    finish(
+        &[0x18, 0x01, 0x20, 0x01, 0x28, 0x01, 0x30, 0x01],
+        MSG_LIBRARY,
+        buf,
+    )
 }
 
 fn library_slot_payload(
@@ -384,7 +392,11 @@ fn library_slot_payload(
         return 0;
     };
     let mut id = Pay::new();
-    if !id.push(0x08) || !id.varint(library_index) || !id.push(0x12) || !id.varint(name.len() as u32) || !id.push_slice(name)
+    if !id.push(0x08)
+        || !id.varint(library_index)
+        || !id.push(0x12)
+        || !id.varint(name.len() as u32)
+        || !id.push_slice(name)
     {
         return 0;
     }
@@ -601,7 +613,10 @@ pub fn write_expression_payload(
             }
             ExpBypass::Switch { inverted, latch } => {
                 let mut body = Pay::new();
-                if !body.push(0x08) || !body.push(u8::from(inverted)) || !body.push(0x10) || !body.push(u8::from(latch))
+                if !body.push(0x08)
+                    || !body.push(u8::from(inverted))
+                    || !body.push(0x10)
+                    || !body.push(u8::from(latch))
                 {
                     return 0;
                 }
@@ -616,7 +631,9 @@ pub fn write_expression_payload(
                 (3u8, body)
             }
         };
-        if !push_record(&mut inner, oneof.0, oneof.1.bytes()) || !push_record(&mut p, field, inner.bytes()) {
+        if !push_record(&mut inner, oneof.0, oneof.1.bytes())
+            || !push_record(&mut p, field, inner.bytes())
+        {
             return 0;
         }
     }
@@ -635,7 +652,12 @@ pub fn write_led_usb_payload(brightness: u8, usb_db: f32, buf: &mut [u8]) -> usi
         return 0;
     }
     let mut p = Pay::new();
-    if !p.push(0x08) || !p.push(0x01) || !p.push(0x20) || !p.varint(u32::from(brightness)) || !p.push(0x75) || !p.f32(usb_db)
+    if !p.push(0x08)
+        || !p.push(0x01)
+        || !p.push(0x20)
+        || !p.varint(u32::from(brightness))
+        || !p.push(0x75)
+        || !p.f32(usb_db)
     {
         return 0;
     }
@@ -718,9 +740,15 @@ mod tests {
     fn save_and_delete_match_the_trace() {
         let mut buf = [0u8; 64];
         let n = save_preset_payload(62, "A", &mut buf);
-        assert_eq!(&buf[..n], &[0x0B, 0xC0, 0x08, 0x01, 0x18, 0x3E, 0x2A, 0x01, b'A', 0x03, 0x00, 0x00, 0x00]);
+        assert_eq!(
+            &buf[..n],
+            &[0x0B, 0xC0, 0x08, 0x01, 0x18, 0x3E, 0x2A, 0x01, b'A', 0x03, 0x00, 0x00, 0x00]
+        );
         let n = delete_preset_payload(23, &mut buf);
-        assert_eq!(&buf[..n], &[0x08, 0xC0, 0x08, 0x02, 0x18, 0x17, 0x32, 0x00, 0x00, 0x00]);
+        assert_eq!(
+            &buf[..n],
+            &[0x08, 0xC0, 0x08, 0x02, 0x18, 0x17, 0x32, 0x00, 0x00, 0x00]
+        );
     }
 
     #[test]
@@ -742,7 +770,8 @@ mod tests {
         assert_eq!(
             &buf[..n],
             &[
-                0x0F, 0xC0, 0x18, 0x3D, 0x22, 0x07, 0x08, 0x00, 0x10, 0x00, 0x18, 0xFF, 0x01, 0x3E, 0x00, 0x00, 0x00
+                0x0F, 0xC0, 0x18, 0x3D, 0x22, 0x07, 0x08, 0x00, 0x10, 0x00, 0x18, 0xFF, 0x01, 0x3E,
+                0x00, 0x00, 0x00
             ]
         );
         let n = write_expression_payload(61, &[], &[], &mut buf);
@@ -755,7 +784,10 @@ mod tests {
         let n = write_led_usb_payload(153, -6.0, &mut buf);
         assert_eq!(
             &buf[..n],
-            &[0x0E, 0xC0, 0x08, 0x01, 0x20, 0x99, 0x01, 0x75, 0x00, 0x00, 0xC0, 0xC0, 0x43, 0x00, 0x00, 0x00]
+            &[
+                0x0E, 0xC0, 0x08, 0x01, 0x20, 0x99, 0x01, 0x75, 0x00, 0x00, 0xC0, 0xC0, 0x43, 0x00,
+                0x00, 0x00
+            ]
         );
     }
 

@@ -1,5 +1,8 @@
 //! Shared constants and value types for the Nano Cortex wire protocol.
 
+#[cfg(not(test))]
+use alloc::{string::String, vec::Vec};
+
 pub const BPM_MIN: u16 = 40;
 pub const BPM_MAX: u16 = 240;
 
@@ -45,6 +48,11 @@ pub struct Amp {
     pub bass: u8,
     pub mid: u8,
     pub treble: u8,
+    pub have_gain: bool,
+    pub have_level: bool,
+    pub have_bass: bool,
+    pub have_mid: bool,
+    pub have_treble: bool,
     pub capture_volume: u8,
     pub capture_slot: u8,
     pub capture_name: String,
@@ -62,6 +70,11 @@ impl Default for Amp {
             bass: 0,
             mid: 0,
             treble: 0,
+            have_gain: false,
+            have_level: false,
+            have_bass: false,
+            have_mid: false,
+            have_treble: false,
             capture_volume: 128,
             capture_slot: 0,
             capture_name: String::new(),
@@ -147,6 +160,11 @@ impl NanoAmpC {
             bass: self.bass,
             mid: self.mid,
             treble: self.treble,
+            have_gain: self.valid,
+            have_level: self.valid,
+            have_bass: self.valid,
+            have_mid: self.valid,
+            have_treble: self.valid,
             capture_volume: self.capture_volume,
             capture_slot: self.capture_slot,
             capture_name: String::from_utf8_lossy(&self.capture_name[..end]).into_owned(),

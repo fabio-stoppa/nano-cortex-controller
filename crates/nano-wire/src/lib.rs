@@ -3,6 +3,11 @@
 //! Pure logic — no ESP-IDF. Firmware modules call [`builders`] / [`parsers`]
 //! directly with slices and owned values.
 
+#![cfg_attr(not(test), no_std)]
+
+#[cfg(not(test))]
+extern crate alloc;
+
 pub mod builders;
 pub mod editor;
 pub mod parsers;

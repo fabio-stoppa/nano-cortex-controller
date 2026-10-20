@@ -1,5 +1,12 @@
 //! C305 / protobuf parsers (ports of `nano_proto.c`).
 
+#[cfg(not(test))]
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
+
 use crate::types::{
     Amp, PresetCatalog, TunerRoute, AMP_CAPTURE_NAME_MAX, BPM_MAX, BPM_MIN, PRESET_COUNT,
     PRESET_NAME_MAX,
@@ -8,6 +15,22 @@ use crate::varint::read_varint;
 
 fn read_f32_le(p: &[u8]) -> f32 {
     f32::from_le_bytes([p[0], p[1], p[2], p[3]])
+}
+
+/// Half away from zero. `f32::round` is not in `core` for this target.
+fn round_f32(v: f32) -> f32 {
+    if !v.is_finite() {
+        return v;
+    }
+    let truncated = v as i32 as f32;
+    let frac = v - truncated;
+    if frac.abs() < 0.5 {
+        truncated
+    } else if v >= 0.0 {
+        truncated + 1.0
+    } else {
+        truncated - 1.0
+    }
 }
 
 fn clamp_u8(val: u32) -> u8 {
@@ -170,7 +193,8 @@ pub fn parse_amp(data: &[u8]) -> Option<Amp> {
                 if field == 32 && !out.have_capture_name {
                     if let Some(name) = first_string(&data[i..i + flen], 2) {
                         if !name.is_empty() {
-                            out.capture_name = name.chars().take(AMP_CAPTURE_NAME_MAX - 1).collect();
+                            out.capture_name =
+                                name.chars().take(AMP_CAPTURE_NAME_MAX - 1).collect();
                             out.have_capture_name = true;
                         }
                     }
@@ -204,6 +228,11 @@ pub fn parse_amp(data: &[u8]) -> Option<Amp> {
         }
     }
 
+    out.have_gain = have[0];
+    out.have_level = have[1];
+    out.have_bass = have[2];
+    out.have_mid = have[3];
+    out.have_treble = have[4];
     out.valid = have.iter().any(|&h| h) || out.have_capture_volume;
     out.valid.then_some(out)
 }
@@ -259,7 +288,7 @@ pub fn parse_bpm(data: &[u8]) -> Option<u16> {
                 if field == field_want {
                     let f = read_f32_le(&data[i..]);
                     if f.is_finite() && (BPM_MIN as f32..=BPM_MAX as f32).contains(&f) {
-                        return Some(f.round() as u16);
+                        return Some(round_f32(f) as u16);
                     }
                 }
                 i += 4;
@@ -274,7 +303,7 @@ pub fn parse_bpm(data: &[u8]) -> Option<u16> {
         if data[off] == 0xC5 && data[off + 1] == 0x03 {
             let f = read_f32_le(&data[off + 2..]);
             if f.is_finite() && (BPM_MIN as f32..=BPM_MAX as f32).contains(&f) {
-                return Some(f.round() as u16);
+                return Some(round_f32(f) as u16);
             }
         }
         off += 1;
@@ -715,7 +744,7 @@ fn decode_amount_float_at(data: &[u8], index: usize) -> Option<AmountKnobNotify>
         return None;
     }
     Some(AmountKnobNotify {
-        raw: value.clamp(0.0, 255.0).round() as u8,
+        raw: round_f32(value.clamp(0.0, 255.0)) as u8,
         model_slot,
     })
 }
@@ -827,7 +856,7 @@ pub fn try_parse_bpm_notify_ex(data: &[u8]) -> Option<(u16, bool)> {
             continue;
         }
 
-        return Some((value.round() as u16, tap));
+        return Some((round_f32(value) as u16, tap));
     }
     None
 }
@@ -1060,7 +1089,9 @@ mod tests {
 
     #[test]
     fn amp_hw_notify_ignores_global_toggle() {
-        let data = [0x0A, 0xC0, 0x08, 0x01, 0x18, 0x03, 0x20, 0x01, 0x1F, 0x00, 0x00, 0x00];
+        let data = [
+            0x0A, 0xC0, 0x08, 0x01, 0x18, 0x03, 0x20, 0x01, 0x1F, 0x00, 0x00, 0x00,
+        ];
         assert_eq!(try_parse_amp_hw_notify(&data), None);
     }
 
@@ -1124,10 +1155,14 @@ mod tests {
 
     #[test]
     fn fx_slot_press_selects_post1() {
-        let data = [0x0A, 0xC0, 0x08, 0x01, 0x18, 0x02, 0x20, 0x02, 0x1C, 0x00, 0x00, 0x00];
+        let data = [
+            0x0A, 0xC0, 0x08, 0x01, 0x18, 0x02, 0x20, 0x02, 0x1C, 0x00, 0x00, 0x00,
+        ];
         assert_eq!(try_parse_fx_slot_press(&data), Some(2));
         // Bass knob shares 18 02 20 but ends 30 01 1A.
-        let bass = [0x0C, 0xC0, 0x08, 0x01, 0x18, 0x02, 0x20, 0x20, 0x30, 0x01, 0x1A];
+        let bass = [
+            0x0C, 0xC0, 0x08, 0x01, 0x18, 0x02, 0x20, 0x20, 0x30, 0x01, 0x1A,
+        ];
         assert_eq!(try_parse_fx_slot_press(&bass), None);
     }
 
@@ -1140,7 +1175,9 @@ mod tests {
 
     #[test]
     fn fx_slot_press_pre2() {
-        let data = [0x0A, 0xC0, 0x08, 0x01, 0x18, 0x02, 0x20, 0x01, 0x1C, 0x00, 0x00, 0x00];
+        let data = [
+            0x0A, 0xC0, 0x08, 0x01, 0x18, 0x02, 0x20, 0x01, 0x1C, 0x00, 0x00, 0x00,
+        ];
         assert_eq!(try_parse_fx_slot_press(&data), Some(1));
     }
 
@@ -1181,19 +1218,27 @@ mod tests {
 
     #[test]
     fn amp_hw_notify_ignores_capture_ir_select_trailer() {
-        let capture = [0x0A, 0xC0, 0x08, 0x01, 0x18, 0x01, 0x20, 0x02, 0x1C, 0x00, 0x00, 0x00];
+        let capture = [
+            0x0A, 0xC0, 0x08, 0x01, 0x18, 0x01, 0x20, 0x02, 0x1C, 0x00, 0x00, 0x00,
+        ];
         assert_eq!(try_parse_amp_hw_notify(&capture), None);
-        let ir = [0x0A, 0xC0, 0x08, 0x01, 0x18, 0x03, 0x20, 0x01, 0x1C, 0x00, 0x00, 0x00];
+        let ir = [
+            0x0A, 0xC0, 0x08, 0x01, 0x18, 0x03, 0x20, 0x01, 0x1C, 0x00, 0x00, 0x00,
+        ];
         assert_eq!(try_parse_amp_hw_notify(&ir), None);
     }
 
     #[test]
     fn amp_hw_notify_ignores_bare_c0_08_01_20() {
         // Shared with tuner/BPM prefixes — must not paint gain at a few %.
-        let bare = [0x0A, 0xC0, 0x08, 0x01, 0x20, 0x05, 0x38, 0x01, 0x7F, 0x00, 0x00, 0x00];
+        let bare = [
+            0x0A, 0xC0, 0x08, 0x01, 0x20, 0x05, 0x38, 0x01, 0x7F, 0x00, 0x00, 0x00,
+        ];
         assert_eq!(try_parse_amp_hw_notify(&bare), None);
         // Explicit gain id still works.
-        let explicit = [0x0C, 0xC0, 0x08, 0x01, 0x18, 0x00, 0x20, 0xC8, 0x01, 0x30, 0x01];
+        let explicit = [
+            0x0C, 0xC0, 0x08, 0x01, 0x18, 0x00, 0x20, 0xC8, 0x01, 0x30, 0x01,
+        ];
         assert_eq!(try_parse_amp_hw_notify(&explicit), Some((0, 200)));
     }
 
