@@ -1,0 +1,60 @@
+[package]
+name = "nano-cortex-firmware"
+version = "0.1.0"
+license = "GPL-3.0-only"
+edition = "2021"
+rust-version = "1.95"
+
+[[bin]]
+name = "nano-cortex-firmware"
+path = "src/main.rs"
+harness = false
+
+[dependencies]
+# The 1.2.2 tag keeps esp-hal, esp-radio, and esp-rtos on one bt-hci.
+# crates.io esp-rtos 0.4.0 still requires the 1.2.0 release candidate.
+esp-alloc = { git = "https://github.com/esp-rs/esp-hal", tag = "esp-hal-v1.2.2", features = ["esp32s3"] }
+esp-backtrace = { git = "https://github.com/esp-rs/esp-hal", tag = "esp-hal-v1.2.2", features = ["esp32s3", "panic-handler", "println"] }
+esp-bootloader-esp-idf = { git = "https://github.com/esp-rs/esp-hal", tag = "esp-hal-v1.2.2", features = ["esp32s3"] }
+esp-hal = { git = "https://github.com/esp-rs/esp-hal", tag = "esp-hal-v1.2.2", features = ["esp32s3", "unstable"] }
+esp-println = { git = "https://github.com/esp-rs/esp-hal", tag = "esp-hal-v1.2.2", features = ["esp32s3", "log-04"] }
+esp-radio = { git = "https://github.com/esp-rs/esp-hal", tag = "esp-hal-v1.2.2", features = ["esp32s3", "ble", "unstable", "log-04"] }
+esp-rtos = { git = "https://github.com/esp-rs/esp-hal", tag = "esp-hal-v1.2.2", features = ["esp32s3", "embassy", "esp-radio", "log-04"] }
+bt-hci = "0.9"
+embassy-executor = { version = "0.10", default-features = false }
+embassy-futures = "0.1"
+embassy-sync = "0.8"
+embassy-time = "0.5"
+gt911 = "0.3"
+libm = "0.2"
+log = "0.4"
+nano-wire = { path = "../crates/nano-wire" }
+slint = { version = "1.13.1", default-features = false, features = [
+    "compat-1-2",
+    "unsafe-single-threaded",
+    "libm",
+    "renderer-software",
+] }
+trouble-host = { version = "0.7", default-features = false, features = [
+    "central",
+    "gatt",
+    "scan",
+    "log",
+    "default-packet-pool-mtu-512",
+    "default-packet-pool-size-16",
+    # 16 slots × 512 bytes, inline in each GattClient. A deeper queue overflows
+    # the main stack, which is whatever internal DRAM the controller did not take.
+    "gatt-client-notification-queue-size-16",
+    "gatt-client-notification-max-subscribers-4",
+] }
+
+[build-dependencies]
+slint-build = "=1.13.1"
+
+[profile.dev]
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = "s"

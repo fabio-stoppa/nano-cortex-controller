@@ -1,0 +1,25 @@
+[build]
+target = "xtensa-esp32s3-none-elf"
+
+[target.xtensa-esp32s3-none-elf]
+runner = "espflash flash --monitor --flash-freq 80mhz --baud 921600"
+# rust-lld drops the in-place addend on R_XTENSA_32. The Bluetooth blob
+# stores call targets that way, so those calls land on a literal pool and
+# the controller task takes an illegal instruction. GNU ld keeps the addend.
+linker = "/home/fstoppa/.espressif/tools/xtensa-esp-elf/esp-13.2.0_20240530/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc"
+rustflags = [
+  "-C", "linker-flavor=gcc",
+  "-C", "link-arg=-nostartfiles",
+  "-C", "link-arg=-Wl,-Tlinkall.x",
+]
+
+[alias]
+bare = "build --release -Zbuild-std=core,alloc"
+
+[env]
+ESP_LOG = "info"
+# Bounce-buffer copies from PSRAM want a 64-byte data cache line.
+ESP_HAL_CONFIG_DATA_CACHE_LINE_SIZE = "64B"
+
+[unstable]
+build-std = ["core", "alloc"]

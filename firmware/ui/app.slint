@@ -1,0 +1,1233 @@
+// Landscape matches the 800×480 scan. Portrait moves the chain to the top and
+// the firmware rotates that taller layout into the same framebuffer.
+
+component ParamCell inherits Rectangle {
+    in property <string> name;
+    in property <string> value: "-";
+    in property <float> amount: 0;
+    in property <bool> slider: false;
+    callback changed(float);
+    callback tapped();
+    height: 116px;
+    min-width: 0px;
+    preferred-width: 0px;
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    background: #1a1a1a;
+    border-color: #404040;
+    border-width: 1px;
+    border-radius: 4px;
+    VerticalLayout {
+        height: 100%;
+        alignment: center;
+        padding: 8px;
+        spacing: 6px;
+        Text {
+            text: name;
+            color: #909090;
+            font-size: 14px;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+        Rectangle {
+            height: 18px;
+            background: #1e1e1e;
+            border-color: #707070;
+            border-width: 1px;
+            border-radius: 3px;
+            Rectangle {
+                x: 0px;
+                width: parent.width * amount;
+                height: 100%;
+                background: #b8c0c8;
+                border-radius: 2px;
+            }
+        }
+        Text {
+            text: value;
+            color: #ececec;
+            font-size: 18px;
+            horizontal-alignment: center;
+        }
+    }
+    if root.slider: TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down || event.kind == PointerEventKind.move) {
+                root.changed(clamp((self.mouse-x - 8px) / max(self.width - 16px, 1px), 0, 1));
+            }
+        }
+    }
+    if !root.slider: TouchArea {
+        clicked => { root.tapped(); }
+    }
+}
+
+component ChainTab inherits Rectangle {
+    in property <string> label;
+    in property <color> accent;
+    in property <bool> active: false;
+    in property <bool> selected: false;
+    callback tapped();
+    callback held();
+    property <bool> pressed: false;
+    property <bool> held-sent: false;
+    background: active ? accent : transparent;
+    border-width: selected ? 2px : 1px;
+    border-color: selected ? #ffffff : accent;
+    border-radius: 6px;
+    Text {
+        text: label;
+        color: active ? #ffffff : accent;
+        font-size: 13px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    Timer {
+        interval: 450ms;
+        running: root.pressed && !root.held-sent;
+        triggered => {
+            root.held-sent = true;
+            root.held();
+        }
+    }
+    TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.pressed = true;
+                root.held-sent = false;
+            }
+            if (event.kind == PointerEventKind.up) {
+                if (!root.held-sent) {
+                    root.tapped();
+                }
+                root.pressed = false;
+            }
+            if (event.kind == PointerEventKind.cancel) {
+                root.pressed = false;
+            }
+        }
+    }
+}
+
+component ChainRail inherits Rectangle {
+    in property <bool> horizontal: false;
+    in property <int> page;
+    in property <int> chain;
+    in property <string> tab-0;
+    in property <string> tab-1;
+    in property <string> tab-3;
+    in property <string> tab-4;
+    in property <string> tab-5;
+    in property <bool> on-0;
+    in property <bool> on-1;
+    in property <bool> on-3;
+    in property <bool> on-4;
+    in property <bool> on-5;
+    callback chain-tapped(int);
+    callback chain-held(int);
+    background: transparent;
+
+    if !root.horizontal: VerticalLayout {
+        spacing: 8px;
+        padding-top: 2px;
+        padding-bottom: 4px;
+        ChainTab {
+            label: tab-0;
+            accent: #909090;
+            active: on-0;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 0;
+            vertical-stretch: 1;
+            tapped => { root.chain-tapped(0); }
+            held => { root.chain-held(0); }
+        }
+        ChainTab {
+            label: tab-1;
+            accent: #909090;
+            active: on-1;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 1;
+            vertical-stretch: 1;
+            tapped => { root.chain-tapped(1); }
+            held => { root.chain-held(1); }
+        }
+        ChainTab {
+            label: "AMP";
+            accent: #e85040;
+            active: true;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 2;
+            vertical-stretch: 1;
+            tapped => { root.chain-tapped(2); }
+            held => { root.chain-held(2); }
+        }
+        ChainTab {
+            label: tab-3;
+            accent: #909090;
+            active: on-3;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 3;
+            vertical-stretch: 1;
+            tapped => { root.chain-tapped(3); }
+            held => { root.chain-held(3); }
+        }
+        ChainTab {
+            label: tab-4;
+            accent: #909090;
+            active: on-4;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 4;
+            vertical-stretch: 1;
+            tapped => { root.chain-tapped(4); }
+            held => { root.chain-held(4); }
+        }
+        ChainTab {
+            label: tab-5;
+            accent: #909090;
+            active: on-5;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 5;
+            vertical-stretch: 1;
+            tapped => { root.chain-tapped(5); }
+            held => { root.chain-held(5); }
+        }
+    }
+
+    if root.horizontal: HorizontalLayout {
+        spacing: 4px;
+        ChainTab {
+            label: tab-0;
+            accent: #909090;
+            active: on-0;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 0;
+            horizontal-stretch: 1;
+            tapped => { root.chain-tapped(0); }
+            held => { root.chain-held(0); }
+        }
+        ChainTab {
+            label: tab-1;
+            accent: #909090;
+            active: on-1;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 1;
+            horizontal-stretch: 1;
+            tapped => { root.chain-tapped(1); }
+            held => { root.chain-held(1); }
+        }
+        ChainTab {
+            label: "AMP";
+            accent: #e85040;
+            active: true;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 2;
+            horizontal-stretch: 1;
+            tapped => { root.chain-tapped(2); }
+            held => { root.chain-held(2); }
+        }
+        ChainTab {
+            label: tab-3;
+            accent: #909090;
+            active: on-3;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 3;
+            horizontal-stretch: 1;
+            tapped => { root.chain-tapped(3); }
+            held => { root.chain-held(3); }
+        }
+        ChainTab {
+            label: tab-4;
+            accent: #909090;
+            active: on-4;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 4;
+            horizontal-stretch: 1;
+            tapped => { root.chain-tapped(4); }
+            held => { root.chain-held(4); }
+        }
+        ChainTab {
+            label: tab-5;
+            accent: #909090;
+            active: on-5;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 5;
+            horizontal-stretch: 1;
+            tapped => { root.chain-tapped(5); }
+            held => { root.chain-held(5); }
+        }
+    }
+}
+
+component HeaderButton inherits Rectangle {
+    in property <string> label;
+    in property <length> button-width: 44px;
+    in property <bool> hot: false;
+    callback tapped();
+    width: button-width;
+    height: 28px;
+    background: hot ? #2fb648 : #1a1a1a;
+    border-radius: 6px;
+    Text {
+        text: label;
+        color: #c8c8c8;
+        font-size: 12px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    TouchArea {
+        clicked => { root.tapped(); }
+    }
+}
+
+component HeaderBar inherits Rectangle {
+    in property <bool> portrait;
+    in property <int> page;
+    in property <string> preset;
+    in property <string> model;
+    in property <bool> model-enabled;
+    in property <string> bpm-text;
+    in property <bool> ble-on;
+    in property <bool> tuner-on;
+    in property <bool> save-dirty: false;
+    callback tempo-tapped();
+    callback tempo-opened();
+    callback tuner-tapped();
+    callback preset-stepped(int);
+    callback capture-stepped(int);
+    callback model-stepped(int);
+    callback save-tapped();
+    callback copy-tapped();
+    callback library-tapped();
+    background: transparent;
+    HorizontalLayout {
+        alignment: space-between;
+        padding-left: 8px;
+        padding-right: 4px;
+        spacing: 8px;
+        HorizontalLayout {
+            alignment: start;
+            spacing: 4px;
+            Text {
+                text: preset;
+                color: #909090;
+                font-size: 14px;
+                vertical-alignment: center;
+                overflow: elide;
+                width: portrait ? 56px : 110px;
+            }
+            HeaderButton {
+                label: "<";
+                button-width: 28px;
+                tapped => { root.preset-stepped(-1); }
+            }
+            HeaderButton {
+                label: ">";
+                button-width: 28px;
+                tapped => { root.preset-stepped(1); }
+            }
+            HeaderButton {
+                label: "Save";
+                hot: save-dirty;
+                button-width: portrait ? 40px : 48px;
+                tapped => { root.save-tapped(); }
+            }
+            HeaderButton {
+                label: "Copy";
+                button-width: portrait ? 40px : 48px;
+                tapped => { root.copy-tapped(); }
+            }
+            HeaderButton {
+                label: "Lib";
+                button-width: portrait ? 36px : 40px;
+                tapped => { root.library-tapped(); }
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            height: 44px;
+            background: #080808;
+            border-radius: 4px;
+            HorizontalLayout {
+                padding-left: 2px;
+                padding-right: 2px;
+                if root.page == 0 || root.page == 1: TouchArea {
+                    width: 32px;
+                    height: 44px;
+                    clicked => {
+                        if (root.page == 0) { root.capture-stepped(-1); }
+                        if (root.page == 1) { root.model-stepped(-1); }
+                    }
+                    Text {
+                        text: "<";
+                        color: #c8c8c8;
+                        font-size: 16px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                Text {
+                    text: model;
+                    color: model-enabled ? #ececec : #606060;
+                    font-size: 18px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if root.page == 0 || root.page == 1: TouchArea {
+                    width: 32px;
+                    height: 44px;
+                    clicked => {
+                        if (root.page == 0) { root.capture-stepped(1); }
+                        if (root.page == 1) { root.model-stepped(1); }
+                    }
+                    Text {
+                        text: ">";
+                        color: #c8c8c8;
+                        font-size: 16px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: portrait ? 8px : 14px;
+            width: portrait ? 128px : 200px;
+            TouchArea {
+                width: 72px;
+                clicked => { root.tempo-opened(); }
+                Text {
+                    text: bpm-text;
+                    color: #909090;
+                    font-size: 14px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+            }
+            Text {
+                text: "BT";
+                color: ble-on ? #80c0ff : #505050;
+                font-size: 14px;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                background: transparent;
+                border-width: 1px;
+                border-color: tuner-on ? #8090a0 : #404040;
+                border-radius: 6px;
+                Text {
+                    text: "♪";
+                    color: #b0b8c0;
+                    font-size: 16px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                TouchArea {
+                    clicked => { root.tuner-tapped(); }
+                }
+            }
+        }
+    }
+}
+
+component AmpPanel inherits Rectangle {
+    in property <bool> portrait;
+    in property <string> gate-text;
+    in property <float> gate-amount;
+    in property <string> gate-amnt-text;
+    in property <float> gate-amnt-amount;
+    in property <string> gain-text;
+    in property <float> gain-amount;
+    in property <string> cap-text;
+    in property <float> cap-amount;
+    in property <string> master-text;
+    in property <float> master-amount;
+    in property <string> bass-text;
+    in property <float> bass-amount;
+    in property <string> mid-text;
+    in property <float> mid-amount;
+    in property <string> treble-text;
+    in property <float> treble-amount;
+    callback slider-moved(int, float);
+    callback gate-tapped();
+    background: transparent;
+    VerticalLayout {
+        alignment: start;
+        padding: 2px;
+        spacing: 4px;
+        if !root.portrait: HorizontalLayout {
+            width: 100%;
+            spacing: 4px;
+            ParamCell {
+                horizontal-stretch: 1;
+                name: "INPUT GATE";
+                value: gate-text;
+                amount: gate-amount;
+                tapped => { root.gate-tapped(); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: true;
+                name: "GATE AMNT";
+                value: gate-amnt-text;
+                amount: gate-amnt-amount;
+                changed(v) => { root.slider-moved(6, v); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: true;
+                name: "GAIN";
+                value: gain-text;
+                amount: gain-amount;
+                changed(v) => { root.slider-moved(0, v); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: true;
+                name: "CAPTURE LV";
+                value: cap-text;
+                amount: cap-amount;
+                changed(v) => { root.slider-moved(5, v); }
+            }
+        }
+        if !root.portrait: HorizontalLayout {
+            width: 100%;
+            spacing: 4px;
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: true;
+                name: "MASTER LV";
+                value: master-text;
+                amount: master-amount;
+                changed(v) => { root.slider-moved(1, v); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: true;
+                name: "BASS";
+                value: bass-text;
+                amount: bass-amount;
+                changed(v) => { root.slider-moved(2, v); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: true;
+                name: "MID";
+                value: mid-text;
+                amount: mid-amount;
+                changed(v) => { root.slider-moved(3, v); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: true;
+                name: "TREBLE";
+                value: treble-text;
+                amount: treble-amount;
+                changed(v) => { root.slider-moved(4, v); }
+            }
+        }
+        if root.portrait: HorizontalLayout {
+            width: 100%;
+            spacing: 4px;
+            ParamCell {
+                horizontal-stretch: 1;
+                name: "INPUT GATE";
+                value: gate-text;
+                amount: gate-amount;
+                tapped => { root.gate-tapped(); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: true;
+                name: "GATE AMNT";
+                value: gate-amnt-text;
+                amount: gate-amnt-amount;
+                changed(v) => { root.slider-moved(6, v); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: true;
+                name: "GAIN";
+                value: gain-text;
+                amount: gain-amount;
+                changed(v) => { root.slider-moved(0, v); }
+            }
+        }
+        if root.portrait: HorizontalLayout {
+            width: 100%;
+            spacing: 4px;
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: true;
+                name: "CAPTURE LV";
+                value: cap-text;
+                amount: cap-amount;
+                changed(v) => { root.slider-moved(5, v); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: true;
+                name: "MASTER LV";
+                value: master-text;
+                amount: master-amount;
+                changed(v) => { root.slider-moved(1, v); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: true;
+                name: "BASS";
+                value: bass-text;
+                amount: bass-amount;
+                changed(v) => { root.slider-moved(2, v); }
+            }
+        }
+        if root.portrait: HorizontalLayout {
+            width: 100%;
+            spacing: 4px;
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: true;
+                name: "MID";
+                value: mid-text;
+                amount: mid-amount;
+                changed(v) => { root.slider-moved(3, v); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: true;
+                name: "TREBLE";
+                value: treble-text;
+                amount: treble-amount;
+                changed(v) => { root.slider-moved(4, v); }
+            }
+            Rectangle {
+                min-width: 0px;
+                preferred-width: 0px;
+                horizontal-stretch: 1;
+            }
+        }
+    }
+}
+
+component FxPanel inherits Rectangle {
+    in property <string> n0;
+    in property <string> v0;
+    in property <float> a0;
+    in property <string> n1;
+    in property <string> v1;
+    in property <float> a1;
+    in property <string> n2;
+    in property <string> v2;
+    in property <float> a2;
+    in property <string> n3;
+    in property <string> v3;
+    in property <float> a3;
+    in property <string> n4;
+    in property <string> v4;
+    in property <float> a4;
+    in property <string> n5;
+    in property <string> v5;
+    in property <float> a5;
+    in property <string> n6;
+    in property <string> v6;
+    in property <float> a6;
+    in property <string> n7;
+    in property <string> v7;
+    in property <float> a7;
+    in property <string> page-text;
+    callback param-changed(int, float);
+    callback param-paged(int);
+    background: transparent;
+    VerticalLayout {
+        alignment: start;
+        padding: 2px;
+        spacing: 4px;
+        HorizontalLayout {
+            width: 100%;
+            spacing: 4px;
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: n0 != "-";
+                name: n0;
+                value: v0;
+                amount: a0;
+                changed(v) => { root.param-changed(0, v); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: n1 != "-";
+                name: n1;
+                value: v1;
+                amount: a1;
+                changed(v) => { root.param-changed(1, v); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: n2 != "-";
+                name: n2;
+                value: v2;
+                amount: a2;
+                changed(v) => { root.param-changed(2, v); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: n3 != "-";
+                name: n3;
+                value: v3;
+                amount: a3;
+                changed(v) => { root.param-changed(3, v); }
+            }
+        }
+        HorizontalLayout {
+            width: 100%;
+            spacing: 4px;
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: n4 != "-";
+                name: n4;
+                value: v4;
+                amount: a4;
+                changed(v) => { root.param-changed(4, v); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: n5 != "-";
+                name: n5;
+                value: v5;
+                amount: a5;
+                changed(v) => { root.param-changed(5, v); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: n6 != "-";
+                name: n6;
+                value: v6;
+                amount: a6;
+                changed(v) => { root.param-changed(6, v); }
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                slider: n7 != "-";
+                name: n7;
+                value: v7;
+                amount: a7;
+                changed(v) => { root.param-changed(7, v); }
+            }
+        }
+        if root.page-text != "": HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
+            height: 36px;
+            HeaderButton {
+                label: "<";
+                button-width: 48px;
+                tapped => { root.param-paged(-1); }
+            }
+            Text {
+                text: page-text;
+                color: #909090;
+                font-size: 14px;
+                vertical-alignment: center;
+            }
+            HeaderButton {
+                label: ">";
+                button-width: 48px;
+                tapped => { root.param-paged(1); }
+            }
+        }
+    }
+}
+
+component TunerPanel inherits Rectangle {
+    in property <string> note;
+    in property <string> cents;
+    in property <float> cents-pos: 0.5;
+    in property <bool> in-tune: false;
+    in property <bool> active;
+    callback tuner-tapped();
+    background: transparent;
+    VerticalLayout {
+        alignment: center;
+        spacing: 10px;
+        padding-bottom: 20px;
+        Text {
+            text: note;
+            color: in-tune ? #3dcc7a : #ffffff;
+            font-size: 64px;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: cents;
+            color: #c0c0c0;
+            font-size: 18px;
+            horizontal-alignment: center;
+        }
+        Rectangle {
+            width: 560px;
+            height: 36px;
+            background: #1a1a1a;
+            border-color: #404040;
+            border-width: 1px;
+            border-radius: 8px;
+            Rectangle {
+                width: 48px;
+                height: 32px;
+                x: (parent.width - self.width) / 2;
+                y: 2px;
+                background: #3dcc7a33;
+                border-radius: 4px;
+            }
+            Rectangle {
+                width: 2px;
+                height: 36px;
+                x: (parent.width - self.width) / 2;
+                background: #a0a0a0;
+            }
+            Rectangle {
+                width: 8px;
+                height: 36px;
+                x: (parent.width - self.width) * cents-pos;
+                background: in-tune ? #3dcc7a : #d0d0d0;
+                border-radius: 3px;
+            }
+        }
+        Rectangle {
+            width: 160px;
+            height: 48px;
+            background: active ? #243044 : #1a1a1a;
+            border-width: 1px;
+            border-color: active ? #80c0ff : #404040;
+            border-radius: 6px;
+            Text {
+                text: active ? "ON" : "OFF";
+                color: active ? #e0e0e0 : #909090;
+                font-size: 16px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            TouchArea {
+                clicked => { root.tuner-tapped(); }
+            }
+        }
+    }
+}
+
+component TempoPanel inherits Rectangle {
+    in property <string> bpm;
+    callback tempo-tapped();
+    background: transparent;
+    VerticalLayout {
+        alignment: center;
+        spacing: 16px;
+        padding-bottom: 20px;
+        Text {
+            text: bpm;
+            color: #ffffff;
+            font-size: 64px;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "BPM";
+            color: #909090;
+            font-size: 18px;
+            horizontal-alignment: center;
+        }
+        HorizontalLayout {
+            alignment: center;
+            spacing: 12px;
+            Text {
+                text: "Global tempo";
+                color: #c0c0c0;
+                font-size: 16px;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                width: 48px;
+                height: 26px;
+                background: #3dcc7a;
+                border-radius: 13px;
+                Rectangle {
+                    width: 20px;
+                    height: 20px;
+                    x: 24px;
+                    y: 3px;
+                    background: #ffffff;
+                    border-radius: 10px;
+                }
+            }
+        }
+        Rectangle {
+            width: 220px;
+            height: 72px;
+            background: #1a1a1a;
+            border-radius: 8px;
+            Text {
+                text: "TAP";
+                color: #909090;
+                font-size: 18px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            TouchArea {
+                clicked => { root.tempo-tapped(); }
+            }
+        }
+    }
+}
+
+component LayoutChoice inherits Rectangle {
+    in property <string> label;
+    in property <bool> chosen;
+    callback tapped();
+    height: 40px;
+    min-width: 140px;
+    background: chosen ? #243044 : #1a1a1a;
+    border-width: 1px;
+    border-color: chosen ? #80c0ff : #404040;
+    border-radius: 6px;
+    Text {
+        text: label;
+        color: chosen ? #e0e0e0 : #c0c0c0;
+        font-size: 14px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    TouchArea {
+        clicked => { root.tapped(); }
+    }
+}
+
+component ConnectingOverlay inherits Rectangle {
+    in property <int> layout-mode;
+    callback layout-tapped(int);
+    background: #121212;
+    TouchArea {}
+    VerticalLayout {
+        alignment: center;
+        spacing: 18px;
+        padding: 32px;
+        Text {
+            text: "BT";
+            color: #80c0ff;
+            font-size: 48px;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Connecting to Nano Cortex";
+            color: #e0e0e0;
+            font-size: 20px;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Waiting for Nano Cortex...";
+            color: #80c0ff;
+            font-size: 16px;
+            horizontal-alignment: center;
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 10px;
+            Text {
+                text: "Screen orientation";
+                color: #909090;
+                font-size: 14px;
+                horizontal-alignment: center;
+            }
+            GridLayout {
+                spacing: 8px;
+                Row {
+                    LayoutChoice {
+                        label: "Landscape";
+                        chosen: layout-mode == 0;
+                        tapped => { root.layout-tapped(0); }
+                    }
+                    LayoutChoice {
+                        label: "Landscape Flip";
+                        chosen: layout-mode == 3;
+                        tapped => { root.layout-tapped(3); }
+                    }
+                }
+                Row {
+                    LayoutChoice {
+                        label: "Portrait";
+                        chosen: layout-mode == 1;
+                        tapped => { root.layout-tapped(1); }
+                    }
+                    LayoutChoice {
+                        label: "Portrait Flip";
+                        chosen: layout-mode == 2;
+                        tapped => { root.layout-tapped(2); }
+                    }
+                }
+            }
+        }
+        Text {
+            text: "Hold EXIT + CAPTURE on the Nano\nuntil the GAIN ring spins.";
+            color: #c0c0c0;
+            font-size: 16px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        Text {
+            text: "Make sure Nano is not paired\nwith a smartphone or Cortex Cloud.";
+            color: #909090;
+            font-size: 16px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    in-out property <bool> connecting: true;
+    in-out property <bool> portrait: false;
+    in-out property <int> layout-mode: 0;
+    in-out property <int> page: 0;
+    in-out property <int> chain: 2;
+    in-out property <string> preset: "-";
+    in-out property <string> model: "Amp";
+    in-out property <bool> model-enabled: false;
+    in-out property <string> bpm-text: "- BPM";
+    in-out property <string> tempo-bpm: "-";
+    in-out property <string> tuner-note: "-";
+    in-out property <string> tuner-cents: "Tuner off";
+    in-out property <float> tuner-pos: 0.5;
+    in-out property <bool> tuner-in-tune: false;
+    in-out property <bool> save-dirty: false;
+    in-out property <bool> ble-on: false;
+    in-out property <string> gate-text: "-";
+    in-out property <float> gate-amount: 0;
+    in-out property <string> gate-amnt-text: "-";
+    in-out property <float> gate-amnt-amount: 0;
+    in-out property <string> gain-text: "-";
+    in-out property <float> gain-amount: 0;
+    in-out property <string> cap-text: "-";
+    in-out property <float> cap-amount: 0;
+    in-out property <string> master-text: "-";
+    in-out property <float> master-amount: 0;
+    in-out property <string> bass-text: "-";
+    in-out property <float> bass-amount: 0;
+    in-out property <string> mid-text: "-";
+    in-out property <float> mid-amount: 0;
+    in-out property <string> treble-text: "-";
+    in-out property <float> treble-amount: 0;
+    in-out property <string> fx-n0: "-";
+    in-out property <string> fx-v0: "-";
+    in-out property <float> fx-a0: 0;
+    in-out property <string> fx-n1: "-";
+    in-out property <string> fx-v1: "-";
+    in-out property <float> fx-a1: 0;
+    in-out property <string> fx-n2: "-";
+    in-out property <string> fx-v2: "-";
+    in-out property <float> fx-a2: 0;
+    in-out property <string> fx-n3: "-";
+    in-out property <string> fx-v3: "-";
+    in-out property <float> fx-a3: 0;
+    in-out property <string> fx-n4: "-";
+    in-out property <string> fx-v4: "-";
+    in-out property <float> fx-a4: 0;
+    in-out property <string> fx-n5: "-";
+    in-out property <string> fx-v5: "-";
+    in-out property <float> fx-a5: 0;
+    in-out property <string> fx-n6: "-";
+    in-out property <string> fx-v6: "-";
+    in-out property <float> fx-a6: 0;
+    in-out property <string> fx-n7: "-";
+    in-out property <string> fx-v7: "-";
+    in-out property <float> fx-a7: 0;
+    in-out property <string> fx-page: "";
+    in-out property <string> tab-0: "FX";
+    in-out property <string> tab-1: "FX";
+    in-out property <string> tab-3: "FX";
+    in-out property <string> tab-4: "FX";
+    in-out property <string> tab-5: "FX";
+    in-out property <bool> on-0: false;
+    in-out property <bool> on-1: false;
+    in-out property <bool> on-3: false;
+    in-out property <bool> on-4: false;
+    in-out property <bool> on-5: false;
+    in-out property <bool> tuner-active: false;
+
+    callback chain-tapped(int);
+    callback chain-held(int);
+    callback tuner-tapped();
+    callback tempo-tapped();
+    callback tempo-opened();
+    callback layout-tapped(int);
+    callback slider-moved(int, float);
+    callback gate-tapped();
+    callback param-changed(int, float);
+    callback param-paged(int);
+    callback preset-stepped(int);
+    callback capture-stepped(int);
+    callback model-stepped(int);
+    callback save-tapped();
+    callback copy-tapped();
+    callback library-tapped();
+
+    background: #121212;
+    default-font-size: 16px;
+
+    VerticalLayout {
+        padding: 1px;
+        HeaderBar {
+            height: 48px;
+            portrait: root.portrait;
+            page: root.page;
+            preset: root.preset;
+            model: root.model;
+            model-enabled: root.model-enabled;
+            bpm-text: root.bpm-text;
+            ble-on: root.ble-on;
+            tuner-on: root.page == 2;
+            save-dirty: root.save-dirty;
+            tempo-opened => { root.tempo-opened(); }
+            tuner-tapped => { root.tuner-tapped(); }
+            preset-stepped(delta) => { root.preset-stepped(delta); }
+            capture-stepped(delta) => { root.capture-stepped(delta); }
+            model-stepped(delta) => { root.model-stepped(delta); }
+            save-tapped => { root.save-tapped(); }
+            copy-tapped => { root.copy-tapped(); }
+            library-tapped => { root.library-tapped(); }
+        }
+        if !root.portrait: HorizontalLayout {
+            spacing: 4px;
+            ChainRail {
+                width: 112px;
+                page: root.page;
+                chain: root.chain;
+                tab-0: root.tab-0;
+                on-0: root.on-0;
+                tab-1: root.tab-1;
+                on-1: root.on-1;
+                tab-3: root.tab-3;
+                on-3: root.on-3;
+                tab-4: root.tab-4;
+                on-4: root.on-4;
+                tab-5: root.tab-5;
+                on-5: root.on-5;
+                chain-tapped(index) => { root.chain-tapped(index); }
+                chain-held(index) => { root.chain-held(index); }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+                background: transparent;
+                clip: true;
+                if root.page == 0: AmpPanel {
+                    portrait: root.portrait;
+                    gate-text: root.gate-text;
+                    gate-amount: root.gate-amount;
+                    gate-amnt-text: root.gate-amnt-text;
+                    gate-amnt-amount: root.gate-amnt-amount;
+                    gain-text: root.gain-text;
+                    gain-amount: root.gain-amount;
+                    cap-text: root.cap-text;
+                    cap-amount: root.cap-amount;
+                    master-text: root.master-text;
+                    master-amount: root.master-amount;
+                    bass-text: root.bass-text;
+                    bass-amount: root.bass-amount;
+                    mid-text: root.mid-text;
+                    mid-amount: root.mid-amount;
+                    treble-text: root.treble-text;
+                    treble-amount: root.treble-amount;
+                    slider-moved(id, amount) => { root.slider-moved(id, amount); }
+                    gate-tapped => { root.gate-tapped(); }
+                }
+                if root.page == 1: FxPanel {
+                    n0: root.fx-n0; v0: root.fx-v0; a0: root.fx-a0;
+                    n1: root.fx-n1; v1: root.fx-v1; a1: root.fx-a1;
+                    n2: root.fx-n2; v2: root.fx-v2; a2: root.fx-a2;
+                    n3: root.fx-n3; v3: root.fx-v3; a3: root.fx-a3;
+                    n4: root.fx-n4; v4: root.fx-v4; a4: root.fx-a4;
+                    n5: root.fx-n5; v5: root.fx-v5; a5: root.fx-a5;
+                    n6: root.fx-n6; v6: root.fx-v6; a6: root.fx-a6;
+                    n7: root.fx-n7; v7: root.fx-v7; a7: root.fx-a7;
+                    page-text: root.fx-page;
+                    param-changed(cell, amount) => { root.param-changed(cell, amount); }
+                    param-paged(delta) => { root.param-paged(delta); }
+                }
+                if root.page == 2: TunerPanel {
+                    note: root.tuner-note;
+                    cents: root.tuner-cents;
+                    cents-pos: root.tuner-pos;
+                    in-tune: root.tuner-in-tune;
+                    active: root.tuner-active;
+                    tuner-tapped => { root.tuner-tapped(); }
+                }
+                if root.page == 3: TempoPanel {
+                    bpm: root.tempo-bpm;
+                    tempo-tapped => { root.tempo-tapped(); }
+                }
+            }
+        }
+        if root.portrait: VerticalLayout {
+            ChainRail {
+                height: 52px;
+                horizontal: true;
+                page: root.page;
+                chain: root.chain;
+                tab-0: root.tab-0;
+                on-0: root.on-0;
+                tab-1: root.tab-1;
+                on-1: root.on-1;
+                tab-3: root.tab-3;
+                on-3: root.on-3;
+                tab-4: root.tab-4;
+                on-4: root.on-4;
+                tab-5: root.tab-5;
+                on-5: root.on-5;
+                chain-tapped(index) => { root.chain-tapped(index); }
+                chain-held(index) => { root.chain-held(index); }
+            }
+            Rectangle {
+                vertical-stretch: 1;
+                background: transparent;
+                clip: true;
+                if root.page == 0: AmpPanel {
+                    portrait: root.portrait;
+                    gate-text: root.gate-text;
+                    gate-amount: root.gate-amount;
+                    gate-amnt-text: root.gate-amnt-text;
+                    gate-amnt-amount: root.gate-amnt-amount;
+                    gain-text: root.gain-text;
+                    gain-amount: root.gain-amount;
+                    cap-text: root.cap-text;
+                    cap-amount: root.cap-amount;
+                    master-text: root.master-text;
+                    master-amount: root.master-amount;
+                    bass-text: root.bass-text;
+                    bass-amount: root.bass-amount;
+                    mid-text: root.mid-text;
+                    mid-amount: root.mid-amount;
+                    treble-text: root.treble-text;
+                    treble-amount: root.treble-amount;
+                    slider-moved(id, amount) => { root.slider-moved(id, amount); }
+                    gate-tapped => { root.gate-tapped(); }
+                }
+                if root.page == 1: FxPanel {
+                    n0: root.fx-n0; v0: root.fx-v0; a0: root.fx-a0;
+                    n1: root.fx-n1; v1: root.fx-v1; a1: root.fx-a1;
+                    n2: root.fx-n2; v2: root.fx-v2; a2: root.fx-a2;
+                    n3: root.fx-n3; v3: root.fx-v3; a3: root.fx-a3;
+                    n4: root.fx-n4; v4: root.fx-v4; a4: root.fx-a4;
+                    n5: root.fx-n5; v5: root.fx-v5; a5: root.fx-a5;
+                    n6: root.fx-n6; v6: root.fx-v6; a6: root.fx-a6;
+                    n7: root.fx-n7; v7: root.fx-v7; a7: root.fx-a7;
+                    page-text: root.fx-page;
+                    param-changed(cell, amount) => { root.param-changed(cell, amount); }
+                    param-paged(delta) => { root.param-paged(delta); }
+                }
+                if root.page == 2: TunerPanel {
+                    note: root.tuner-note;
+                    cents: root.tuner-cents;
+                    cents-pos: root.tuner-pos;
+                    in-tune: root.tuner-in-tune;
+                    active: root.tuner-active;
+                    tuner-tapped => { root.tuner-tapped(); }
+                }
+                if root.page == 3: TempoPanel {
+                    bpm: root.tempo-bpm;
+                    tempo-tapped => { root.tempo-tapped(); }
+                }
+            }
+        }
+    }
+
+    if root.connecting: ConnectingOverlay {
+        layout-mode: root.layout-mode;
+        layout-tapped(mode) => { root.layout-tapped(mode); }
+    }
+}

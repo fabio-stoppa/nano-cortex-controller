@@ -1,0 +1,36 @@
+//! FX blocks + noise gate.
+#![allow(dead_code, unused_imports)]
+
+pub mod catalog;
+pub mod engine;
+pub mod models;
+pub mod params;
+pub mod types;
+pub mod util;
+
+pub fn poll() {
+    engine::poll();
+}
+
+pub use catalog::NANO_FX_CATALOG;
+pub use engine::{
+    nano_fx_begin_param_refresh, nano_fx_clear_model_trust, nano_fx_dump_has_gate_fields,
+    nano_fx_dump_has_model_fields, nano_fx_feed_c305, nano_fx_focus_from_ui, nano_fx_gate_ui_ready,
+    nano_fx_get, nano_fx_note_preset_change, nano_fx_on_amount_knob, nano_fx_on_live_param,
+    nano_fx_params_sync_ready, nano_fx_params_ui_held,
+    nano_fx_on_pedal_fx_select, nano_fx_parse_preset, nano_fx_reset, nano_fx_snapshot,
+    nano_fx_sync_from_preset, nano_fx_try_apply_gate_bytes, nano_fx_write_block_enabled,
+    nano_fx_write_block_model, nano_fx_write_gate_enabled, nano_fx_write_gate_reduction,
+    nano_fx_write_param_display, nano_fx_write_param_normalized,
+};
+pub use models::{
+    nano_fx_allowed_model_count, nano_fx_block_label, nano_fx_block_model_text,
+    nano_fx_category_label, nano_fx_find_model, nano_fx_get_allowed_model, nano_fx_is_model_allowed,
+    nano_fx_model_category, nano_fx_model_chain_acronym, nano_fx_param_wire_index,
+};
+pub use params::{
+    nano_fx_display_to_normalized, nano_fx_display_to_slider, nano_fx_format_param,
+    nano_fx_normalized_to_display, nano_fx_param_enum_count, nano_fx_param_enum_label,
+    nano_fx_param_is_enum, nano_fx_param_range, nano_fx_param_scale, nano_fx_slider_max,
+    nano_fx_slider_min, nano_fx_slider_to_display,
+};
