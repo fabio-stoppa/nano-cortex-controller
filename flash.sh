@@ -2,11 +2,11 @@
 # Nano Cortex build / flash / monitor helper
 #
 # Usage:
-#   ./flash.sh build   [dev|release]         — compile only
-#   ./flash.sh flash   [dev|release] [port]  — flash only (no monitor)
+#   ./flash.sh build                          — compile the bare-metal image
+#   ./flash.sh flash   [port]                — flash only (no monitor)
 #   ./flash.sh monitor [port]                — open serial monitor only
-#   ./flash.sh run     [dev|release] [port]  — build → flash → monitor
-#   ./flash.sh         [dev|release] [port]  — alias for 'run'
+#   ./flash.sh run     [port]                — build → flash → monitor
+#   ./flash.sh         [port]                — alias for 'run'
 #
 # Port resolution order: explicit arg > $NANO_PORT env var > /dev/ttyACM0 > /dev/ttyUSB0
 set -euo pipefail
@@ -42,24 +42,12 @@ require_port() {
 }
 
 elf_path() {
-    local profile="$1"
-    local subdir
-    if [[ "$profile" == "release" ]]; then
-        subdir="release"
-    else
-        subdir="debug"
-    fi
-    echo "$ROOT/target/xtensa-esp32s3-espidf/$subdir/nano-cortex-controller"
+    echo "$ROOT/firmware/target/xtensa-esp32s3-none-elf/release/nano-cortex-firmware"
 }
 
 do_build() {
-    local profile="${1:-dev}"
-    echo "--- build ($profile) ---"
-    if [[ "$profile" == "release" ]]; then
-        cargo build --release
-    else
-        cargo build
-    fi
+    echo "--- build (bare metal, release) ---"
+    (cd "$ROOT/firmware" && env -u CARGO_TARGET_DIR ./build.sh)
 }
 
 do_flash() {
@@ -74,7 +62,7 @@ do_flash() {
         exit 1
     fi
     echo "--- flash ($profile) → $port ---"
-    espflash flash --port "$port" --baud 921600 "$elf"
+    espflash flash --port "$port" --baud 921600 --flash-freq 80mhz "$elf"
 }
 
 do_monitor() {
@@ -94,7 +82,7 @@ do_run() {
     local elf
     elf="$(elf_path "$profile")"
     echo "--- flash + monitor ($profile) → $port ---"
-    espflash flash --port "$port" --baud 921600 --monitor "$elf"
+    espflash flash --port "$port" --baud 921600 --flash-freq 80mhz --monitor "$elf"
 }
 
 # ---------------------------------------------------------------------------

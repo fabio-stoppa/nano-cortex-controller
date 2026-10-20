@@ -1,8 +1,0 @@
-## IDF Component Manager Manifest File
-dependencies:
-  idf:
-    version: '>=5.3.0'
-  # Waveshare BSP is vendored under components/waveshare_esp32_s3_touch_lcd_4_3
-  # (registry 1.0.7 uses on_frame_buf_complete, which ESP-IDF 5.3.2 lacks;
-  # the local tree keeps on_bounce_frame_finish). Its idf_component.yml pulls
-  # lvgl + GT911 touch into managed_components/.

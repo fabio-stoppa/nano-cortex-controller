@@ -1,17 +1,16 @@
-# Nano Cortex — ESP32 firmware (Rust + ESP-IDF)
+# Nano Cortex — ESP32 firmware (bare metal Rust)
 
 Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the controller ideas come from the community projects in [Credits](#credits).
 
-**Stack:** Rust firmware on ESP-IDF — protocol, BLE, state, FX, tuner, amp catalog, and LVGL UI. Only `bt_cfg_helper.c` remains C (BT init macro shim).
+**Stack:** bare-metal Rust in `firmware/` — `esp-hal`, Embassy, `esp-radio`, and a TrouBLE central. Preset, effect, and tuner logic run in that image. The protocol crate stays host-testable.
 
 ## What it does
 
-- Boots over USB serial (Rust `app_main`)
+- Boots over USB serial (bare metal `main`)
 - **Protocol in Rust** — C304 builders + C305/protobuf parsers (`crates/nano-wire`)
-- **BLE in Rust** — Bluedroid GATT client (`src/ble/`)
-- **State / FX / tuner / amp / UI in Rust** — `src/state/`, `src/fx/`, `src/tuner/`, `src/amp/`, `src/ui/`
-- **800×480 LCD** — LVGL amp / FX / tuner / tempo UI
-- Syncs amp knobs, gate, FX blocks, BPM, tuner
+- **BLE in Rust** — TrouBLE central on `esp-radio` (`firmware/src/ble.rs`)
+- **Preset, effects, and tuner** — the same behavior as the old ESP-IDF app, driven by Embassy deadlines (`firmware/src/state`, `firmware/src/fx`, `firmware/src/tuner`)
+- **800×480 LCD** — Slint UI drawn into the RGB panel (`firmware/src/ui.rs`)
 
 ## Prerequisites
 
@@ -22,9 +21,8 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 ## Build and flash
 
 ```bash
-cargo build --release
-./flash.sh                 # or: espflash flash --port /dev/ttyACM0 --partition-table partitions.csv \
-                           #        target/xtensa-esp32s3-espidf/release/nano-cortex-controller
+./flash.sh build           # or: (cd firmware && ./build.sh)
+./flash.sh flash
 ```
 
 Monitor (keep DTR/RTS off on Waveshare):
@@ -36,28 +34,19 @@ python -m serial.tools.miniterm /dev/ttyACM0 115200 --rts 0 --dtr 0
 Expected early log:
 
 ```
-I (xxx) nano_cortex_controller: firmware build 2026-07-26-rust7 (...)
-I (xxx) nano_ui: UI ready (800x480, left chain rail + panels)
-I (xxx) nano_ble: Connected to Nano Cortex
-I (xxx) nano_state: STATE INITIAL — protobuf scan (... bytes, rust)
+INFO - panel up (800x480, GT911)
+INFO - ui up
+INFO - starting ble controller
 ```
 
 ## Project layout
 
 ```
-├── Cargo.toml / src/main.rs     # Rust entry
-├── src/ble/                     # GATT client
-├── src/state/ src/fx/           # Preset/amp state machine + FX engine
-├── src/tuner/ src/amp/          # Tuner + factory capture catalog
-├── src/ui/                      # LVGL UI
-├── crates/nano-wire/            # Protocol builders + parsers (host-testable)
-├── components/nano/             # bt_cfg_helper.c shim only
-├── components/waveshare_.../    # Vendored BSP (IDF 5.3 LCD callback patch)
-├── sdkconfig.defaults
-└── partitions.csv               # 2 MB app partition
+├── firmware/                    # Bare-metal image (esp-hal, Embassy, TrouBLE, Slint)
+└── crates/nano-wire/            # Protocol builders + parsers (host-testable)
 ```
 
-The Waveshare BSP stays vendored: registry `1.0.7` uses `on_frame_buf_complete`, which ESP-IDF 5.3.2 does not provide. The local tree keeps `on_bounce_frame_finish`.
+Panel timings and pins live in `firmware/src/panel.rs`.
 
 Host-test the protocol crate:
 
@@ -75,7 +64,6 @@ cd crates/nano-wire && cargo +stable test --target x86_64-unknown-linux-gnu
 
 - Disconnect **Cortex Cloud** before connecting — one BLE client at a time.
 - Back up presets in the official app before writing from custom firmware.
-- Only `components/nano/bt_cfg_helper.c` is still C (`BT_CONTROLLER_INIT_CONFIG_DEFAULT` macro shim).
 
 ## Credits
 
@@ -86,6 +74,6 @@ cd crates/nano-wire && cargo +stable test --target x86_64-unknown-linux-gnu
 
 ## License
 
-[MIT](LICENSE). The vendored Waveshare board support keeps its own MIT license in `components/waveshare_esp32_s3_touch_lcd_4_3/LICENSE`.
+[GNU GPLv3 only](LICENSE). Copyright (C) 2026 Fabio Stoppa.
 
 Neural DSP and Nano Cortex are trademarks of Neural DSP Technologies Oy. This project is not affiliated with or endorsed by Neural DSP.
