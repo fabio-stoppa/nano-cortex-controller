@@ -52,6 +52,7 @@ component ParamCell inherits Rectangle {
             text: value;
             color: #ececec;
             font-size: 24px;
+            font-weight: 700;
             horizontal-alignment: center;
         }
     }
@@ -264,7 +265,7 @@ component HeaderButton inherits Rectangle {
     Text {
         text: label;
         color: #c8c8c8;
-        font-size: 12px;
+        font-size: 13px;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -304,7 +305,7 @@ component HeaderBar inherits Rectangle {
             Text {
                 text: preset;
                 color: #909090;
-                font-size: 14px;
+                font-size: 15px;
                 vertical-alignment: center;
                 overflow: elide;
                 width: portrait ? 56px : 110px;
@@ -354,7 +355,7 @@ component HeaderBar inherits Rectangle {
                     Text {
                         text: "<";
                         color: #c8c8c8;
-                        font-size: 16px;
+                        font-size: 17px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -362,7 +363,7 @@ component HeaderBar inherits Rectangle {
                 Text {
                     text: model;
                     color: model-enabled ? #ececec : #606060;
-                    font-size: 18px;
+                    font-size: 19px;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     overflow: elide;
@@ -378,7 +379,7 @@ component HeaderBar inherits Rectangle {
                     Text {
                         text: ">";
                         color: #c8c8c8;
-                        font-size: 16px;
+                        font-size: 17px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -395,7 +396,7 @@ component HeaderBar inherits Rectangle {
                 Text {
                     text: bpm-text;
                     color: #909090;
-                    font-size: 14px;
+                    font-size: 15px;
                     horizontal-alignment: right;
                     vertical-alignment: center;
                 }
@@ -403,7 +404,7 @@ component HeaderBar inherits Rectangle {
             Text {
                 text: "BT";
                 color: ble-on ? #80c0ff : #505050;
-                font-size: 14px;
+                font-size: 15px;
                 vertical-alignment: center;
             }
             Rectangle {
@@ -416,7 +417,7 @@ component HeaderBar inherits Rectangle {
                 Text {
                     text: "♪";
                     color: #b0b8c0;
-                    font-size: 16px;
+                    font-size: 17px;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -458,7 +459,7 @@ component AmpPanel inherits Rectangle {
             spacing: 4px;
             ParamCell {
                 horizontal-stretch: 1;
-                name: "INPUT GATE";
+                name: "Input Gate";
                 value: gate-text;
                 amount: gate-amount;
                 tapped => { root.gate-tapped(); }
@@ -466,7 +467,7 @@ component AmpPanel inherits Rectangle {
             ParamCell {
                 horizontal-stretch: 1;
                 slider: true;
-                name: "GATE AMNT";
+                name: "Gate Amnt";
                 value: gate-amnt-text;
                 amount: gate-amnt-amount;
                 changed(v) => { root.slider-moved(6, v); }
@@ -474,7 +475,7 @@ component AmpPanel inherits Rectangle {
             ParamCell {
                 horizontal-stretch: 1;
                 slider: true;
-                name: "GAIN";
+                name: "Gain";
                 value: gain-text;
                 amount: gain-amount;
                 changed(v) => { root.slider-moved(0, v); }
@@ -482,7 +483,7 @@ component AmpPanel inherits Rectangle {
             ParamCell {
                 horizontal-stretch: 1;
                 slider: true;
-                name: "CAPTURE LV";
+                name: "Capture Lv";
                 value: cap-text;
                 amount: cap-amount;
                 changed(v) => { root.slider-moved(5, v); }
@@ -494,7 +495,7 @@ component AmpPanel inherits Rectangle {
             ParamCell {
                 horizontal-stretch: 1;
                 slider: true;
-                name: "MASTER LV";
+                name: "Master Lv";
                 value: master-text;
                 amount: master-amount;
                 changed(v) => { root.slider-moved(1, v); }
@@ -502,7 +503,7 @@ component AmpPanel inherits Rectangle {
             ParamCell {
                 horizontal-stretch: 1;
                 slider: true;
-                name: "BASS";
+                name: "Bass";
                 value: bass-text;
                 amount: bass-amount;
                 changed(v) => { root.slider-moved(2, v); }
@@ -510,7 +511,7 @@ component AmpPanel inherits Rectangle {
             ParamCell {
                 horizontal-stretch: 1;
                 slider: true;
-                name: "MID";
+                name: "Mid";
                 value: mid-text;
                 amount: mid-amount;
                 changed(v) => { root.slider-moved(3, v); }
@@ -518,7 +519,7 @@ component AmpPanel inherits Rectangle {
             ParamCell {
                 horizontal-stretch: 1;
                 slider: true;
-                name: "TREBLE";
+                name: "Treble";
                 value: treble-text;
                 amount: treble-amount;
                 changed(v) => { root.slider-moved(4, v); }
@@ -529,7 +530,7 @@ component AmpPanel inherits Rectangle {
             spacing: 4px;
             ParamCell {
                 horizontal-stretch: 1;
-                name: "INPUT GATE";
+                name: "Input Gate";
                 value: gate-text;
                 amount: gate-amount;
                 tapped => { root.gate-tapped(); }
@@ -537,7 +538,7 @@ component AmpPanel inherits Rectangle {
             ParamCell {
                 horizontal-stretch: 1;
                 slider: true;
-                name: "GATE AMNT";
+                name: "Gate Amnt";
                 value: gate-amnt-text;
                 amount: gate-amnt-amount;
                 changed(v) => { root.slider-moved(6, v); }
@@ -545,7 +546,7 @@ component AmpPanel inherits Rectangle {
             ParamCell {
                 horizontal-stretch: 1;
                 slider: true;
-                name: "GAIN";
+                name: "Gain";
                 value: gain-text;
                 amount: gain-amount;
                 changed(v) => { root.slider-moved(0, v); }
@@ -557,7 +558,7 @@ component AmpPanel inherits Rectangle {
             ParamCell {
                 horizontal-stretch: 1;
                 slider: true;
-                name: "CAPTURE LV";
+                name: "Capture Lv";
                 value: cap-text;
                 amount: cap-amount;
                 changed(v) => { root.slider-moved(5, v); }
@@ -565,7 +566,7 @@ component AmpPanel inherits Rectangle {
             ParamCell {
                 horizontal-stretch: 1;
                 slider: true;
-                name: "MASTER LV";
+                name: "Master Lv";
                 value: master-text;
                 amount: master-amount;
                 changed(v) => { root.slider-moved(1, v); }
@@ -573,7 +574,7 @@ component AmpPanel inherits Rectangle {
             ParamCell {
                 horizontal-stretch: 1;
                 slider: true;
-                name: "BASS";
+                name: "Bass";
                 value: bass-text;
                 amount: bass-amount;
                 changed(v) => { root.slider-moved(2, v); }
@@ -585,7 +586,7 @@ component AmpPanel inherits Rectangle {
             ParamCell {
                 horizontal-stretch: 1;
                 slider: true;
-                name: "MID";
+                name: "Mid";
                 value: mid-text;
                 amount: mid-amount;
                 changed(v) => { root.slider-moved(3, v); }
@@ -593,7 +594,7 @@ component AmpPanel inherits Rectangle {
             ParamCell {
                 horizontal-stretch: 1;
                 slider: true;
-                name: "TREBLE";
+                name: "Treble";
                 value: treble-text;
                 amount: treble-amount;
                 changed(v) => { root.slider-moved(4, v); }
@@ -751,13 +752,13 @@ component TunerPanel inherits Rectangle {
         Text {
             text: note;
             color: in-tune ? #3dcc7a : #ffffff;
-            font-size: 64px;
+            font-size: 65px;
             horizontal-alignment: center;
         }
         Text {
             text: cents;
             color: #c0c0c0;
-            font-size: 18px;
+            font-size: 19px;
             horizontal-alignment: center;
         }
         Rectangle {
@@ -799,7 +800,7 @@ component TunerPanel inherits Rectangle {
             Text {
                 text: active ? "ON" : "OFF";
                 color: active ? #e0e0e0 : #909090;
-                font-size: 16px;
+                font-size: 17px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -821,13 +822,13 @@ component TempoPanel inherits Rectangle {
         Text {
             text: bpm;
             color: #ffffff;
-            font-size: 64px;
+            font-size: 65px;
             horizontal-alignment: center;
         }
         Text {
             text: "BPM";
             color: #909090;
-            font-size: 18px;
+            font-size: 19px;
             horizontal-alignment: center;
         }
         HorizontalLayout {
@@ -836,7 +837,7 @@ component TempoPanel inherits Rectangle {
             Text {
                 text: "Global tempo";
                 color: #c0c0c0;
-                font-size: 16px;
+                font-size: 17px;
                 vertical-alignment: center;
             }
             Rectangle {
@@ -862,7 +863,7 @@ component TempoPanel inherits Rectangle {
             Text {
                 text: "TAP";
                 color: #909090;
-                font-size: 18px;
+                font-size: 19px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -886,7 +887,7 @@ component LayoutChoice inherits Rectangle {
     Text {
         text: label;
         color: chosen ? #e0e0e0 : #c0c0c0;
-        font-size: 14px;
+        font-size: 15px;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -907,19 +908,19 @@ component ConnectingOverlay inherits Rectangle {
         Text {
             text: "BT";
             color: #80c0ff;
-            font-size: 48px;
+            font-size: 49px;
             horizontal-alignment: center;
         }
         Text {
             text: "Connecting to Nano Cortex";
             color: #e0e0e0;
-            font-size: 20px;
+            font-size: 21px;
             horizontal-alignment: center;
         }
         Text {
             text: "Waiting for Nano Cortex...";
             color: #80c0ff;
-            font-size: 16px;
+            font-size: 17px;
             horizontal-alignment: center;
         }
         VerticalLayout {
@@ -928,7 +929,7 @@ component ConnectingOverlay inherits Rectangle {
             Text {
                 text: "Screen orientation";
                 color: #909090;
-                font-size: 14px;
+                font-size: 15px;
                 horizontal-alignment: center;
             }
             GridLayout {
@@ -962,14 +963,14 @@ component ConnectingOverlay inherits Rectangle {
         Text {
             text: "Hold EXIT + CAPTURE on the Nano\nuntil the GAIN ring spins.";
             color: #c0c0c0;
-            font-size: 16px;
+            font-size: 17px;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
         Text {
             text: "Make sure Nano is not paired\nwith a smartphone or Cortex Cloud.";
             color: #909090;
-            font-size: 16px;
+            font-size: 17px;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
