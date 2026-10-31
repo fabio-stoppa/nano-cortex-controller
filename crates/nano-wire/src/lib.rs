@@ -9,6 +9,7 @@
 extern crate alloc;
 
 pub mod builders;
+pub mod c305;
 pub mod editor;
 pub mod parsers;
 pub mod types;

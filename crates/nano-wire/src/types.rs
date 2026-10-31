@@ -41,6 +41,36 @@ pub enum TunerRoute {
     Bypass = 2,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TunerSettings {
+    pub reference_hz: Option<f32>,
+    pub muted: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LibraryCategory {
+    Amp,
+    AmpCab,
+    Cab,
+    Pedal,
+    Other,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LibraryItem {
+    /// Original zero-based index within its factory or user library.
+    pub index: u32,
+    pub name: String,
+    pub user: bool,
+    pub category: LibraryCategory,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LibraryCatalog {
+    pub captures: Vec<LibraryItem>,
+    pub cabs: Vec<LibraryItem>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Amp {
     pub gain: u8,

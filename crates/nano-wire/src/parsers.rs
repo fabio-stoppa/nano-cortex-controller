@@ -8,8 +8,8 @@ use alloc::{
 };
 
 use crate::types::{
-    Amp, PresetCatalog, TunerRoute, AMP_CAPTURE_NAME_MAX, BPM_MAX, BPM_MIN, PRESET_COUNT,
-    PRESET_NAME_MAX,
+    Amp, LibraryCatalog, LibraryCategory, LibraryItem, PresetCatalog, TunerRoute, TunerSettings,
+    AMP_CAPTURE_NAME_MAX, BPM_MAX, BPM_MIN, PRESET_COUNT, PRESET_NAME_MAX,
 };
 use crate::varint::read_varint;
 
@@ -235,6 +235,186 @@ pub fn parse_amp(data: &[u8]) -> Option<Amp> {
     out.have_treble = have[4];
     out.valid = have.iter().any(|&h| h) || out.have_capture_volume;
     out.valid.then_some(out)
+}
+
+/// Read tuner reference pitch (field 46, fixed32) and output mute (field 63, varint).
+pub fn parse_tuner_settings(data: &[u8]) -> Option<TunerSettings> {
+    let mut settings = TunerSettings::default();
+    let mut found = false;
+    let mut i = 0;
+    while i < data.len() {
+        let (tag, next) = read_varint(data, i)?;
+        i = next;
+        let field = tag >> 3;
+        match tag & 0x07 {
+            0 => {
+                let (value, next) = read_varint(data, i)?;
+                if field == 63 {
+                    settings.muted = Some(value != 0);
+                    found = true;
+                }
+                i = next;
+            }
+            1 => {
+                if i + 8 > data.len() {
+                    return None;
+                }
+                i += 8;
+            }
+            2 => {
+                let (len, next) = read_varint(data, i)?;
+                i = next.checked_add(len as usize)?;
+                if i > data.len() {
+                    return None;
+                }
+            }
+            5 => {
+                if i + 4 > data.len() {
+                    return None;
+                }
+                if field == 46 {
+                    let hz = read_f32_le(&data[i..i + 4]);
+                    if hz.is_finite() && (400.0..=480.0).contains(&hz) {
+                        settings.reference_hz = Some(hz);
+                        found = true;
+                    }
+                }
+                i += 4;
+            }
+            _ => return None,
+        }
+    }
+    found.then_some(settings)
+}
+
+fn parse_capture_record(data: &[u8]) -> Option<(Option<String>, LibraryCategory, bool)> {
+    let mut name = None;
+    let mut category = LibraryCategory::Other;
+    let mut corrupted = false;
+    let mut i = 0;
+    while i < data.len() {
+        let (tag, next) = read_varint(data, i)?;
+        i = next;
+        let field = tag >> 3;
+        match tag & 0x07 {
+            0 => {
+                let (value, next) = read_varint(data, i)?;
+                if field == 13 {
+                    corrupted = value != 0;
+                }
+                i = next;
+            }
+            1 => {
+                if i + 8 > data.len() {
+                    return None;
+                }
+                i += 8;
+            }
+            2 => {
+                let (len, next) = read_varint(data, i)?;
+                let end = next.checked_add(len as usize)?;
+                if end > data.len() {
+                    return None;
+                }
+                let value = &data[next..end];
+                if field == 2 {
+                    name = core::str::from_utf8(value).ok().map(ToString::to_string);
+                } else if field == 6 {
+                    let kind = core::str::from_utf8(value).ok()?;
+                    category = match kind {
+                        "amp_head" | "amp_combo" => LibraryCategory::Amp,
+                        "amp_and_cab" => LibraryCategory::AmpCab,
+                        "cab" => LibraryCategory::Cab,
+                        "pedal" | "overdrive" | "fuzz" | "compressor" => LibraryCategory::Pedal,
+                        _ => LibraryCategory::Other,
+                    };
+                }
+                i = end;
+            }
+            5 => {
+                if i + 4 > data.len() {
+                    return None;
+                }
+                i += 4;
+            }
+            _ => return None,
+        }
+    }
+    Some((name.filter(|name| !name.is_empty()), category, corrupted))
+}
+
+/// Parse a type-77 library reply payload, excluding its trailing message type.
+pub fn parse_library(data: &[u8]) -> Option<LibraryCatalog> {
+    let mut catalog = LibraryCatalog::default();
+    let mut indices = [0u32; 7];
+    let mut i = 0;
+    while i < data.len() {
+        let (tag, next) = read_varint(data, i)?;
+        i = next;
+        let field = tag >> 3;
+        match tag & 0x07 {
+            0 => {
+                let (_, next) = read_varint(data, i)?;
+                i = next;
+            }
+            1 => {
+                if i + 8 > data.len() {
+                    return None;
+                }
+                i += 8;
+            }
+            2 => {
+                let (len, next) = read_varint(data, i)?;
+                let end = next.checked_add(len as usize)?;
+                if end > data.len() {
+                    return None;
+                }
+                let value = &data[next..end];
+                if (3..=6).contains(&field) {
+                    let index = indices[field as usize];
+                    indices[field as usize] = index.checked_add(1)?;
+                    if field == 3 || field == 5 {
+                        if let Some((name, category, corrupted)) = parse_capture_record(value) {
+                            if !corrupted {
+                                let Some(name) = name else {
+                                    i = end;
+                                    continue;
+                                };
+                                catalog.captures.push(LibraryItem {
+                                    index,
+                                    name,
+                                    user: field == 5,
+                                    category,
+                                });
+                            }
+                        } else {
+                            return None;
+                        }
+                    } else if let Ok(name) = core::str::from_utf8(value) {
+                        if !name.is_empty() {
+                            catalog.cabs.push(LibraryItem {
+                                index,
+                                name: name.into(),
+                                user: field == 6,
+                                category: LibraryCategory::Cab,
+                            });
+                        }
+                    } else {
+                        return None;
+                    }
+                }
+                i = end;
+            }
+            5 => {
+                if i + 4 > data.len() {
+                    return None;
+                }
+                i += 4;
+            }
+            _ => return None,
+        }
+    }
+    Some(catalog)
 }
 
 pub fn parse_bpm(data: &[u8]) -> Option<u16> {
@@ -1022,6 +1202,79 @@ mod tests {
         let mut out = encode_varint_u32((field << 3) | 5);
         out.extend_from_slice(&f.to_le_bytes());
         out
+    }
+
+    fn field_bytes(field: u32, value: &[u8]) -> Vec<u8> {
+        let mut out = encode_varint_u32((field << 3) | 2);
+        out.extend(encode_varint_u32(value.len() as u32));
+        out.extend_from_slice(value);
+        out
+    }
+
+    #[test]
+    fn tuner_settings_parse_reference_and_mute() {
+        let mut data = field_fixed32(46, 442.0);
+        data.extend(field_varint_bytes(63, 1));
+        assert_eq!(
+            parse_tuner_settings(&data),
+            Some(TunerSettings {
+                reference_hz: Some(442.0),
+                muted: Some(true),
+            })
+        );
+
+        assert_eq!(
+            parse_tuner_settings(&field_varint_bytes(63, 0))
+                .unwrap()
+                .muted,
+            Some(false)
+        );
+        assert_eq!(parse_tuner_settings(&field_fixed32(46, 900.0)), None);
+        assert_eq!(parse_tuner_settings(&[0x75, 0x00]), None);
+    }
+
+    #[test]
+    fn library_parser_keeps_factory_user_indices_and_filters_corrupt() {
+        let capture = |name: &str, kind: &str, corrupt: bool| {
+            let mut record = field_bytes(2, name.as_bytes());
+            record.extend(field_bytes(6, kind.as_bytes()));
+            if corrupt {
+                record.extend(field_varint_bytes(13, 1));
+            }
+            field_bytes(3, &record)
+        };
+        let mut data = capture("Factory Amp", "amp_head", false);
+        data.extend(capture("Broken Capture", "pedal", true));
+        let user_capture = {
+            let mut record = field_bytes(2, b"User Fuzz");
+            record.extend(field_bytes(6, b"fuzz"));
+            field_bytes(5, &record)
+        };
+        data.extend(user_capture);
+        data.extend(field_bytes(4, b"Factory IR"));
+        data.extend(field_bytes(6, b"User IR"));
+
+        let catalog = parse_library(&data).unwrap();
+        assert_eq!(catalog.captures.len(), 2);
+        assert_eq!(catalog.captures[0].name, "Factory Amp");
+        assert_eq!(catalog.captures[0].index, 0);
+        assert_eq!(catalog.captures[0].category, LibraryCategory::Amp);
+        assert!(!catalog.captures[0].user);
+        assert_eq!(catalog.captures[1].name, "User Fuzz");
+        assert_eq!(catalog.captures[1].index, 0);
+        assert_eq!(catalog.captures[1].category, LibraryCategory::Pedal);
+        assert!(catalog.captures[1].user);
+        assert_eq!(catalog.cabs[0].name, "Factory IR");
+        assert_eq!(catalog.cabs[0].index, 0);
+        assert!(!catalog.cabs[0].user);
+        assert_eq!(catalog.cabs[1].name, "User IR");
+        assert_eq!(catalog.cabs[1].index, 0);
+        assert!(catalog.cabs[1].user);
+    }
+
+    #[test]
+    fn malformed_library_record_is_rejected() {
+        assert!(parse_library(&[0x1A, 0x04, 0x12, 0x08]).is_none());
     }
 
     #[test]

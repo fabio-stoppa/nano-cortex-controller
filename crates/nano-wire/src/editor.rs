@@ -15,6 +15,7 @@ pub const MSG_DELETE_PRESET: u32 = 50;
 pub const MSG_READ_SETTINGS: u32 = 65;
 pub const MSG_WRITE_SETTINGS: u32 = 67;
 pub const MSG_LIBRARY: u32 = 76;
+pub const MSG_LIBRARY_CONTENT: u32 = 77;
 pub const MSG_LOAD_CAB: u32 = 78;
 pub const MSG_LOAD_CAPTURE: u32 = 80;
 pub const MSG_CAB_PARAM: u32 = 94;
@@ -198,6 +199,16 @@ pub fn message_type(data: &[u8]) -> Option<u32> {
             | (u32::from(data[n - 2]) << 16)
             | (u32::from(data[n - 1]) << 24),
     )
+}
+
+/// Whether a framed message is a live control value suitable for an unacknowledged C304 write.
+pub fn is_live_value_write(data: &[u8]) -> bool {
+    match message_type(data) {
+        Some(99) => data.len() >= 10 && data[2] == 0x08 && data[4] == 0x18 && data[6] == 0x20,
+        Some(26) => data.len() >= 8 && data[2] == 0x18,
+        Some(94) => data.len() >= 11,
+        _ => false,
+    }
 }
 
 fn payload_of(data: &[u8]) -> Option<&[u8]> {
@@ -716,6 +727,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn library_content_reply_uses_type_77() {
+        let data = [0x06, 0xC0, 0x4D, 0x00, 0x00, 0x00];
+        assert_eq!(message_type(&data), Some(MSG_LIBRARY_CONTENT));
+        assert_ne!(message_type(&data), Some(MSG_LIBRARY));
+    }
+
+    #[test]
     fn preset_select_index_13_not_on_a_footswitch() {
         let mut buf = [0u8; 80];
         let n = select_preset_payload(13, 4, &mut buf);
@@ -725,6 +743,20 @@ mod tests {
         assert_eq!(buf[n - 6], 0x48);
         assert_eq!(buf[n - 5], 0x04);
         assert_eq!(&buf[n - 4..n], &[0x1D, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn live_control_values_are_distinguished_from_commands() {
+        let mut value = [0u8; 32];
+        let n = crate::builders::amp_knob_payload(crate::Knob::Gain, 128, &mut value);
+        assert!(is_live_value_write(&value[..n]));
+
+        let n = crate::builders::fx_param_payload(0, 0, 0.5, &mut value);
+        assert!(is_live_value_write(&value[..n]));
+
+        let n = crate::builders::global_toggle_payload(1, 0, &mut value);
+        assert!(!is_live_value_write(&value[..n]));
+        assert!(!is_live_value_write(&[0x04, 0xC0, 0x18, 0x01, 0x00, 0x00]));
     }
 
     #[test]
