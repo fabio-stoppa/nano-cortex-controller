@@ -51,6 +51,7 @@ pub fn nano_state_reset() {
     s.tuner_settings = TunerSettings::default();
     crate::screen::nano_ui_set_bpm(0, false);
     crate::screen::nano_ui_set_tempo_mode(false);
+    crate::screen::nano_ui_set_tuner_settings(440.0, false);
 }
 
 pub fn nano_state_library_snapshot() -> LibraryCatalog {
@@ -286,6 +287,15 @@ fn feed_c305(data: &[u8]) {
         if crate::tuner::feed_c305_bytes(data) {
             return;
         }
+    }
+
+    if let Some(on) = nano_wire::editor::tuner_mode_notify(data) {
+        if on {
+            crate::tuner::nano_tuner_opened_on_nano();
+        } else {
+            crate::tuner::nano_tuner_closed_on_nano();
+        }
+        return;
     }
 
     if let Some(dirty) = nano_wire::editor::preset_dirty(data) {

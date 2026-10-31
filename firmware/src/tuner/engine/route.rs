@@ -17,6 +17,7 @@ pub(super) fn mark_tuner_live_from_c305() {
     }
 
     s.tuner.active = true;
+    s.client_live = false;
     crate::ble::nano_ble_flush_c305_backlog();
     tuner_publish();
     push_ui();
@@ -203,6 +204,9 @@ pub(super) fn apply_tuner_mode_c305(active: bool, route: u32) {
     let prev_active = s.tuner.active;
 
     s.tuner.active = active;
+    if !active || !prev_active {
+        s.client_live = false;
+    }
     if !active {
         s.tuner.has_pitch = false;
         s.tuner.note = -1;

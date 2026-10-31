@@ -157,7 +157,7 @@ pub(super) fn apply_pitch_reading(tag: u8, cents_f: f32, form_2201: bool, sharp:
     s.tuner.has_pitch = true;
     s.tuner.note = note;
     s.tuner.cents = display_cents;
-    tuner_publish();
+    push_ui();
 
     let kind_name = if form_2201 {
         "22/01"

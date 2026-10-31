@@ -46,17 +46,22 @@ pub fn nano_ui_set_ble_connected(connected: bool) {
 }
 
 pub fn nano_ui_set_tuner(tuner: &NanoTunerC) {
+    let cents_f = crate::tuner::nano_tuner_cents_f();
     let (note, cents) = if !tuner.active {
         ("-", String::from("Tuner off"))
     } else if tuner.has_pitch && (0..12).contains(&tuner.note) {
         (
             NOTES[tuner.note as usize],
-            alloc::format!("{:+.0} ct", tuner.cents),
+            alloc::format!("{:+.1} ct", cents_f),
         )
     } else {
-        ("...", String::from("Listening..."))
+        ("...", String::new())
     };
-    crate::ui::show_tuner(note, &cents, tuner.active, tuner.has_pitch, tuner.cents as f32);
+    crate::ui::show_tuner(note, &cents, tuner.active, tuner.has_pitch, cents_f);
+}
+
+pub fn nano_ui_set_tuner_settings(reference_hz: f32, muted: bool) {
+    crate::ui::show_tuner_settings(reference_hz, muted);
 }
 
 pub fn nano_ui_set_preset_dirty(dirty: bool) {

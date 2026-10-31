@@ -332,6 +332,15 @@ fn apply_cmd(cmd: crate::link::Cmd) {
         crate::link::Cmd::Tuner(on) => {
             let _ = crate::tuner::nano_tuner_set_active(on);
         }
+        crate::link::Cmd::TunerReference(hz) => {
+            let settings = crate::state::nano_state_tuner_settings();
+            let reference_hz = f32::from(hz).clamp(400.0, 480.0);
+            write_tuner_settings(reference_hz, settings.muted.unwrap_or(false));
+        }
+        crate::link::Cmd::TunerOutputMute(muted) => {
+            let settings = crate::state::nano_state_tuner_settings();
+            write_tuner_settings(settings.reference_hz.unwrap_or(440.0), muted);
+        }
         crate::link::Cmd::Tempo => {
             let _ = crate::state::nano_state_tempo_tap();
         }
@@ -361,6 +370,21 @@ fn apply_cmd(cmd: crate::link::Cmd) {
         crate::link::Cmd::Capture(delta) => {
             let _ = crate::state::nano_state_step_capture(delta);
         }
+    }
+}
+
+fn write_tuner_settings(reference_hz: f32, muted: bool) {
+    let active = crate::tuner::nano_tuner_is_active();
+    let live = crate::tuner::nano_tuner_is_live();
+    if crate::state::nano_state_set_tuner_reference(active, reference_hz, live, muted) {
+        crate::screen::nano_ui_set_tuner_settings(reference_hz, muted);
+    } else {
+        log::warn!("tuner settings write failed");
+        let settings = crate::state::nano_state_tuner_settings();
+        crate::screen::nano_ui_set_tuner_settings(
+            settings.reference_hz.unwrap_or(440.0),
+            settings.muted.unwrap_or(false),
+        );
     }
 }
 

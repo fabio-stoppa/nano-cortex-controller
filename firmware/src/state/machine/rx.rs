@@ -495,6 +495,10 @@ pub(super) fn parse_state_buffer() {
             s.tuner_settings.muted = Some(muted);
             info!(target: TAG, "Tuner output {}", if muted { "muted" } else { "unmuted" });
         }
+        crate::screen::nano_ui_set_tuner_settings(
+            s.tuner_settings.reference_hz.unwrap_or(440.0),
+            s.tuner_settings.muted.unwrap_or(false),
+        );
     }
 
     match parsers::parse_tuner_state(buf) {

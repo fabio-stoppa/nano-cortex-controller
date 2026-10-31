@@ -8,6 +8,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::rc::Rc;
+use alloc::format;
 use alloc::string::String;
 use core::cell::UnsafeCell;
 
@@ -179,6 +180,32 @@ fn ensure() {
                 app.set_tuner_active(true);
                 crate::link::push_cmd(Cmd::Tuner(true));
             }
+        }
+    });
+    app.on_tuner_reference_set({
+        let weak = weak.clone();
+        move |hz| {
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
+            let reference_hz = (hz as f32).clamp(400.0, 480.0);
+            if (app.get_tuner_reference_hz() - reference_hz).abs() < 0.5 {
+                return;
+            }
+            app.set_tuner_reference_hz(reference_hz);
+            app.set_tuner_reference(format!("{reference_hz:.0} Hz").into());
+            crate::link::push_cmd(Cmd::TunerReference(reference_hz as u16));
+        }
+    });
+    app.on_tuner_mute_tapped({
+        let weak = weak.clone();
+        move || {
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
+            let muted = !app.get_tuner_muted();
+            app.set_tuner_muted(muted);
+            crate::link::push_cmd(Cmd::TunerOutputMute(muted));
         }
     });
     app.on_tempo_opened({
@@ -500,6 +527,7 @@ pub fn show_tuner(note: &str, cents: &str, active: bool, has_pitch: bool, cents_
     ui.app.set_tuner_note(note.into());
     ui.app.set_tuner_cents(cents.into());
     ui.app.set_tuner_pos(pos);
+    ui.app.set_tuner_has_pitch(has_pitch);
     ui.app.set_tuner_in_tune(has_pitch && c.abs() <= 2.0);
     if active && !was {
         ui.app.set_page(2);
@@ -514,6 +542,17 @@ pub fn show_tuner(note: &str, cents: &str, active: bool, has_pitch: bool, cents_
             paint_fx_page(ui);
         }
     }
+    ui.window.request_redraw();
+}
+
+pub fn show_tuner_settings(reference_hz: f32, muted: bool) {
+    ensure();
+    let ui = state().as_mut().unwrap();
+    let reference_hz = reference_hz.clamp(400.0, 480.0);
+    ui.app.set_tuner_reference_hz(reference_hz);
+    ui.app
+        .set_tuner_reference(format!("{reference_hz:.0} Hz").into());
+    ui.app.set_tuner_muted(muted);
     ui.window.request_redraw();
 }
 

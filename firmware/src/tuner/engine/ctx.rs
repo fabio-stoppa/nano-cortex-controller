@@ -30,6 +30,7 @@ pub(super) const NOTE_NAMES: [&str; 12] = [
 #[allow(dead_code)]
 pub(super) struct Tuner {
     pub(super) tuner: NanoTunerC,
+    pub(super) client_live: bool,
     pub(super) last_pitch_log_us: i64,
     pub(super) last_pitch_reject_us: i64,
     pub(super) last_raw_sniff_us: i64,
@@ -63,6 +64,7 @@ impl Tuner {
     const fn new() -> Self {
         Self {
             tuner: NanoTunerC::new(),
+            client_live: false,
             last_pitch_log_us: 0,
             last_pitch_reject_us: 0,
             last_raw_sniff_us: 0,

@@ -258,6 +258,14 @@ pub fn payload_varint(data: &[u8], field: u32) -> Option<u32> {
     None
 }
 
+/// Type 127 notification from the pedal: `Some(on)` when the tuner was opened or closed on the Nano.
+pub fn tuner_mode_notify(data: &[u8]) -> Option<bool> {
+    if message_type(data)? != MSG_TUNER_MODE {
+        return None;
+    }
+    Some(payload_varint(data, 4) == Some(1))
+}
+
 /// Type 115. Field 3 = 1 means unsaved edits. No field 3 means clean.
 pub fn preset_dirty(data: &[u8]) -> Option<bool> {
     if message_type(data)? != MSG_DIRTY {

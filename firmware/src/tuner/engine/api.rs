@@ -10,7 +10,7 @@ use nano_wire::parsers;
 use super::ctx::*;
 use super::mode::{find_tuner_sub, log_unhandled_tuner, sniff_tuner_c305, try_parse_2d_events, try_parse_on, try_parse_route_trailer};
 use super::pitch::{expire_stale_pitch, try_parse_pitch};
-use super::route::{clear_gain_2d_route_state, note_c305_authority, route_name};
+use super::route::{apply_tuner_mode_c305, clear_gain_2d_route_state, note_c305_authority, route_name};
 use super::tick::{ensure_tick_timer, push_ui};
 use crate::tuner::types::*;
 
@@ -19,6 +19,7 @@ pub fn nano_tuner_reset() {
 
     let s = tn();
     s.tuner.active = false;
+    s.client_live = false;
     s.tuner.has_pitch = false;
     s.tuner.note = -1;
     s.tuner.cents = 0;
@@ -118,6 +119,28 @@ pub fn nano_tuner_cents_f() -> f32 {
     tn().display_cents_f
 }
 
+/// The pedal opened the tuner itself (type 127 with mode on).
+pub fn nano_tuner_opened_on_nano() {
+    if !tn().tuner.active {
+        info!(target: TAG, "Tuner ON (opened on the Nano)");
+        tn().ignore_active_until_us = 0;
+        apply_tuner_mode_c305(true, NANO_TUNER_ROUTE_UNKNOWN);
+    }
+}
+
+/// The pedal closed the tuner itself (type 127 with mode off).
+pub fn nano_tuner_closed_on_nano() {
+    if tn().tuner.active {
+        info!(target: TAG, "Tuner OFF (closed on the Nano)");
+        let s = tn();
+        s.client_live = false;
+        s.tuner.has_pitch = false;
+        s.tuner.note = -1;
+        s.tuner.cents = 0;
+        apply_tuner_mode_c305(false, NANO_TUNER_ROUTE_UNKNOWN);
+    }
+}
+
 pub fn nano_tuner_note_c305_rx() {
     tn().last_raw_sniff_us = now_us();
 }
@@ -132,6 +155,11 @@ pub fn nano_tuner_snapshot(out: &mut NanoTunerC) {
 /// Lock-free tuner-active check for BLE / worker hot paths.
 pub fn nano_tuner_is_active() -> bool {
     TUNER_ACTIVE.load(Ordering::Acquire)
+}
+
+/// Whether this controller opened the active tuner session.
+pub fn nano_tuner_is_live() -> bool {
+    tn().client_live
 }
 
 /// Human-readable mute/bypass label matching the Nano pedal (not raw wire enum).
@@ -191,6 +219,7 @@ pub fn nano_tuner_sync_from_state(active: bool, route: u32) {
 
     if s.tuner.active != active {
         s.tuner.active = active;
+        s.client_live = false;
         ui = true;
         if active && route != NANO_TUNER_ROUTE_UNKNOWN {
             s.tuner.route = route;
@@ -241,20 +270,17 @@ pub fn nano_tuner_set_active(active: bool) -> bool {
         return false;
     }
 
-    let mut buf = [0u8; 24];
-
     if active {
         // BLE enable is unconfirmed; footswitch is reliable. Try 2D toggle once.
-        let n2d = builders::tuner_enable_payload(&mut buf);
-        if n2d == 0 {
-            return false;
-        }
-        parsers::log_bytes("nano_tuner", "Tuner ON (tx)", &buf[..n2d]);
-        if crate::link::write_labeled(c"Tuner ON", &buf[..n2d]) == false {
+        let settings = crate::state::nano_state_tuner_settings();
+        let hz = settings.reference_hz.unwrap_or(440.0);
+        let muted = settings.muted.unwrap_or(false);
+        if !crate::state::nano_state_set_tuner_reference(true, hz, true, muted) {
             return false;
         }
         let s = tn();
         s.tuner.active = true;
+        s.client_live = true;
         s.tuner.has_pitch = false;
         s.tuner.route = NANO_TUNER_ROUTE_MUTE;
         note_c305_authority(true);
@@ -265,17 +291,16 @@ pub fn nano_tuner_set_active(active: bool) -> bool {
         return true;
     }
 
-    let n = builders::tuner_disable_payload(&mut buf);
-    if n == 0 {
-        return false;
-    }
-    parsers::log_bytes("nano_tuner", "Tuner OFF (tx)", &buf[..n]);
-    if crate::link::write_labeled(c"Tuner OFF", &buf[..n]) == false {
+    let settings = crate::state::nano_state_tuner_settings();
+    let hz = settings.reference_hz.unwrap_or(440.0);
+    let muted = settings.muted.unwrap_or(false);
+    if !crate::state::nano_state_set_tuner_reference(false, hz, false, muted) {
         return false;
     }
 
     let s = tn();
     s.tuner.active = false;
+    s.client_live = false;
     s.tuner.has_pitch = false;
     s.tuner.note = -1;
     s.tuner.cents = 0;

@@ -25,6 +25,8 @@ static CMDS: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<Cmd>>> =
 pub enum Cmd {
     Gate(bool),
     Tuner(bool),
+    TunerReference(u16),
+    TunerOutputMute(bool),
     /// TAP while Tempo Mode is already open.
     Tempo,
     TempoEnter,
