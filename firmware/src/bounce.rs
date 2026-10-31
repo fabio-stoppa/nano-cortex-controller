@@ -2,13 +2,13 @@
 //!
 //! DMA cannot read PSRAM at 14 MHz. Six 10-line strips live in internal RAM
 //! and a descriptor list one frame long walks them in order. Each end-of-strip
-//! interrupt refills the strip that just finished, using the descriptor that
-//! raised it so a late copy cannot rotate the picture. The same buffer is not
-//! scanned again for five strip-times, so a refill that Bluetooth delayed is
-//! not on screen while it is still being copied. A missed interrupt is filled
-//! on the next one, oldest first. The first vertical blank restarts DMA at
-//! column 0: the LCD startup throws away the pixels already sitting in its
-//! FIFO, and without that restart the picture sits to the side.
+//! interrupt pulls the next strip into a shadow buffer the panel never scans,
+//! then copies that shadow into the bounce slot only when the slot is not on
+//! screen. A PSRAM stall therefore cannot wipe a cell while it is being
+//! scanned, and the slot keeps the pixels it already has. The first vertical
+//! blank restarts DMA at column 0: the LCD startup throws away the pixels
+//! already sitting in its FIFO, and without that restart the picture sits to
+//! the side.
 
 use core::ptr;
 use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
@@ -26,11 +26,9 @@ pub const BYTES: usize = WIDTH * HEIGHT * 2;
 /// radio keeps its stack. The strip count has to divide the frame so the same
 /// buffer is waiting at the top of the next frame. Five strip-times of lead
 /// is enough to finish a 16 KB copy after the radio has used external memory.
-/// One interrupt copies at most two strips; more than that holds the CPU
-/// longer than a strip and the queue never drains.
+/// Limit catch-up work so a delayed refill cannot monopolize the CPU.
 const N_BUFS: usize = 6;
 const N_LINES_PER_HALF: usize = 10;
-const MAX_COPIES_PER_EOF: usize = 2;
 const HALF_BYTES: usize = N_LINES_PER_HALF * WIDTH * 2;
 const CHUNK: usize = 4032;
 const DESC_PER_HALF: usize = HALF_BYTES.div_ceil(CHUNK);
@@ -48,6 +46,9 @@ const _: () = assert!(HALF_BYTES <= 32 * 1024);
 struct BounceHalf([u8; HALF_BYTES]);
 
 static mut BOUNCE: [BounceHalf; N_BUFS] = [const { BounceHalf([0; HALF_BYTES]) }; N_BUFS];
+/// Pixels land here first. DMA's descriptor list never points at it, so a
+/// slow PSRAM read cannot clear a cell the panel is scanning.
+static mut SHADOW: BounceHalf = BounceHalf([0; HALF_BYTES]);
 static mut DESCRIPTORS: [DmaDescriptor; N_DESC] = [DmaDescriptor::EMPTY; N_DESC];
 
 static FRAMEBUFFER: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
@@ -55,9 +56,8 @@ static EOF_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Set after the first blanking-interval rewind, so DMA is not restarted
 /// on every frame.
 static PHASE_FIXED: AtomicU32 = AtomicU32::new(0);
-/// Last strip whose refill has been issued. Starts at the end of the frame
-/// so the first interrupt (strip 0) is a gap of one, not the whole frame.
-static LAST_HALF: AtomicU32 = AtomicU32::new((HALVES_PER_FRAME - 1) as u32);
+/// Framebuffer strip currently stored in each DMA buffer.
+static BUFFER_STRIP: [AtomicU32; N_BUFS] = [const { AtomicU32::new(0) }; N_BUFS];
 
 pub struct Framebuffer {
     ptr: *mut u8,
@@ -136,10 +136,10 @@ impl BounceRing {
 
             for i in 0..N_BUFS {
                 copy_half(framebuffer, i, bufs.add(i * HALF_BYTES));
+                BUFFER_STRIP[i].store(i as u32, Ordering::Relaxed);
             }
             FRAMEBUFFER.store(framebuffer as *mut u8, Ordering::Release);
             EOF_COUNT.store(0, Ordering::Relaxed);
-            LAST_HALF.store((HALVES_PER_FRAME - 1) as u32, Ordering::Relaxed);
             Self { head: descs }
         }
     }
@@ -248,40 +248,68 @@ fn eof_isr() {
     refill_through(framebuffer, finished);
 }
 
-/// Fill strips the DMA has finished since the previous interrupt.
+/// Refill stale buffers with the strip for their next scheduled use.
 ///
-/// The end-of-strip flag is a single bit, so a copy that runs past the next
-/// strip drops the one in between. Walking forward from the last strip we
-/// filled repairs that. The buffer on screen right now is left alone. At most
-/// [`MAX_COPIES_PER_EOF`] strips are copied; the rest stay pending for the
-/// next interrupt, which is what keeps a slow PSRAM stretch from piling up.
+/// EOF is a single pending bit, so after a delayed interrupt some refill
+/// deadlines may already have passed. Tracking each buffer's contents avoids
+/// putting an old strip into a buffer that will be scanned at a later row.
 #[ram]
 fn refill_through(framebuffer: *mut u8, finished: usize) {
-    let last = LAST_HALF.load(Ordering::Relaxed) as usize;
-    if last == finished {
+    let shadow = ptr::addr_of_mut!(SHADOW) as *mut u8;
+    let bounce = ptr::addr_of_mut!(BOUNCE) as *mut u8;
+    let mut now = finished_half().unwrap_or(finished);
+    let first_buffer = now % N_BUFS;
+    for offset in 0..N_BUFS {
+        let buf = (first_buffer + offset) % N_BUFS;
+        let strip = next_strip_for_buffer(now, buf);
+        let scanning = (now + 1) % N_BUFS;
+        let coming = (now + 2) % N_BUFS;
+        if buf == scanning
+            || buf == coming
+            || BUFFER_STRIP[buf].load(Ordering::Relaxed) == strip as u32
+        {
+            continue;
+        }
+
+        let src = unsafe { framebuffer.add(strip * HALF_BYTES) };
+        unsafe {
+            // Slint writes through the data cache; make its pixels visible to
+            // the DMA refill before copying them into the internal buffer.
+            let autoload = Cache_Suspend_DCache_Autoload();
+            rom_Cache_WriteBack_Addr(src as u32, HALF_BYTES as u32);
+            Cache_Resume_DCache_Autoload(autoload);
+            copy_half_at(src, shadow);
+        }
+
+        // Keep each EOF interrupt bounded to one strip refill. Besides
+        // avoiding scanout underruns, this leaves time for the BLE controller.
+        now = finished_half().unwrap_or(finished);
+        if buf == (now + 1) % N_BUFS
+            || buf == (now + 2) % N_BUFS
+            || next_strip_for_buffer(now, buf) != strip
+        {
+            continue;
+        }
+        unsafe {
+            copy_half_at(shadow, bounce.add(buf * HALF_BYTES));
+        }
+        BUFFER_STRIP[buf].store(strip as u32, Ordering::Relaxed);
         return;
     }
-    let live = (finished + 1) % N_BUFS;
-    let bounce = ptr::addr_of_mut!(BOUNCE) as *mut u8;
-    let mut half = (last + 1) % HALVES_PER_FRAME;
-    let mut copied = 0usize;
-    let mut progressed = last;
-    for _ in 0..HALVES_PER_FRAME {
-        let buf = half % N_BUFS;
-        if buf != live {
-            let strip = (half + N_BUFS) % HALVES_PER_FRAME;
-            unsafe {
-                copy_half_at(framebuffer.add(strip * HALF_BYTES), bounce.add(buf * HALF_BYTES));
-            }
-            copied += 1;
-        }
-        progressed = half;
-        if half == finished || copied >= MAX_COPIES_PER_EOF {
-            break;
-        }
-        half = (half + 1) % HALVES_PER_FRAME;
-    }
-    LAST_HALF.store(progressed as u32, Ordering::Relaxed);
+}
+
+#[ram]
+fn next_strip_for_buffer(finished: usize, buffer: usize) -> usize {
+    let first = finished + 1;
+    let offset = (buffer + N_BUFS - (first % N_BUFS)) % N_BUFS;
+    (first + offset) % HALVES_PER_FRAME
+}
+
+unsafe extern "C" {
+    /// ROM, always mapped. `addr` and `size` are cache-line aligned.
+    fn rom_Cache_WriteBack_Addr(addr: u32, size: u32);
+    fn Cache_Suspend_DCache_Autoload() -> u32;
+    fn Cache_Resume_DCache_Autoload(autoload: u32);
 }
 
 #[ram]
@@ -355,9 +383,6 @@ fn rewind_to_left_edge() {
     ch.out_link()
         .modify(|_, w| unsafe { w.outlink_addr().bits(head) });
     ch.out_link().modify(|_, w| w.outlink_start().set_bit());
-    // DMA is back at strip 0. The next interrupt must refill that strip, not
-    // treat the restart as a gap covering the whole frame.
-    LAST_HALF.store((HALVES_PER_FRAME - 1) as u32, Ordering::Relaxed);
 }
 
 #[ram]
