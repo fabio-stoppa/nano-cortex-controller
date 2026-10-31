@@ -10,7 +10,10 @@ use super::parse::{apply_model, store_catalog_model_id};
 use super::refresh::enqueue_param_refresh;
 use super::state::{c_label, clip, fx, fx_publish, now_us, push_fx_ui, SLOT_CFG, TAG};
 use crate::fx::models::*;
-use crate::fx::params::{clampf, display_to_normalized, format_param, normalized_to_display};
+use crate::fx::params::{
+    clampf, display_to_normalized_for_model, format_param, normalize_for_model,
+    normalized_to_display_for_model,
+};
 use crate::fx::types::*;
 use crate::fx::util::c_str;
 
@@ -202,10 +205,10 @@ pub(super) fn write_param_normalized(block: u32, param_index: u8, normalized: f3
     }
 
     let name = c_str(unsafe { *model.param_names.add(param_index as usize) });
-    let normalized = clampf(normalized, 0.0, 1.0);
+    let normalized = normalize_for_model(model, param_index as usize, normalized);
     let param = &mut s.fx.blocks[idx].params[param_index as usize];
     param.normalized = normalized;
-    param.display = normalized_to_display(name, normalized);
+    param.display = normalized_to_display_for_model(model, param_index as usize, normalized);
     param.valid = true;
     s.fx.valid = true;
     fx_publish();
@@ -235,7 +238,6 @@ pub(super) fn write_param_display(block: u32, param_index: u8, display_value: f3
         return false;
     }
 
-    let name = c_str(unsafe { *model.param_names.add(param_index as usize) });
-    let normalized = display_to_normalized(name, display_value);
+    let normalized = display_to_normalized_for_model(model, param_index as usize, display_value);
     write_param_normalized(block, param_index, normalized)
 }

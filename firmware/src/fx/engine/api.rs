@@ -21,7 +21,7 @@ use super::state::{
 };
 use super::write;
 use crate::fx::models::*;
-use crate::fx::params::{clampf, normalized_to_display};
+use crate::fx::params::{clampf, normalize_for_model, normalized_to_display_for_model};
 use crate::fx::types::*;
 use crate::fx::util::c_str;
 
@@ -101,7 +101,8 @@ pub fn nano_fx_dump_has_gate_fields(data: &[u8]) -> bool {
 /// True when live FX gate state can fill INPUT GATE + GATE AMNT (not "-").
 pub fn nano_fx_gate_ui_ready() -> bool {
     let g = &fx().fx.gate;
-    g.valid && g.on_known && g.reduction_valid
+    // The Nano omits the gate amount (f53) while the gate is OFF.
+    g.valid && g.on_known && (!g.on || g.reduction_valid)
 }
 
 /// True after the post-preset param-refresh queue has finished (or had nothing to do).
@@ -375,19 +376,16 @@ fn device_may_steal_fx_focus(s: &super::state::Fx, model_slot: u8) -> bool {
 }
 
 fn apply_block_param(block: &mut NanoFxBlock, idx: usize, normalized: f32) -> bool {
-    let n = clampf(normalized, 0.0, 1.0);
+    let n = model_ref(block.model)
+        .map(|model| normalize_for_model(model, idx, normalized))
+        .unwrap_or_else(|| clampf(normalized, 0.0, 1.0));
     if block.params[idx].valid && (block.params[idx].normalized - n).abs() < 0.0005 {
         return false;
     }
     block.params[idx].normalized = n;
-    let name = model_ref(block.model)
-        .map(|model| c_str(unsafe { *model.param_names.add(idx) }))
-        .unwrap_or("");
-    block.params[idx].display = if name.is_empty() {
-        n * 100.0
-    } else {
-        normalized_to_display(name, n)
-    };
+    block.params[idx].display = model_ref(block.model)
+        .map(|model| normalized_to_display_for_model(model, idx, n))
+        .unwrap_or(n * 100.0);
     block.params[idx].valid = true;
     true
 }
@@ -603,15 +601,12 @@ fn feed_c305(data: &[u8]) -> bool {
     }
 
     for i in 0..n {
-        block.params[i].normalized = clampf(floats[i], 0.0, 1.0);
-        let name = model_ref(block.model)
-            .map(|model| c_str(unsafe { *model.param_names.add(i) }))
-            .unwrap_or("");
-        block.params[i].display = if name.is_empty() {
-            block.params[i].normalized * 100.0
-        } else {
-            normalized_to_display(name, block.params[i].normalized)
-        };
+        block.params[i].normalized = model_ref(block.model)
+            .map(|model| normalize_for_model(model, i, floats[i]))
+            .unwrap_or_else(|| clampf(floats[i], 0.0, 1.0));
+        block.params[i].display = model_ref(block.model)
+            .map(|model| normalized_to_display_for_model(model, i, block.params[i].normalized))
+            .unwrap_or(block.params[i].normalized * 100.0);
         block.params[i].valid = true;
     }
 

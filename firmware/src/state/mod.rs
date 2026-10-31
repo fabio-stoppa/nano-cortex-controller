@@ -9,8 +9,9 @@ pub fn poll() {
 
 pub use machine::{
     feed_c305_bytes, try_amp_notify_fast_bytes, nano_rx_mode_get, nano_rx_mode_set,
-    nano_state_amp_ready, nano_state_begin_sync, nano_state_get_bpm, nano_state_on_bpm_found,
-    nano_state_request_preset_refresh, nano_state_request_tuner_sync, nano_state_reset,
+    nano_state_amp_ready, nano_state_begin_sync, nano_state_get_bpm, nano_state_library_snapshot,
+    nano_state_on_bpm_found, nano_state_request_preset_refresh, nano_state_request_tuner_sync,
+    nano_state_reset, nano_state_tuner_settings,
     nano_state_snapshot_amp, nano_state_tempo_active, nano_state_tempo_enter, nano_state_tempo_exit,
     nano_state_tempo_tap, nano_state_tuner_watch_update, nano_state_write_amp_knob,
     nano_state_write_capture_slot, nano_state_write_capture_volume, nano_state_assign_footswitch,

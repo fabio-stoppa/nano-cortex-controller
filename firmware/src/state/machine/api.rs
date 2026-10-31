@@ -2,19 +2,21 @@
 
 use alloc::borrow::ToOwned;
 use alloc::format;
+use alloc::vec::Vec;
 
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 
 use nano_wire::builders;
 use nano_wire::parsers;
-use nano_wire::types::{Knob, NanoAmpC, BPM_MAX, BPM_MIN};
+use nano_wire::types::{Knob, LibraryCatalog, NanoAmpC, TunerSettings, BPM_MAX, BPM_MIN};
 
 use super::amp_live::{reset_amp_sync, try_inline_amp_update};
 use super::classify::{is_fe_stream, is_state_stream_chunk, sniff_unknown_c305};
 use super::ctx::{
     alloc_buf, amp_copy, amp_knob_set, amp_publish, ble_write_c304, c_label, is_tuner_active,
-    now_us, preset_catalog_zero, push_amp_ui, set_label, st, AMP_SEQ, KNOB_NAMES, NANO_KNOB_LEVEL,
-    NANO_KNOB_TREBLE, NANO_RX_CURRENT, NANO_RX_IDLE, NANO_RX_METADATA, TAG, TAP_HISTORY_MAX,
+    now_us, preset_catalog_zero, push_amp_ui, set_label, st, AMP_SEQ, KNOB_NAMES,
+    LIBRARY_BUF_MAX, NANO_KNOB_LEVEL, NANO_KNOB_TREBLE, NANO_RX_CURRENT, NANO_RX_IDLE,
+    NANO_RX_METADATA, TAG, TAP_HISTORY_MAX,
 };
 use super::rx::{
     append_fe_payload, append_state_payload, check_state_rx_timeout, request_current_state_now,
@@ -40,8 +42,23 @@ pub fn nano_state_reset() {
     s.tempo_mode_active = false;
     s.tempo_ignore_exit_echo_us = 0;
     s.tap_count = 0;
+    s.library_pending = false;
+    s.library_request_us = 0;
+    s.library_rx_active = false;
+    s.library_rx_dropping = false;
+    s.library_rx.clear();
+    s.c305_rx.reset();
+    s.tuner_settings = TunerSettings::default();
     crate::screen::nano_ui_set_bpm(0, false);
     crate::screen::nano_ui_set_tempo_mode(false);
+}
+
+pub fn nano_state_library_snapshot() -> LibraryCatalog {
+    st().library_catalog.clone()
+}
+
+pub fn nano_state_tuner_settings() -> TunerSettings {
+    st().tuner_settings
 }
 
 pub fn nano_rx_mode_set(mode: u32) {
@@ -61,7 +78,193 @@ pub fn feed_c305_bytes(data: &[u8]) {
     if data.is_empty() {
         return;
     }
+    if feed_library_chunk(data) {
+        return;
+    }
+    let mode = st().mode;
+    if mode == NANO_RX_METADATA || mode == NANO_RX_CURRENT {
+        match st().c305_rx.push(data) {
+            Ok(nano_wire::c305::FragmentStatus::Incomplete) => return,
+            Ok(nano_wire::c305::FragmentStatus::Complete) => {
+                let message = st().c305_rx.take_message();
+                if message.len() < 4 {
+                    warn!(target: TAG, "Fragmented C305 message missing its message type");
+                    return;
+                }
+                let type_at = message.len() - 4;
+                let message_type = u32::from_le_bytes([
+                    message[type_at],
+                    message[type_at + 1],
+                    message[type_at + 2],
+                    message[type_at + 3],
+                ]);
+                if message_type == 2 {
+                    info!(
+                        target: TAG,
+                        "C305 reassembled state response ({} bytes)",
+                        type_at
+                    );
+                    super::rx::apply_full_state_response(&message[..type_at]);
+                } else {
+                    debug!(
+                        target: TAG,
+                        "C305 reassembled message type {message_type} ({} bytes) ignored",
+                        type_at
+                    );
+                }
+                return;
+            }
+            Ok(nano_wire::c305::FragmentStatus::NotFragment) => {}
+            Err(error) => {
+                warn!(target: TAG, "C305 fragment reassembly failed: {error:?}");
+                return;
+            }
+        }
+    }
     feed_c305(data);
+}
+
+fn feed_library_chunk(data: &[u8]) -> bool {
+    let s = st();
+    if s.library_pending && now_us() - s.library_request_us > 30_000_000 {
+        warn!(target: TAG, "Nano library response timed out");
+        s.library_pending = false;
+        s.library_request_us = 0;
+        s.library_rx_dropping = s.library_rx_active;
+        s.library_rx_active = false;
+        s.library_rx.clear();
+    }
+    if !s.library_pending && !s.library_rx_active && !s.library_rx_dropping {
+        return false;
+    }
+    if data.len() < 2 {
+        return false;
+    }
+    if s.library_rx_dropping {
+        if data[1] == 0x80 {
+            s.library_rx_dropping = false;
+        }
+        return true;
+    }
+
+    if data[1] == 0xC0 {
+        if nano_wire::editor::message_type(data) != Some(nano_wire::editor::MSG_LIBRARY_CONTENT) {
+            return false;
+        }
+        s.library_pending = false;
+        s.library_request_us = 0;
+        s.library_rx.clear();
+        s.library_rx_active = false;
+        s.library_rx_dropping = false;
+        match parsers::parse_library(&data[2..data.len() - 4]) {
+            Some(catalog) => {
+                info!(
+                    target: TAG,
+                    "Nano library loaded ({} captures, {} IRs)",
+                    catalog.captures.len(),
+                    catalog.cabs.len()
+                );
+                s.library_catalog = catalog;
+            }
+            None => error!(target: TAG, "Malformed Nano library response"),
+        }
+        return true;
+    }
+
+    match data[1] {
+        0x40 => {
+            s.library_rx.clear();
+            s.library_rx_active = true;
+            s.library_rx_dropping = false;
+        }
+        0x00 | 0x80 if s.library_rx_active => {}
+        _ => return false,
+    }
+    let frame_size = data.len().saturating_add(2);
+    if data.len() > u16::MAX as usize
+        || s.library_rx.len().saturating_add(frame_size) > LIBRARY_BUF_MAX
+        || s.library_rx.try_reserve(frame_size).is_err()
+    {
+        error!(
+            target: TAG,
+            "Nano library response exceeds {} byte receive limit",
+            LIBRARY_BUF_MAX
+        );
+        s.library_rx.clear();
+        s.library_rx_active = false;
+        s.library_pending = false;
+        s.library_request_us = 0;
+        s.library_rx_dropping = data[1] != 0x80;
+        return true;
+    }
+    s.library_rx
+        .extend_from_slice(&(data.len() as u16).to_le_bytes());
+    s.library_rx.extend_from_slice(data);
+    if data[1] != 0x80 {
+        return true;
+    }
+
+    s.library_rx_active = false;
+    s.library_pending = false;
+    s.library_request_us = 0;
+    let frames = core::mem::take(&mut s.library_rx);
+    let mut payload = Vec::new();
+    let mut offset = 0;
+    while offset < frames.len() {
+        if offset + 2 > frames.len() {
+            error!(target: TAG, "Malformed buffered C305 frame length");
+            return true;
+        }
+        let frame_len = u16::from_le_bytes([frames[offset], frames[offset + 1]]) as usize;
+        let start = offset + 2;
+        let end = start.saturating_add(frame_len);
+        if end > frames.len() || frame_len < 2 {
+            error!(target: TAG, "Malformed buffered C305 frame");
+            return true;
+        }
+        if payload.try_reserve(frame_len - 2).is_err() {
+            error!(target: TAG, "Unable to allocate Nano library response buffer");
+            return true;
+        }
+        payload.extend_from_slice(&frames[start + 2..end]);
+        offset = end;
+    }
+    if payload.len() < 4 {
+        error!(target: TAG, "Nano library response is missing its message type");
+        return true;
+    }
+    let type_at = payload.len() - 4;
+    let message_type = u32::from_le_bytes([
+        payload[type_at],
+        payload[type_at + 1],
+        payload[type_at + 2],
+        payload[type_at + 3],
+    ]);
+    if message_type != nano_wire::editor::MSG_LIBRARY_CONTENT {
+        error!(target: TAG, "Unexpected fragmented C305 message type {message_type}");
+        let mut offset = 0;
+        while offset < frames.len() {
+            let frame_len = u16::from_le_bytes([frames[offset], frames[offset + 1]]) as usize;
+            let start = offset + 2;
+            let end = start + frame_len;
+            feed_c305(&frames[start..end]);
+            offset = end;
+        }
+        return true;
+    }
+    match parsers::parse_library(&payload[..type_at]) {
+        Some(catalog) => {
+            info!(
+                target: TAG,
+                "Nano library loaded ({} captures, {} IRs)",
+                catalog.captures.len(),
+                catalog.cabs.len()
+            );
+            s.library_catalog = catalog;
+        }
+        None => error!(target: TAG, "Malformed Nano library response"),
+    }
+    true
 }
 
 fn feed_c305(data: &[u8]) {

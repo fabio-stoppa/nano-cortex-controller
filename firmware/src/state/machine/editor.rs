@@ -110,7 +110,19 @@ pub fn nano_state_assign_footswitch(which: Footswitch, slot: u8) -> bool {
 pub fn nano_state_request_library() -> bool {
     let mut buf = [0u8; 24];
     let n = library_request_payload(&mut buf);
-    send("Library", &buf, n)
+    let s = st();
+    s.library_rx.clear();
+    s.library_rx_active = false;
+    s.library_rx_dropping = false;
+    s.library_pending = true;
+    s.library_request_us = super::ctx::now_us();
+    if send("Library", &buf, n) {
+        true
+    } else {
+        s.library_pending = false;
+        s.library_request_us = 0;
+        false
+    }
 }
 
 pub fn nano_state_load_library_capture(
@@ -210,7 +222,14 @@ pub fn nano_state_write_mute(which: MuteTarget, muted: bool) -> bool {
 pub fn nano_state_set_tuner_reference(on: bool, hz: f32, live: bool, muted: bool) -> bool {
     let mut buf = [0u8; 32];
     let n = tuner_mode_payload(on, hz, live, muted, &mut buf);
-    send("Tuner mode", &buf, n)
+    if !send("Tuner mode", &buf, n) {
+        return false;
+    }
+    if (400.0..=480.0).contains(&hz) {
+        st().tuner_settings.reference_hz = Some(hz);
+    }
+    st().tuner_settings.muted = Some(muted);
+    true
 }
 
 pub fn nano_state_request_lists(which: StateLists) -> bool {

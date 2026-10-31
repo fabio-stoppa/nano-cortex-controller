@@ -29,10 +29,27 @@ pub fn model_name(model: &NanoFxModelDef) -> &'static str {
 
 /// Wire indices in UI order. `None` means identity (`display_i == wire_i`).
 ///
-/// Some reverbs store Mix last on the wire (Amount target) but we still want
-/// Mix first in the param grid — same idea as the web editor `displayOrder`.
+/// The editor catalog's display order is distinct from wire order for several
+/// effects; the UI still sends each displayed parameter by its wire index.
 pub fn param_display_order(model: &NanoFxModelDef) -> Option<&'static [u8]> {
     match model_name(model) {
+        "Chief CE2W (ST)" => Some(&[0, 1, 6, 7, 2, 3, 4, 5]),
+        "Chorus 229T" | "Dream Chorus" | "MX Phase 95" => Some(&[0, 1, 5, 6, 2, 3, 4]),
+        "MX Flanger" => Some(&[0, 1, 2, 3, 6, 7, 4, 5]),
+        "MX Vibe" => Some(&[0, 1, 2, 6, 7, 3, 4, 5]),
+        "Tremolo" => Some(&[0, 10, 11, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+        "Analog Delay" => Some(&[0, 1, 2, 3, 4, 10, 11, 5, 6, 7, 8, 9]),
+        "Circular Delay" => Some(&[0, 1, 10, 11, 2, 3, 4, 5, 6, 7, 8, 9]),
+        "Digital Delay (ST)" => {
+            Some(&[0, 1, 2, 3, 4, 16, 17, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+        }
+        "Dual Delay" => Some(&[
+            0, 18, 19, 1, 2, 3, 20, 21, 4, 5, 10, 11, 12, 13, 14, 15, 16, 17, 6, 7, 8, 9,
+        ]),
+        "Dual Reverse Delay" => Some(&[
+            0, 19, 20, 1, 2, 3, 4, 21, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+        ]),
+        "Tape Delay" => Some(&[0, 1, 2, 3, 4, 9, 10, 5, 6, 7, 8]),
         "Ambience" | "Hall" | "Room" => Some(&[4, 0, 1, 2, 3]),
         "Cave" => Some(&[5, 0, 1, 2, 3, 4]),
         "Modulated" => Some(&[6, 0, 1, 2, 3, 4, 5]),
@@ -105,10 +122,7 @@ pub fn find_model_in_blob(raw: &[u8]) -> Option<&'static NanoFxModelDef> {
     None
 }
 
-pub fn find_model_id_in_preset(
-    data: &[u8],
-    id: &[u8],
-) -> Option<&'static NanoFxModelDef> {
+pub fn find_model_id_in_preset(data: &[u8], id: &[u8]) -> Option<&'static NanoFxModelDef> {
     if id.is_empty() || data.len() < id.len() {
         return None;
     }

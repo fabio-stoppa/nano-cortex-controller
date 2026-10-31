@@ -7,7 +7,10 @@ use alloc::ffi::CString;
 use alloc::string::String;
 
 
-use nano_wire::types::{NanoAmpC, NanoPresetCatalogC, AMP_CAPTURE_NAME_MAX, PRESET_COUNT, PRESET_NAME_MAX};
+use nano_wire::types::{
+    LibraryCatalog, NanoAmpC, NanoPresetCatalogC, TunerSettings, AMP_CAPTURE_NAME_MAX,
+    PRESET_COUNT, PRESET_NAME_MAX,
+};
 
 use crate::syncutil::{SeqLock, Shared};
 
@@ -69,6 +72,7 @@ pub(super) fn ble_write_c304(label: &CStr, data: &[u8]) -> bool {
 }
 
 pub(super) const STATE_BUF_MAX: usize = 48 * 1024;
+pub(super) const LIBRARY_BUF_MAX: usize = 256 * 1024;
 const STATE_PROBE_LABEL_MAX: usize = 24;
 pub(super) const TAP_HISTORY_MAX: usize = 4;
 
@@ -106,6 +110,14 @@ pub(super) struct State {
     pub(super) fe_len: usize,
     pub(super) last_bpm_hunt_len: usize,
     pub(super) preset_catalog: NanoPresetCatalogC,
+    pub(super) library_catalog: LibraryCatalog,
+    pub(super) library_pending: bool,
+    pub(super) library_request_us: i64,
+    pub(super) library_rx_active: bool,
+    pub(super) library_rx_dropping: bool,
+    pub(super) library_rx: alloc::vec::Vec<u8>,
+    pub(super) c305_rx: nano_wire::c305::C305FragmentReassembler,
+    pub(super) tuner_settings: TunerSettings,
     pub(super) parse_timer: crate::deadline::Deadline,
     pub(super) sync_timer: crate::deadline::Deadline,
     pub(super) refresh_timer: crate::deadline::Deadline,
@@ -156,6 +168,20 @@ impl State {
             fe_len: 0,
             last_bpm_hunt_len: 0,
             preset_catalog: preset_catalog_zero(),
+            library_catalog: LibraryCatalog {
+                captures: alloc::vec::Vec::new(),
+                cabs: alloc::vec::Vec::new(),
+            },
+            library_pending: false,
+            library_request_us: 0,
+            library_rx_active: false,
+            library_rx_dropping: false,
+            library_rx: alloc::vec::Vec::new(),
+            c305_rx: nano_wire::c305::C305FragmentReassembler::new(),
+            tuner_settings: TunerSettings {
+                reference_hz: None,
+                muted: None,
+            },
             parse_timer: crate::deadline::Deadline::new(),
             sync_timer: crate::deadline::Deadline::new(),
             refresh_timer: crate::deadline::Deadline::new(),

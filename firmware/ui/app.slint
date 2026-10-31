@@ -2,7 +2,7 @@
 // the firmware rotates that taller layout into the same framebuffer.
 
 // The software renderer embeds only fonts it can resolve at build time, so the
-// faces are bundled explicitly.
+// bold face is bundled explicitly.
 import "fonts/IBMPlexSans-Regular.ttf";
 import "fonts/IBMPlexSans-Bold.ttf";
 
@@ -633,105 +633,192 @@ component FxPanel inherits Rectangle {
     in property <string> n7;
     in property <string> v7;
     in property <float> a7;
-    in property <string> page-text;
+    in property <string> n8;
+    in property <string> v8;
+    in property <float> a8;
+    in property <string> n9;
+    in property <string> v9;
+    in property <float> a9;
+    in property <string> n10;
+    in property <string> v10;
+    in property <float> a10;
+    in property <string> n11;
+    in property <string> v11;
+    in property <float> a11;
+    in property <string> n12;
+    in property <string> v12;
+    in property <float> a12;
+    in property <string> n13;
+    in property <string> v13;
+    in property <float> a13;
+    in property <string> n14;
+    in property <string> v14;
+    in property <float> a14;
+    in property <string> n15;
+    in property <string> v15;
+    in property <float> a15;
+    in property <string> n16;
+    in property <string> v16;
+    in property <float> a16;
+    in property <string> n17;
+    in property <string> v17;
+    in property <float> a17;
+    in property <string> n18;
+    in property <string> v18;
+    in property <float> a18;
+    in property <string> n19;
+    in property <string> v19;
+    in property <float> a19;
+    in property <string> n20;
+    in property <string> v20;
+    in property <float> a20;
+    in property <string> n21;
+    in property <string> v21;
+    in property <float> a21;
+    in property <string> n22;
+    in property <string> v22;
+    in property <float> a22;
+    in property <string> n23;
+    in property <string> v23;
+    in property <float> a23;
     callback param-changed(int, float);
-    callback param-paged(int);
+    property <length> cell-width: (root.width - 4px - 12px) / 4;
     background: transparent;
-    VerticalLayout {
-        alignment: start;
-        padding: 2px;
-        spacing: 4px;
-        HorizontalLayout {
-            width: 100%;
+    clip: true;
+    Flickable {
+        width: 100%;
+        height: 100%;
+        viewport-y: 0px;
+        VerticalLayout {
+            width: parent.width;
+            alignment: start;
+            padding: 2px;
             spacing: 4px;
-            ParamCell {
-                horizontal-stretch: 1;
-                slider: n0 != "-";
-                name: n0;
-                value: v0;
-                amount: a0;
-                changed(v) => { root.param-changed(0, v); }
+            if root.n0 != "-" || root.n1 != "-" || root.n2 != "-" || root.n3 != "-": HorizontalLayout {
+                width: 100%;
+                spacing: 4px;
+                alignment: start;
+                if root.n0 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n0; value: root.v0; amount: root.a0;
+                    changed(v) => { root.param-changed(0, v); }
+                }
+                if root.n1 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n1; value: root.v1; amount: root.a1;
+                    changed(v) => { root.param-changed(1, v); }
+                }
+                if root.n2 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n2; value: root.v2; amount: root.a2;
+                    changed(v) => { root.param-changed(2, v); }
+                }
+                if root.n3 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n3; value: root.v3; amount: root.a3;
+                    changed(v) => { root.param-changed(3, v); }
+                }
             }
-            ParamCell {
-                horizontal-stretch: 1;
-                slider: n1 != "-";
-                name: n1;
-                value: v1;
-                amount: a1;
-                changed(v) => { root.param-changed(1, v); }
+            if root.n4 != "-" || root.n5 != "-" || root.n6 != "-" || root.n7 != "-": HorizontalLayout {
+                width: 100%;
+                spacing: 4px;
+                alignment: start;
+                if root.n4 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n4; value: root.v4; amount: root.a4;
+                    changed(v) => { root.param-changed(4, v); }
+                }
+                if root.n5 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n5; value: root.v5; amount: root.a5;
+                    changed(v) => { root.param-changed(5, v); }
+                }
+                if root.n6 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n6; value: root.v6; amount: root.a6;
+                    changed(v) => { root.param-changed(6, v); }
+                }
+                if root.n7 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n7; value: root.v7; amount: root.a7;
+                    changed(v) => { root.param-changed(7, v); }
+                }
             }
-            ParamCell {
-                horizontal-stretch: 1;
-                slider: n2 != "-";
-                name: n2;
-                value: v2;
-                amount: a2;
-                changed(v) => { root.param-changed(2, v); }
+            if root.n8 != "-" || root.n9 != "-" || root.n10 != "-" || root.n11 != "-": HorizontalLayout {
+                width: 100%;
+                spacing: 4px;
+                alignment: start;
+                if root.n8 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n8; value: root.v8; amount: root.a8;
+                    changed(v) => { root.param-changed(8, v); }
+                }
+                if root.n9 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n9; value: root.v9; amount: root.a9;
+                    changed(v) => { root.param-changed(9, v); }
+                }
+                if root.n10 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n10; value: root.v10; amount: root.a10;
+                    changed(v) => { root.param-changed(10, v); }
+                }
+                if root.n11 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n11; value: root.v11; amount: root.a11;
+                    changed(v) => { root.param-changed(11, v); }
+                }
             }
-            ParamCell {
-                horizontal-stretch: 1;
-                slider: n3 != "-";
-                name: n3;
-                value: v3;
-                amount: a3;
-                changed(v) => { root.param-changed(3, v); }
+            if root.n12 != "-" || root.n13 != "-" || root.n14 != "-" || root.n15 != "-": HorizontalLayout {
+                width: 100%;
+                spacing: 4px;
+                alignment: start;
+                if root.n12 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n12; value: root.v12; amount: root.a12;
+                    changed(v) => { root.param-changed(12, v); }
+                }
+                if root.n13 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n13; value: root.v13; amount: root.a13;
+                    changed(v) => { root.param-changed(13, v); }
+                }
+                if root.n14 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n14; value: root.v14; amount: root.a14;
+                    changed(v) => { root.param-changed(14, v); }
+                }
+                if root.n15 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n15; value: root.v15; amount: root.a15;
+                    changed(v) => { root.param-changed(15, v); }
+                }
             }
-        }
-        HorizontalLayout {
-            width: 100%;
-            spacing: 4px;
-            ParamCell {
-                horizontal-stretch: 1;
-                slider: n4 != "-";
-                name: n4;
-                value: v4;
-                amount: a4;
-                changed(v) => { root.param-changed(4, v); }
+            if root.n16 != "-" || root.n17 != "-" || root.n18 != "-" || root.n19 != "-": HorizontalLayout {
+                width: 100%;
+                spacing: 4px;
+                alignment: start;
+                if root.n16 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n16; value: root.v16; amount: root.a16;
+                    changed(v) => { root.param-changed(16, v); }
+                }
+                if root.n17 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n17; value: root.v17; amount: root.a17;
+                    changed(v) => { root.param-changed(17, v); }
+                }
+                if root.n18 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n18; value: root.v18; amount: root.a18;
+                    changed(v) => { root.param-changed(18, v); }
+                }
+                if root.n19 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n19; value: root.v19; amount: root.a19;
+                    changed(v) => { root.param-changed(19, v); }
+                }
             }
-            ParamCell {
-                horizontal-stretch: 1;
-                slider: n5 != "-";
-                name: n5;
-                value: v5;
-                amount: a5;
-                changed(v) => { root.param-changed(5, v); }
-            }
-            ParamCell {
-                horizontal-stretch: 1;
-                slider: n6 != "-";
-                name: n6;
-                value: v6;
-                amount: a6;
-                changed(v) => { root.param-changed(6, v); }
-            }
-            ParamCell {
-                horizontal-stretch: 1;
-                slider: n7 != "-";
-                name: n7;
-                value: v7;
-                amount: a7;
-                changed(v) => { root.param-changed(7, v); }
-            }
-        }
-        if root.page-text != "": HorizontalLayout {
-            alignment: center;
-            spacing: 8px;
-            height: 36px;
-            HeaderButton {
-                label: "<";
-                button-width: 48px;
-                tapped => { root.param-paged(-1); }
-            }
-            Text {
-                text: page-text;
-                color: #909090;
-                font-size: 14px;
-                vertical-alignment: center;
-            }
-            HeaderButton {
-                label: ">";
-                button-width: 48px;
-                tapped => { root.param-paged(1); }
+            if root.n20 != "-" || root.n21 != "-" || root.n22 != "-" || root.n23 != "-": HorizontalLayout {
+                width: 100%;
+                spacing: 4px;
+                alignment: start;
+                if root.n20 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n20; value: root.v20; amount: root.a20;
+                    changed(v) => { root.param-changed(20, v); }
+                }
+                if root.n21 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n21; value: root.v21; amount: root.a21;
+                    changed(v) => { root.param-changed(21, v); }
+                }
+                if root.n22 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n22; value: root.v22; amount: root.a22;
+                    changed(v) => { root.param-changed(22, v); }
+                }
+                if root.n23 != "-": ParamCell {
+                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n23; value: root.v23; amount: root.a23;
+                    changed(v) => { root.param-changed(23, v); }
+                }
             }
         }
     }
@@ -1034,7 +1121,54 @@ export component AppWindow inherits Window {
     in-out property <string> fx-n7: "-";
     in-out property <string> fx-v7: "-";
     in-out property <float> fx-a7: 0;
-    in-out property <string> fx-page: "";
+    in-out property <string> fx-n8: "-";
+    in-out property <string> fx-v8: "-";
+    in-out property <float> fx-a8: 0;
+    in-out property <string> fx-n9: "-";
+    in-out property <string> fx-v9: "-";
+    in-out property <float> fx-a9: 0;
+    in-out property <string> fx-n10: "-";
+    in-out property <string> fx-v10: "-";
+    in-out property <float> fx-a10: 0;
+    in-out property <string> fx-n11: "-";
+    in-out property <string> fx-v11: "-";
+    in-out property <float> fx-a11: 0;
+    in-out property <string> fx-n12: "-";
+    in-out property <string> fx-v12: "-";
+    in-out property <float> fx-a12: 0;
+    in-out property <string> fx-n13: "-";
+    in-out property <string> fx-v13: "-";
+    in-out property <float> fx-a13: 0;
+    in-out property <string> fx-n14: "-";
+    in-out property <string> fx-v14: "-";
+    in-out property <float> fx-a14: 0;
+    in-out property <string> fx-n15: "-";
+    in-out property <string> fx-v15: "-";
+    in-out property <float> fx-a15: 0;
+    in-out property <string> fx-n16: "-";
+    in-out property <string> fx-v16: "-";
+    in-out property <float> fx-a16: 0;
+    in-out property <string> fx-n17: "-";
+    in-out property <string> fx-v17: "-";
+    in-out property <float> fx-a17: 0;
+    in-out property <string> fx-n18: "-";
+    in-out property <string> fx-v18: "-";
+    in-out property <float> fx-a18: 0;
+    in-out property <string> fx-n19: "-";
+    in-out property <string> fx-v19: "-";
+    in-out property <float> fx-a19: 0;
+    in-out property <string> fx-n20: "-";
+    in-out property <string> fx-v20: "-";
+    in-out property <float> fx-a20: 0;
+    in-out property <string> fx-n21: "-";
+    in-out property <string> fx-v21: "-";
+    in-out property <float> fx-a21: 0;
+    in-out property <string> fx-n22: "-";
+    in-out property <string> fx-v22: "-";
+    in-out property <float> fx-a22: 0;
+    in-out property <string> fx-n23: "-";
+    in-out property <string> fx-v23: "-";
+    in-out property <float> fx-a23: 0;
     in-out property <string> tab-0: "FX";
     in-out property <string> tab-1: "FX";
     in-out property <string> tab-3: "FX";
@@ -1056,7 +1190,6 @@ export component AppWindow inherits Window {
     callback slider-moved(int, float);
     callback gate-tapped();
     callback param-changed(int, float);
-    callback param-paged(int);
     callback preset-stepped(int);
     callback capture-stepped(int);
     callback model-stepped(int);
@@ -1066,7 +1199,7 @@ export component AppWindow inherits Window {
 
     background: #000000;
     default-font-family: "IBM Plex Sans";
-    default-font-size: 16px;
+    default-font-size: 17px;
 
     VerticalLayout {
         padding: 1px;
@@ -1143,9 +1276,23 @@ export component AppWindow inherits Window {
                     n5: root.fx-n5; v5: root.fx-v5; a5: root.fx-a5;
                     n6: root.fx-n6; v6: root.fx-v6; a6: root.fx-a6;
                     n7: root.fx-n7; v7: root.fx-v7; a7: root.fx-a7;
-                    page-text: root.fx-page;
+                    n8: root.fx-n8; v8: root.fx-v8; a8: root.fx-a8;
+                    n9: root.fx-n9; v9: root.fx-v9; a9: root.fx-a9;
+                    n10: root.fx-n10; v10: root.fx-v10; a10: root.fx-a10;
+                    n11: root.fx-n11; v11: root.fx-v11; a11: root.fx-a11;
+                    n12: root.fx-n12; v12: root.fx-v12; a12: root.fx-a12;
+                    n13: root.fx-n13; v13: root.fx-v13; a13: root.fx-a13;
+                    n14: root.fx-n14; v14: root.fx-v14; a14: root.fx-a14;
+                    n15: root.fx-n15; v15: root.fx-v15; a15: root.fx-a15;
+                    n16: root.fx-n16; v16: root.fx-v16; a16: root.fx-a16;
+                    n17: root.fx-n17; v17: root.fx-v17; a17: root.fx-a17;
+                    n18: root.fx-n18; v18: root.fx-v18; a18: root.fx-a18;
+                    n19: root.fx-n19; v19: root.fx-v19; a19: root.fx-a19;
+                    n20: root.fx-n20; v20: root.fx-v20; a20: root.fx-a20;
+                    n21: root.fx-n21; v21: root.fx-v21; a21: root.fx-a21;
+                    n22: root.fx-n22; v22: root.fx-v22; a22: root.fx-a22;
+                    n23: root.fx-n23; v23: root.fx-v23; a23: root.fx-a23;
                     param-changed(cell, amount) => { root.param-changed(cell, amount); }
-                    param-paged(delta) => { root.param-paged(delta); }
                 }
                 if root.page == 2: TunerPanel {
                     note: root.tuner-note;
@@ -1214,9 +1361,23 @@ export component AppWindow inherits Window {
                     n5: root.fx-n5; v5: root.fx-v5; a5: root.fx-a5;
                     n6: root.fx-n6; v6: root.fx-v6; a6: root.fx-a6;
                     n7: root.fx-n7; v7: root.fx-v7; a7: root.fx-a7;
-                    page-text: root.fx-page;
+                    n8: root.fx-n8; v8: root.fx-v8; a8: root.fx-a8;
+                    n9: root.fx-n9; v9: root.fx-v9; a9: root.fx-a9;
+                    n10: root.fx-n10; v10: root.fx-v10; a10: root.fx-a10;
+                    n11: root.fx-n11; v11: root.fx-v11; a11: root.fx-a11;
+                    n12: root.fx-n12; v12: root.fx-v12; a12: root.fx-a12;
+                    n13: root.fx-n13; v13: root.fx-v13; a13: root.fx-a13;
+                    n14: root.fx-n14; v14: root.fx-v14; a14: root.fx-a14;
+                    n15: root.fx-n15; v15: root.fx-v15; a15: root.fx-a15;
+                    n16: root.fx-n16; v16: root.fx-v16; a16: root.fx-a16;
+                    n17: root.fx-n17; v17: root.fx-v17; a17: root.fx-a17;
+                    n18: root.fx-n18; v18: root.fx-v18; a18: root.fx-a18;
+                    n19: root.fx-n19; v19: root.fx-v19; a19: root.fx-a19;
+                    n20: root.fx-n20; v20: root.fx-v20; a20: root.fx-a20;
+                    n21: root.fx-n21; v21: root.fx-v21; a21: root.fx-a21;
+                    n22: root.fx-n22; v22: root.fx-v22; a22: root.fx-a22;
+                    n23: root.fx-n23; v23: root.fx-v23; a23: root.fx-a23;
                     param-changed(cell, amount) => { root.param-changed(cell, amount); }
-                    param-paged(delta) => { root.param-paged(delta); }
                 }
                 if root.page == 2: TunerPanel {
                     note: root.tuner-note;

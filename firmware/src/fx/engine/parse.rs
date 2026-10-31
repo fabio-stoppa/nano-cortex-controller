@@ -12,7 +12,7 @@ use nano_wire::varint::read_varint;
 use super::state::{fx, now_us, SLOT_CFG, TAG};
 use crate::fx::catalog::catalog;
 use crate::fx::models::*;
-use crate::fx::params::{clampf, normalized_to_display};
+use crate::fx::params::{clampf, normalize_for_model, normalized_to_display_for_model};
 use crate::fx::types::*;
 use crate::fx::util::c_str;
 
@@ -367,16 +367,16 @@ pub(super) fn upgrade_block_model(
         .min(NANO_FX_MAX_PARAMS);
 
     for i in 0..n {
-        let name = c_str(unsafe { *model.param_names.add(i) });
-        block.params[i].normalized = clampf(floats[i], 0.0, 1.0);
-        block.params[i].display = normalized_to_display(name, block.params[i].normalized);
+        block.params[i].normalized = normalize_for_model(model, i, floats[i]);
+        block.params[i].display =
+            normalized_to_display_for_model(model, i, block.params[i].normalized);
         block.params[i].valid = true;
     }
 
     for i in n..(model.param_count as usize).min(NANO_FX_MAX_PARAMS) {
-        let name = c_str(unsafe { *model.param_names.add(i) });
-        block.params[i].display = normalized_to_display(name, 0.5);
-        block.params[i].normalized = 0.5;
+        block.params[i].normalized = normalize_for_model(model, i, 0.5);
+        block.params[i].display =
+            normalized_to_display_for_model(model, i, block.params[i].normalized);
         block.params[i].valid = false;
     }
 }

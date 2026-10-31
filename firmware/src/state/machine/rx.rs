@@ -6,7 +6,7 @@ use alloc::string::String;
 use core::ptr;
 use core::slice;
 
-use log::{info, warn};
+use log::{error, info, warn};
 
 use nano_wire::builders;
 use nano_wire::parsers;
@@ -19,9 +19,9 @@ use super::api::{
     nano_state_tuner_watch_update,
 };
 use super::ctx::{
-    amp_copy, amp_knob_get, amp_knob_set, ble_write_c304, c_bytes_to_string, c_label,
-    is_tuner_active, now_us, push_amp_ui, set_label, st, NANO_RX_CURRENT, NANO_RX_IDLE,
-    STATE_BUF_MAX, TAG,
+    alloc_buf, amp_copy, amp_knob_get, amp_knob_set, ble_write_c304, c_bytes_to_string,
+    c_label, is_tuner_active, now_us, push_amp_ui, set_label, st, NANO_RX_CURRENT,
+    NANO_RX_IDLE, STATE_BUF_MAX, TAG,
 };
 use super::timers::schedule_parse_in;
 
@@ -188,6 +188,55 @@ fn finish_state_capture() {
     s.state_rx_since_us = 0;
     s.incomplete_defer_count = 0;
     s.incomplete_probe_label.clear();
+}
+
+pub(super) fn apply_full_state_response(data: &[u8]) {
+    let s = st();
+    let initial = s.mode == super::ctx::NANO_RX_METADATA;
+    if initial && !s.preset_catalog.valid {
+        if let Some(catalog) = parsers::parse_fe_preset_catalog(data) {
+            s.preset_catalog = NanoPresetCatalogC::from(&catalog);
+            s.fe_len = 0;
+            info!(
+                target: TAG,
+                "Preset catalog loaded ({} names)",
+                s.preset_catalog.count
+            );
+        } else {
+            warn!(
+                target: TAG,
+                "Full state response contained no preset names ({} bytes)",
+                data.len()
+            );
+        }
+    }
+    if data.len() > STATE_BUF_MAX {
+        warn!(
+            target: TAG,
+            "Full state response exceeds {} byte state buffer ({} bytes)",
+            STATE_BUF_MAX,
+            data.len()
+        );
+        return;
+    }
+    if s.state_buf.is_null() {
+        s.state_buf = alloc_buf();
+        if s.state_buf.is_null() {
+            error!(target: TAG, "Failed to allocate state buffer for full state response");
+            return;
+        }
+    }
+    unsafe { ptr::copy_nonoverlapping(data.as_ptr(), s.state_buf, data.len()) };
+    s.state_len = data.len();
+    s.mode = NANO_RX_CURRENT;
+    s.state_rx_since_us = now_us();
+    s.incomplete_defer_count = 0;
+    if initial {
+        set_label(&mut s.state_probe_label, "INITIAL");
+    } else if s.state_probe_label.is_empty() {
+        set_label(&mut s.state_probe_label, "ROUTINE");
+    }
+    schedule_state_parse();
 }
 
 /// True when a length-delimited field claims more bytes than remain — typical
@@ -360,7 +409,7 @@ pub(super) fn parse_state_buffer() {
     let buf_len = s.state_len;
     let buf = state_slice(buf_len);
     info!(target: TAG, "Parsing preset state ({buf_len} bytes) [{label}]");
-    if label == "INITIAL" {
+    if label == "INITIAL" && buf_len <= 512 {
         parsers::log_proto_fields(TAG, &label, buf);
     }
 
@@ -436,6 +485,17 @@ pub(super) fn parse_state_buffer() {
     }
 
     finish_state_capture();
+
+    if let Some(settings) = parsers::parse_tuner_settings(buf) {
+        if let Some(reference_hz) = settings.reference_hz {
+            s.tuner_settings.reference_hz = Some(reference_hz);
+            info!(target: TAG, "Tuner reference pitch {reference_hz:.1} Hz");
+        }
+        if let Some(muted) = settings.muted {
+            s.tuner_settings.muted = Some(muted);
+            info!(target: TAG, "Tuner output {}", if muted { "muted" } else { "unmuted" });
+        }
+    }
 
     match parsers::parse_tuner_state(buf) {
         Some((tuner_active, route)) => {

@@ -57,7 +57,6 @@ struct State {
     last_y: f32,
     fx: NanoFxState,
     fx_valid: bool,
-    fx_page: usize,
     amp_title: String,
 }
 
@@ -127,9 +126,6 @@ fn ensure() {
             };
             leave_tools(&app);
             app.set_chain(index);
-            if let Some(ui) = state().as_mut() {
-                ui.fx_page = 0;
-            }
             if index == 2 {
                 app.set_page(0);
                 show_amp_title();
@@ -239,7 +235,6 @@ fn ensure() {
     app.on_copy_tapped(move || crate::link::push_cmd(Cmd::Copy));
     app.on_library_tapped(move || crate::link::push_cmd(Cmd::Library));
     app.on_param_changed(move |cell, amount| send_fx_param(cell, amount));
-    app.on_param_paged(move |delta| page_fx(delta));
     app.on_layout_tapped({
         let weak = weak.clone();
         move |mode| {
@@ -270,7 +265,6 @@ fn ensure() {
         last_y: 0.0,
         fx: NanoFxState::zeroed(),
         fx_valid: false,
-        fx_page: 0,
         amp_title: String::from("Amp"),
     });
 }
@@ -516,7 +510,7 @@ pub fn show_tuner(note: &str, cents: &str, active: bool, has_pitch: bool, cents_
 pub fn show_chain(index: i32) {
     ensure();
     let ui = state().as_mut().unwrap();
-    ui.fx_page = 0;
+
     ui.app.set_chain(index);
     if index == 2 {
         ui.app.set_page(0);
@@ -650,7 +644,6 @@ fn paint_chain(ui: &mut State) {
 fn paint_fx_page(ui: &mut State) {
     let Some(idx) = fx_block_for_chain(ui.app.get_chain()) else {
         clear_fx_cells(&ui.app);
-        ui.app.set_fx_page("".into());
         return;
     };
     let block = ui.fx.blocks[idx];
@@ -664,19 +657,9 @@ fn paint_fx_page(ui: &mut State) {
     } else {
         0
     };
-    let pages = if count > 8 { (count + 7) / 8 } else { 1 };
-    if ui.fx_page >= pages {
-        ui.fx_page = 0;
-    }
-    let page_text = if count > 8 {
-        alloc::format!("{} / {}", ui.fx_page + 1, pages)
-    } else {
-        String::new()
-    };
-    ui.app.set_fx_page(page_text.as_str().into());
     let model = unsafe { block.model.as_ref() };
-    for cell in 0..8 {
-        let display_i = ui.fx_page * 8 + cell;
+    for cell in 0..crate::fx::types::NANO_FX_MAX_PARAMS {
+        let display_i = cell;
         let Some(model) = model else {
             set_fx_cell(&ui.app, cell, "-", "-", 0.0);
             continue;
@@ -705,32 +688,10 @@ fn paint_fx_page(ui: &mut State) {
     }
 }
 
-fn page_fx(delta: i32) {
-    let Some(ui) = state().as_mut() else {
-        return;
-    };
-    if !ui.fx_valid {
-        return;
-    }
-    let Some(idx) = fx_block_for_chain(ui.app.get_chain()) else {
-        return;
-    };
-    let count = ui.fx.blocks[idx].param_count as usize;
-    let pages = if count > 8 { (count + 7) / 8 } else { 1 };
-    let next = (ui.fx_page as i32 + delta).clamp(0, pages as i32 - 1) as usize;
-    if next == ui.fx_page {
-        return;
-    }
-    ui.fx_page = next;
-    paint_fx_page(ui);
-    ui.window.request_redraw();
-}
-
 fn send_fx_param(cell: i32, amount: f32) {
-    if !(0..8).contains(&cell) {
+    if !(0..crate::fx::types::NANO_FX_MAX_PARAMS as i32).contains(&cell) {
         return;
     }
-    let amount = amount.clamp(0.0, 1.0);
     let Some(ui) = state().as_mut() else {
         return;
     };
@@ -744,7 +705,7 @@ fn send_fx_param(cell: i32, amount: f32) {
     let Some(model) = (unsafe { block.model.as_ref() }) else {
         return;
     };
-    let display_i = ui.fx_page * 8 + cell as usize;
+    let display_i = cell as usize;
     if display_i >= block.param_count as usize {
         return;
     }
@@ -752,10 +713,12 @@ fn send_fx_param(cell: i32, amount: f32) {
     if wire >= block.param_count as usize {
         return;
     }
+    let amount = crate::fx::params::normalize_for_model(model, wire, amount);
     let name = crate::fx::models::param_name(model, wire);
     let mut painted = block;
     painted.params[wire].normalized = amount;
-    painted.params[wire].display = crate::fx::nano_fx_normalized_to_display(name, amount);
+    painted.params[wire].display =
+        crate::fx::params::normalized_to_display_for_model(model, wire, amount);
     painted.params[wire].valid = true;
     let value = crate::fx::nano_fx_format_param(&painted, wire as u8);
     let short = short_param_name(name);
@@ -786,7 +749,7 @@ fn short_param_name(full: &str) -> String {
 }
 
 fn clear_fx_cells(app: &AppWindow) {
-    for cell in 0..8 {
+    for cell in 0..crate::fx::types::NANO_FX_MAX_PARAMS {
         set_fx_cell(app, cell, "-", "-", 0.0);
     }
 }
@@ -802,6 +765,22 @@ fn set_fx_name(app: &AppWindow, cell: usize, name: &str) {
         5 => app.set_fx_n5(name),
         6 => app.set_fx_n6(name),
         7 => app.set_fx_n7(name),
+        8 => app.set_fx_n8(name),
+        9 => app.set_fx_n9(name),
+        10 => app.set_fx_n10(name),
+        11 => app.set_fx_n11(name),
+        12 => app.set_fx_n12(name),
+        13 => app.set_fx_n13(name),
+        14 => app.set_fx_n14(name),
+        15 => app.set_fx_n15(name),
+        16 => app.set_fx_n16(name),
+        17 => app.set_fx_n17(name),
+        18 => app.set_fx_n18(name),
+        19 => app.set_fx_n19(name),
+        20 => app.set_fx_n20(name),
+        21 => app.set_fx_n21(name),
+        22 => app.set_fx_n22(name),
+        23 => app.set_fx_n23(name),
         _ => {}
     }
 }
@@ -849,6 +828,86 @@ fn set_fx_cell(app: &AppWindow, cell: usize, name: &str, value: &str, amount: f3
             app.set_fx_n7(name);
             app.set_fx_v7(value);
             app.set_fx_a7(amount);
+        }
+        8 => {
+            app.set_fx_n8(name);
+            app.set_fx_v8(value);
+            app.set_fx_a8(amount);
+        }
+        9 => {
+            app.set_fx_n9(name);
+            app.set_fx_v9(value);
+            app.set_fx_a9(amount);
+        }
+        10 => {
+            app.set_fx_n10(name);
+            app.set_fx_v10(value);
+            app.set_fx_a10(amount);
+        }
+        11 => {
+            app.set_fx_n11(name);
+            app.set_fx_v11(value);
+            app.set_fx_a11(amount);
+        }
+        12 => {
+            app.set_fx_n12(name);
+            app.set_fx_v12(value);
+            app.set_fx_a12(amount);
+        }
+        13 => {
+            app.set_fx_n13(name);
+            app.set_fx_v13(value);
+            app.set_fx_a13(amount);
+        }
+        14 => {
+            app.set_fx_n14(name);
+            app.set_fx_v14(value);
+            app.set_fx_a14(amount);
+        }
+        15 => {
+            app.set_fx_n15(name);
+            app.set_fx_v15(value);
+            app.set_fx_a15(amount);
+        }
+        16 => {
+            app.set_fx_n16(name);
+            app.set_fx_v16(value);
+            app.set_fx_a16(amount);
+        }
+        17 => {
+            app.set_fx_n17(name);
+            app.set_fx_v17(value);
+            app.set_fx_a17(amount);
+        }
+        18 => {
+            app.set_fx_n18(name);
+            app.set_fx_v18(value);
+            app.set_fx_a18(amount);
+        }
+        19 => {
+            app.set_fx_n19(name);
+            app.set_fx_v19(value);
+            app.set_fx_a19(amount);
+        }
+        20 => {
+            app.set_fx_n20(name);
+            app.set_fx_v20(value);
+            app.set_fx_a20(amount);
+        }
+        21 => {
+            app.set_fx_n21(name);
+            app.set_fx_v21(value);
+            app.set_fx_a21(amount);
+        }
+        22 => {
+            app.set_fx_n22(name);
+            app.set_fx_v22(value);
+            app.set_fx_a22(amount);
+        }
+        23 => {
+            app.set_fx_n23(name);
+            app.set_fx_v23(value);
+            app.set_fx_a23(amount);
         }
         _ => {}
     }
