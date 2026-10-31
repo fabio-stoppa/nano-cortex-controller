@@ -1,6 +1,11 @@
 // Landscape matches the 800×480 scan. Portrait moves the chain to the top and
 // the firmware rotates that taller layout into the same framebuffer.
 
+// The software renderer embeds only fonts it can resolve at build time, so the
+// faces are bundled explicitly.
+import "fonts/IBMPlexSans-Regular.ttf";
+import "fonts/IBMPlexSans-Bold.ttf";
+
 component ParamCell inherits Rectangle {
     in property <string> name;
     in property <string> value: "-";
@@ -1058,6 +1063,7 @@ export component AppWindow inherits Window {
     callback library-tapped();
 
     background: #000000;
+    default-font-family: "IBM Plex Sans";
     default-font-size: 16px;
 
     VerticalLayout {
