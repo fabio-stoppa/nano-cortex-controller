@@ -65,6 +65,24 @@ cd crates/nano-wire && cargo +stable test --target x86_64-unknown-linux-gnu
 - Disconnect **Cortex Cloud** before connecting — one BLE client at a time.
 - Back up presets in the official app before writing from custom firmware.
 
+## Screen flicker and scan diagnostics
+
+The RGB panel is scanned from six 10-line DRAM strips that an interrupt refills from the PSRAM framebuffer (`firmware/src/bounce.rs`). When that interrupt ran late, usually during BLE traffic, a strip was scanned with stale lines and the screen flickered.
+
+Fixes:
+
+- The refill refills up to 3 stale strips per interrupt (`MAX_REFILLS_PER_IRQ`) so it catches up after a delay.
+- The scan interrupts (`DMA_OUT_CH0`, `LCD_CAM`) run on the second core. Slint, touch and BLE stay on the first core, because esp-radio pins the controller there.
+
+Diagnostics: about once a second the serial log prints `scan glitch: ...` when a counter moved.
+
+- `stale_scan` — a strip was scanned with the wrong lines (the visible flicker)
+- `stale_next` — the strip after it was already stale
+- `multi_strip` / `max_gap` — interrupts that arrived after several strips had finished, and the largest gap
+- `race_skip` — a refill was abandoned because the panel reached the buffer first
+
+On a healthy build `stale_scan` stays near zero, including during the amp state download.
+
 ## Credits
 
 - [Builty](https://github.com/Builty/TonexOneController) — Tonex One controller. The Waveshare control surface this kind of board grew from.

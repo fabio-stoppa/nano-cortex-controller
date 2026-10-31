@@ -30,6 +30,8 @@ pub const BYTES: usize = WIDTH * HEIGHT * 2;
 const N_BUFS: usize = 6;
 const N_LINES_PER_HALF: usize = 10;
 const HALF_BYTES: usize = N_LINES_PER_HALF * WIDTH * 2;
+/// Upper bound on strip copies per interrupt, so catch-up cannot starve the radio.
+const MAX_REFILLS_PER_IRQ: usize = 3;
 const CHUNK: usize = 4032;
 const DESC_PER_HALF: usize = HALF_BYTES.div_ceil(CHUNK);
 const HALVES_PER_FRAME: usize = BYTES / HALF_BYTES;
@@ -58,6 +60,40 @@ static EOF_COUNT: AtomicU32 = AtomicU32::new(0);
 static PHASE_FIXED: AtomicU32 = AtomicU32::new(0);
 /// Framebuffer strip currently stored in each DMA buffer.
 static BUFFER_STRIP: [AtomicU32; N_BUFS] = [const { AtomicU32::new(0) }; N_BUFS];
+
+/// Scan-out health counters, written from the ISRs with relaxed atomics.
+/// `STALE_SCAN` is the one that matches a visible glitch: the strip about to be
+/// scanned did not hold the lines it should.
+static DIAG_STALE_SCAN: AtomicU32 = AtomicU32::new(0);
+static DIAG_STALE_NEXT: AtomicU32 = AtomicU32::new(0);
+static DIAG_MULTI_STRIP: AtomicU32 = AtomicU32::new(0);
+static DIAG_MAX_GAP: AtomicU32 = AtomicU32::new(0);
+static DIAG_RACE_SKIP: AtomicU32 = AtomicU32::new(0);
+static DIAG_LAST_FINISHED: AtomicU32 = AtomicU32::new(u32::MAX);
+static DIAG_FRAMES: AtomicU32 = AtomicU32::new(0);
+static DIAG_REPORTED: [AtomicU32; 6] = [const { AtomicU32::new(0) }; 6];
+
+/// Log the counters when any glitch indicator moved since the last call.
+pub fn report_diagnostics() {
+    let now = [
+        DIAG_STALE_SCAN.load(Ordering::Relaxed),
+        DIAG_STALE_NEXT.load(Ordering::Relaxed),
+        DIAG_MULTI_STRIP.load(Ordering::Relaxed),
+        DIAG_RACE_SKIP.load(Ordering::Relaxed),
+        DIAG_MAX_GAP.load(Ordering::Relaxed),
+        DIAG_FRAMES.load(Ordering::Relaxed),
+    ];
+    let changed = (0..4).any(|i| now[i] != DIAG_REPORTED[i].load(Ordering::Relaxed));
+    if changed {
+        log::warn!(
+            "scan glitch: stale_scan={} stale_next={} multi_strip={} race_skip={} max_gap={} frames={} eof={}",
+            now[0], now[1], now[2], now[3], now[4], now[5], eof_count()
+        );
+    }
+    for (slot, value) in DIAG_REPORTED.iter().zip(now) {
+        slot.store(value, Ordering::Relaxed);
+    }
+}
 
 pub struct Framebuffer {
     ptr: *mut u8,
@@ -200,6 +236,24 @@ pub unsafe fn enable_eof_interrupt() {
         .modify(|_, w| w.lcd_vsync_int_ena().set_bit());
 }
 
+/// Move the scan interrupts from the core that started the scan to the core
+/// calling this. Radio and scheduler critical sections on the first core then
+/// cannot delay the strip refill.
+///
+/// The first core's mapping goes first, so no refill runs on both cores. A
+/// level interrupt that fires in between stays pending until it is mapped here.
+pub fn claim_interrupts_on_this_core() {
+    use esp_hal::interrupt::{disable, enable, CpuInterrupt};
+    use esp_hal::system::Cpu;
+    for line in [Interrupt::DMA_OUT_CH0, Interrupt::LCD_CAM] {
+        disable(Cpu::ProCpu, line);
+    }
+    CpuInterrupt::Interrupt23LevelPriority3.enable();
+    for line in [Interrupt::DMA_OUT_CH0, Interrupt::LCD_CAM] {
+        enable(line, Priority::Priority3);
+    }
+}
+
 // The handler touches PSRAM. It has to live in IRAM: a flash-resident ISR
 // faults with an illegal instruction once the radio uses the cache.
 #[ram]
@@ -245,7 +299,31 @@ fn eof_isr() {
         return;
     };
     EOF_COUNT.fetch_add(1, Ordering::Relaxed);
+    diagnose(finished);
     refill_through(framebuffer, finished);
+}
+
+/// Check, before refilling, that the buffers the panel scans next hold the
+/// strips they should, and track how many strips went by between interrupts.
+#[ram]
+fn diagnose(finished: usize) {
+    let last = DIAG_LAST_FINISHED.swap(finished as u32, Ordering::Relaxed);
+    if last != u32::MAX {
+        let gap = ((finished + HALVES_PER_FRAME - last as usize) % HALVES_PER_FRAME) as u32;
+        if gap > 1 {
+            DIAG_MULTI_STRIP.fetch_add(1, Ordering::Relaxed);
+            DIAG_MAX_GAP.fetch_max(gap, Ordering::Relaxed);
+        }
+    }
+    let scanning = finished + 1;
+    let expect = scanning % HALVES_PER_FRAME;
+    if BUFFER_STRIP[scanning % N_BUFS].load(Ordering::Relaxed) != expect as u32 {
+        DIAG_STALE_SCAN.fetch_add(1, Ordering::Relaxed);
+    }
+    let coming = (finished + 2) % HALVES_PER_FRAME;
+    if BUFFER_STRIP[(finished + 2) % N_BUFS].load(Ordering::Relaxed) != coming as u32 {
+        DIAG_STALE_NEXT.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// Refill stale buffers with the strip for their next scheduled use.
@@ -259,6 +337,7 @@ fn refill_through(framebuffer: *mut u8, finished: usize) {
     let bounce = ptr::addr_of_mut!(BOUNCE) as *mut u8;
     let mut now = finished_half().unwrap_or(finished);
     let first_buffer = now % N_BUFS;
+    let mut refilled = 0;
     for offset in 0..N_BUFS {
         let buf = (first_buffer + offset) % N_BUFS;
         let strip = next_strip_for_buffer(now, buf);
@@ -288,13 +367,19 @@ fn refill_through(framebuffer: *mut u8, finished: usize) {
             || buf == (now + 2) % N_BUFS
             || next_strip_for_buffer(now, buf) != strip
         {
+            DIAG_RACE_SKIP.fetch_add(1, Ordering::Relaxed);
             continue;
         }
         unsafe {
             copy_half_at(shadow, bounce.add(buf * HALF_BYTES));
         }
         BUFFER_STRIP[buf].store(strip as u32, Ordering::Relaxed);
-        return;
+        // After a delayed interrupt several buffers are stale at once; fix a
+        // bounded number now instead of one per interrupt.
+        refilled += 1;
+        if refilled >= MAX_REFILLS_PER_IRQ {
+            return;
+        }
     }
 }
 
@@ -321,6 +406,7 @@ fn vsync_isr() {
     lcd.lc_dma_int_clr()
         .write(|w| w.lcd_vsync_int_clr().set_bit());
 
+    DIAG_FRAMES.fetch_add(1, Ordering::Relaxed);
     if PHASE_FIXED.load(Ordering::Relaxed) != 0 {
         return;
     }

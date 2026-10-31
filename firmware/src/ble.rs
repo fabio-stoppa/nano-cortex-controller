@@ -618,7 +618,12 @@ fn log_pkt(label: &str, data: &[u8], packet_number: Option<u32>) {
 }
 
 async fn touch_loop(board: &mut Board<'_>) {
+    let mut tick = 0u32;
     loop {
+        tick = tick.wrapping_add(1);
+        if tick % 20 == 0 {
+            crate::bounce::report_diagnostics();
+        }
         match board.touch.get_touch(&mut board.i2c) {
             Ok(Some(point)) => {
                 crate::ui::pointer(&mut board.framebuffer, Some((point.x, point.y)));

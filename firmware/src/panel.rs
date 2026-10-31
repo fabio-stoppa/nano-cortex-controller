@@ -40,10 +40,16 @@ pub struct Board<'d> {
 /// Peripherals the panel does not use. The radio takes the Bluetooth one.
 pub struct Rest {
     pub bt: esp_hal::peripherals::BT<'static>,
+    pub cpu_ctrl: esp_hal::peripherals::CPU_CTRL<'static>,
+    pub cpu_intr1: esp_hal::peripherals::FROM_CPU_INTR1<'static>,
 }
 
 pub fn init(p: Peripherals) -> Result<(Board<'static>, Rest), &'static str> {
-    let rest = Rest { bt: p.BT };
+    let rest = Rest {
+        bt: p.BT,
+        cpu_ctrl: p.CPU_CTRL,
+        cpu_intr1: p.FROM_CPU_INTR1,
+    };
     let timg0 = TimerGroup::new(p.TIMG0);
     esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
     log::info!("scheduler up");

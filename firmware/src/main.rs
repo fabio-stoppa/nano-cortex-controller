@@ -30,6 +30,8 @@ use esp_backtrace as _;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
+static mut APP_CORE_STACK: esp_hal::system::Stack<4096> = esp_hal::system::Stack::new();
+
 #[esp_rtos::main]
 async fn main(_spawner: Spawner) {
     let peripherals =
@@ -43,6 +45,14 @@ async fn main(_spawner: Spawner) {
     // The controller task stack and its exchange memory come from here.
     esp_alloc::heap_allocator!(size: 72 * 1024);
     log::info!("panel up (800x480, GT911)");
+    // The second core only services the scan interrupts; the radio stays on
+    // the first core.
+    esp_rtos::start_second_core(
+        rest.cpu_ctrl,
+        rest.cpu_intr1,
+        unsafe { &mut *core::ptr::addr_of_mut!(APP_CORE_STACK) },
+        bounce::claim_interrupts_on_this_core,
+    );
     esp_hal::delay::Delay::new().delay_millis(100);
     log::info!("bounce refills={}", bounce::eof_count());
     ui::frame(&mut board.framebuffer);
