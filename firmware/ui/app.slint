@@ -892,7 +892,7 @@ component LayoutChoice inherits Rectangle {
 component ConnectingOverlay inherits Rectangle {
     in property <int> layout-mode;
     callback layout-tapped(int);
-    background: #121212;
+    background: #000000;
     TouchArea {}
     VerticalLayout {
         alignment: center;
@@ -1057,7 +1057,7 @@ export component AppWindow inherits Window {
     callback copy-tapped();
     callback library-tapped();
 
-    background: #121212;
+    background: #000000;
     default-font-size: 16px;
 
     VerticalLayout {
