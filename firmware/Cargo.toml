@@ -18,6 +18,7 @@ esp-backtrace = { git = "https://github.com/esp-rs/esp-hal", tag = "esp-hal-v1.2
 esp-bootloader-esp-idf = { git = "https://github.com/esp-rs/esp-hal", tag = "esp-hal-v1.2.2", features = ["esp32s3"] }
 esp-hal = { git = "https://github.com/esp-rs/esp-hal", tag = "esp-hal-v1.2.2", features = ["esp32s3", "unstable"] }
 esp-println = { git = "https://github.com/esp-rs/esp-hal", tag = "esp-hal-v1.2.2", features = ["esp32s3", "log-04"] }
+esp-storage = { git = "https://github.com/esp-rs/esp-hal", tag = "esp-hal-v1.2.2", features = ["esp32s3"] }
 esp-radio = { git = "https://github.com/esp-rs/esp-hal", tag = "esp-hal-v1.2.2", features = ["esp32s3", "ble", "unstable", "log-04"] }
 esp-rtos = { git = "https://github.com/esp-rs/esp-hal", tag = "esp-hal-v1.2.2", features = ["esp32s3", "embassy", "esp-radio", "log-04"] }
 bt-hci = "0.9"

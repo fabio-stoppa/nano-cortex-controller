@@ -117,6 +117,9 @@ fn ensure() {
     .expect("slint platform");
 
     let app = AppWindow::new().expect("slint ui");
+    if let Some(mode) = crate::settings::load_layout() {
+        app.set_layout_mode(mode);
+    }
     let weak = app.as_weak();
     app.on_chain_tapped({
         let weak = weak.clone();
@@ -240,6 +243,7 @@ fn ensure() {
         move |mode| {
             if let Some(app) = weak.upgrade() {
                 app.set_layout_mode(mode);
+                crate::settings::save_layout(mode);
             }
         }
     });

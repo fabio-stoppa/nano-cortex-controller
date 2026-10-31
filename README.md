@@ -83,6 +83,8 @@ Diagnostics are off by default. Build with `firmware/build.sh --features scan-di
 
 On a healthy build `stale_scan` stays near zero, including during the amp state download.
 
+The selected screen layout is stored in the first sector of the `nvs` partition (`firmware/src/settings.rs`) and restored at boot.
+
 ## Credits
 
 - [Builty](https://github.com/Builty/TonexOneController) — Tonex One controller. The Waveshare control surface this kind of board grew from.

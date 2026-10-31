@@ -20,6 +20,7 @@ mod link;
 mod memsafe;
 mod panel;
 mod screen;
+mod settings;
 mod state;
 mod syncutil;
 mod tuner;

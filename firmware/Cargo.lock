@@ -3554,6 +3554,7 @@ dependencies = [
  "esp-println",
  "esp-radio",
  "esp-rtos",
+ "esp-storage",
  "gt911",
  "libm",
  "log",
