@@ -62,7 +62,7 @@ do_flash() {
         exit 1
     fi
     echo "--- flash ($profile) → $port ---"
-    espflash flash --port "$port" --baud 921600 --flash-freq 80mhz "$elf"
+    espflash flash --port "$port" --baud 115200 --flash-freq 80mhz "$elf"
 }
 
 do_monitor() {
@@ -82,7 +82,7 @@ do_run() {
     local elf
     elf="$(elf_path "$profile")"
     echo "--- flash + monitor ($profile) → $port ---"
-    espflash flash --port "$port" --baud 921600 --flash-freq 80mhz --monitor "$elf"
+    espflash flash --port "$port" --baud 115200 --flash-freq 80mhz --monitor "$elf"
 }
 
 # ---------------------------------------------------------------------------
