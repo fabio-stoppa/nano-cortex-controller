@@ -5,8 +5,9 @@
 //! C304, and subscribes to C305 notify. C306 is the indicate mirror of C305
 //! and is left unsubscribed. FootCtrl / FootCtrlPlus use the BLE-MIDI service.
 //! The notify queue is 16 deep: each slot is 512 bytes and sits on the main
-//! stack beside the controller's static buffers.
+//! heap-backed GATT client so it does not inflate the main task's stack.
 
+use alloc::boxed::Box;
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetDataLength, LeSetScanParams};
 use bt_hci::controller::ControllerCmdSync;
 use embassy_futures::join::join3;
@@ -84,7 +85,8 @@ impl EventHandler for Hunt {
             };
             let addr = Address::new(report.addr_kind, report.addr);
             if name.starts_with(NANO_PREFIX) && self.nano_armed.swap(false, Ordering::Relaxed) {
-                log::info!("found Nano Cortex");
+                log::info!("found Nano Cortex at {addr}");
+                log_pkt("Nano advertisement", report.data, None);
                 self.nano.signal(addr);
             } else if (eq_ignore_ascii_case(name, FOOT_PLUS) || eq_ignore_ascii_case(name, FOOT))
                 && self.foot_armed.swap(false, Ordering::Relaxed)
@@ -212,6 +214,7 @@ where
             return;
         }
     };
+    let client = Box::new(client);
     log::info!("nano ATT MTU {}", conn.att_mtu());
 
     let _ = join3(
@@ -239,6 +242,11 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
         log::info!("C306 handle {} left unsubscribed", c306.handle);
     }
     log::info!("C304 handle {} C305 handle {}", c304.handle, c305.handle);
+    let c304_no_rsp = c304.props.any(&[CharacteristicProp::WriteWithoutResponse]);
+    log::info!(
+        "C304 write without response {}",
+        if c304_no_rsp { "yes" } else { "no" }
+    );
 
     let mut listener = match client.subscribe(&c305, false).await {
         Ok(listener) => listener,
@@ -252,13 +260,16 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
     let n = nano_wire::editor::read_settings_payload(&mut payload);
     if n > 0 {
         match client.write_handle(c304.handle, &payload[..n]).await {
-            Ok(()) => log::info!("C304 read-settings write ({n} bytes)"),
+            Ok(()) => {
+                log::info!("C304 read-settings write ({n} bytes)");
+                log_pkt("C304 TX settings", &payload[..n], None);
+            }
             Err(_) => log::warn!("C304 write failed"),
         }
     }
     crate::state::nano_state_reset();
     crate::state::nano_state_begin_sync();
-    flush_writes(client, c304.handle).await;
+    flush_writes(client, c304.handle, c304_no_rsp).await;
 
     let mut seen = 0u32;
     loop {
@@ -271,7 +282,7 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
             Ok(Either::First(note)) => {
                 seen = seen.wrapping_add(1);
                 if seen <= 4 || seen % 32 == 0 {
-                    log_pkt("C305", note.as_ref(), seen);
+                    log_pkt("C305 RX", note.as_ref(), Some(seen));
                 }
                 crate::state::feed_c305_bytes(note.as_ref());
             }
@@ -279,8 +290,19 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
                 let mut buf = [0u8; 24];
                 let n = slider_payload(write, &mut buf);
                 if n > 0 {
-                    match client.write_handle(c304.handle, &buf[..n]).await {
-                        Ok(()) => log::info!("slider {} = {}", write.id, write.raw),
+                    let result = if c304_no_rsp && nano_wire::editor::is_live_value_write(&buf[..n])
+                    {
+                        client
+                            .write_handle_without_response(c304.handle, &buf[..n])
+                            .await
+                    } else {
+                        client.write_handle(c304.handle, &buf[..n]).await
+                    };
+                    match result {
+                        Ok(()) => {
+                            log::info!("slider {} = {}", write.id, write.raw);
+                            log_pkt("C304 TX slider", &buf[..n], None);
+                        }
                         Err(_) => log::warn!("slider write failed"),
                     }
                 }
@@ -298,7 +320,7 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
             );
         }
         crate::state::poll();
-        flush_writes(client, c304.handle).await;
+        flush_writes(client, c304.handle, c304_no_rsp).await;
     }
 }
 
@@ -379,10 +401,19 @@ fn step_model(block: u8, delta: i8) {
 async fn flush_writes<C: Controller, P: PacketPool>(
     client: &GattClient<'_, C, P, 8>,
     handle: u16,
+    no_response_supported: bool,
 ) {
     while let Some(packet) = crate::link::pop_write() {
-        match client.write_handle(handle, &packet).await {
-            Ok(()) => log::info!("C304 write {} bytes", packet.len()),
+        let result = if no_response_supported && nano_wire::editor::is_live_value_write(&packet) {
+            client.write_handle_without_response(handle, &packet).await
+        } else {
+            client.write_handle(handle, &packet).await
+        };
+        match result {
+            Ok(()) => {
+                log::info!("C304 write {} bytes", packet.len());
+                log_pkt("C304 TX", &packet, None);
+            }
             Err(_) => log::warn!("C304 write failed"),
         }
     }
@@ -431,6 +462,7 @@ async fn foot_link<C: Controller>(stack: &Stack<'_, C, DefaultPacketPool>, addr:
             return;
         }
     };
+    let client = Box::new(client);
 
     let _ = embassy_futures::join::join(
         async {
@@ -477,7 +509,7 @@ async fn foot_link<C: Controller>(stack: &Stack<'_, C, DefaultPacketPool>, addr:
                 let note = listener.next().await;
                 seen = seen.wrapping_add(1);
                 if seen <= 4 || seen % 32 == 0 {
-                    log_pkt("midi", note.as_ref(), seen);
+                    log_pkt("MIDI RX", note.as_ref(), Some(seen));
                 }
             }
         },
@@ -565,19 +597,24 @@ fn eq_ignore_ascii_case(a: &[u8], b: &[u8]) -> bool {
             .all(|(x, y)| x.to_ascii_lowercase() == y.to_ascii_lowercase())
 }
 
-fn log_pkt(label: &str, data: &[u8], n: u32) {
-    let mut hex = [0u8; 24];
-    let show = data.len().min(8);
+fn log_pkt(label: &str, data: &[u8], packet_number: Option<u32>) {
     let digits = b"0123456789ABCDEF";
-    let mut o = 0;
-    for b in &data[..show] {
-        hex[o] = digits[(b >> 4) as usize];
-        hex[o + 1] = digits[(b & 0x0f) as usize];
-        hex[o + 2] = b' ';
-        o += 3;
+    for (chunk_index, chunk) in data.chunks(16).enumerate() {
+        let mut hex = [0u8; 48];
+        let mut o = 0;
+        for b in chunk {
+            hex[o] = digits[(b >> 4) as usize];
+            hex[o + 1] = digits[(b & 0x0f) as usize];
+            hex[o + 2] = b' ';
+            o += 3;
+        }
+        let text = core::str::from_utf8(&hex[..o]).unwrap_or("");
+        let offset = chunk_index * 16;
+        match packet_number {
+            Some(n) => log::info!("{label} #{n} len={} offset={offset} {text}", data.len()),
+            None => log::info!("{label} len={} offset={offset} {text}", data.len()),
+        }
     }
-    let text = core::str::from_utf8(&hex[..o]).unwrap_or("");
-    log::info!("{label} #{n} len={} {text}", data.len());
 }
 
 async fn touch_loop(board: &mut Board<'_>) {
