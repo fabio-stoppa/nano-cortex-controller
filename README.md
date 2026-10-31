@@ -74,7 +74,7 @@ Fixes:
 - The refill refills up to 3 stale strips per interrupt (`MAX_REFILLS_PER_IRQ`) so it catches up after a delay.
 - The scan interrupts (`DMA_OUT_CH0`, `LCD_CAM`) run on the second core. Slint, touch and BLE stay on the first core, because esp-radio pins the controller there.
 
-Diagnostics: about once a second the serial log prints `scan glitch: ...` when a counter moved.
+Diagnostics are off by default. Build with `firmware/build.sh --features scan-diag` and about once a second the serial log prints `scan glitch: ...` when a counter moved.
 
 - `stale_scan` — a strip was scanned with the wrong lines (the visible flicker)
 - `stale_next` — the strip after it was already stale

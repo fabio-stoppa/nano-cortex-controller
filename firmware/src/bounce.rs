@@ -61,19 +61,29 @@ static PHASE_FIXED: AtomicU32 = AtomicU32::new(0);
 /// Framebuffer strip currently stored in each DMA buffer.
 static BUFFER_STRIP: [AtomicU32; N_BUFS] = [const { AtomicU32::new(0) }; N_BUFS];
 
-/// Scan-out health counters, written from the ISRs with relaxed atomics.
+/// Scan-out health counters, built only with the `scan-diag` feature.
+/// written from the ISRs with relaxed atomics.
 /// `STALE_SCAN` is the one that matches a visible glitch: the strip about to be
 /// scanned did not hold the lines it should.
+#[cfg(feature = "scan-diag")]
 static DIAG_STALE_SCAN: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "scan-diag")]
 static DIAG_STALE_NEXT: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "scan-diag")]
 static DIAG_MULTI_STRIP: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "scan-diag")]
 static DIAG_MAX_GAP: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "scan-diag")]
 static DIAG_RACE_SKIP: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "scan-diag")]
 static DIAG_LAST_FINISHED: AtomicU32 = AtomicU32::new(u32::MAX);
+#[cfg(feature = "scan-diag")]
 static DIAG_FRAMES: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "scan-diag")]
 static DIAG_REPORTED: [AtomicU32; 6] = [const { AtomicU32::new(0) }; 6];
 
 /// Log the counters when any glitch indicator moved since the last call.
+#[cfg(feature = "scan-diag")]
 pub fn report_diagnostics() {
     let now = [
         DIAG_STALE_SCAN.load(Ordering::Relaxed),
@@ -299,12 +309,14 @@ fn eof_isr() {
         return;
     };
     EOF_COUNT.fetch_add(1, Ordering::Relaxed);
+    #[cfg(feature = "scan-diag")]
     diagnose(finished);
     refill_through(framebuffer, finished);
 }
 
 /// Check, before refilling, that the buffers the panel scans next hold the
 /// strips they should, and track how many strips went by between interrupts.
+#[cfg(feature = "scan-diag")]
 #[ram]
 fn diagnose(finished: usize) {
     let last = DIAG_LAST_FINISHED.swap(finished as u32, Ordering::Relaxed);
@@ -367,6 +379,7 @@ fn refill_through(framebuffer: *mut u8, finished: usize) {
             || buf == (now + 2) % N_BUFS
             || next_strip_for_buffer(now, buf) != strip
         {
+            #[cfg(feature = "scan-diag")]
             DIAG_RACE_SKIP.fetch_add(1, Ordering::Relaxed);
             continue;
         }
@@ -406,6 +419,7 @@ fn vsync_isr() {
     lcd.lc_dma_int_clr()
         .write(|w| w.lcd_vsync_int_clr().set_bit());
 
+    #[cfg(feature = "scan-diag")]
     DIAG_FRAMES.fetch_add(1, Ordering::Relaxed);
     if PHASE_FIXED.load(Ordering::Relaxed) != 0 {
         return;
