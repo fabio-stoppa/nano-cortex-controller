@@ -303,16 +303,22 @@ impl LineBufferProvider for PartialLines {
 
 fn redraw(framebuffer: &mut Framebuffer) {
     let ui = state().as_mut().unwrap();
-    apply_layout(ui);
+    let layout_changed = apply_layout(ui);
     slint::platform::update_timers_and_animations();
+    // The old layout's pixels are still in the framebuffer, and a rotation
+    // change alone does not mark them dirty. Repaint the whole frame once.
     let rotation = ui.rotation;
     let fb = framebuffer.as_pixels_mut().as_mut_ptr().cast::<Rgb565Pixel>();
     ui.window.draw_if_needed(|renderer| {
         renderer.set_rendering_rotation(rotation);
+        if layout_changed {
+            renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+        }
         renderer.render_by_line(PartialLines {
             fb,
             line: [Rgb565Pixel(0); WIDTH],
         });
+        renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
     });
 }
 
@@ -931,7 +937,8 @@ fn pct(raw: u8) -> u16 {
     u16::from(raw) * 100 / 255
 }
 
-fn apply_layout(ui: &mut State) {
+/// Returns true when the layout changed, so the caller repaints every pixel.
+fn apply_layout(ui: &mut State) -> bool {
     let mode = ui.app.get_layout_mode();
     let (width, height, rotation, portrait) = match mode {
         1 => (
@@ -960,13 +967,14 @@ fn apply_layout(ui: &mut State) {
         ),
     };
     if ui.rotation == rotation {
-        return;
+        return false;
     }
     ui.rotation = rotation;
     ui.app.set_portrait(portrait);
     ui.window
         .set_size(PhysicalSize::new(width as u32, height as u32));
     ui.window.request_redraw();
+    true
 }
 
 const FINGER_HOLD: Duration = Duration::from_millis(500);
