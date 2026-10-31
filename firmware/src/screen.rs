@@ -55,7 +55,7 @@ pub fn nano_ui_set_tuner(tuner: &NanoTunerC) {
             alloc::format!("{:+.1} ct", cents_f),
         )
     } else {
-        ("...", String::new())
+        ("", String::new())
     };
     crate::ui::show_tuner(note, &cents, tuner.active, tuner.has_pitch, cents_f);
 }

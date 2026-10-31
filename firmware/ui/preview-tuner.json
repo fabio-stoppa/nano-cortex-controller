@@ -1,0 +1,13 @@
+{
+  "page": 2,
+  "tuner-active": true,
+  "tuner-has-pitch": true,
+  "tuner-in-tune": false,
+  "tuner-note": "E",
+  "tuner-cents": "+12.0 ct",
+  "tuner-pos": 0.62,
+  "tuner-reference": "440 Hz",
+  "tuner-reference-hz": 440,
+  "tuner-muted": false,
+  "connecting": false
+}

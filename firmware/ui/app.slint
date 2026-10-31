@@ -855,7 +855,7 @@ component TunerPanel inherits Rectangle {
     }
     for row in 5: Rectangle {
         x: (parent.width - self.width) / 2;
-        y: 116px - row * 3px;
+        y: 124px - row * 3px;
         width: 22px - row * 4px;
         height: 3px;
         background: #9af5a8;
@@ -879,17 +879,19 @@ component TunerPanel inherits Rectangle {
             y: 0px;
             width: 9px;
             height: 100%;
-            background: has-pitch ? note-color : #45f862;
+            visible: has-pitch;
+            background: note-color;
             border-radius: 2px;
         }
     }
 
     Text {
-        y: 168px;
+        y: 138px;
         width: parent.width;
-        height: parent.height - 168px - 72px - 8px;
+        height: parent.height - 230px;
         text: note;
         color: note-color;
+        font-family: "IBM Plex Sans";
         font-size: 230px;
         font-weight: 900;
         horizontal-alignment: center;
@@ -947,39 +949,54 @@ component TunerPanel inherits Rectangle {
         y: parent.height - 72px;
         width: 260px;
         height: 56px;
+        Rectangle {
+            x: 0px;
+            width: 44px;
+            height: 44px;
+            y: (parent.height - self.height) / 2;
+            background: #3a3d40;
+            border-radius: 8px;
+            Text {
+                text: "-";
+                color: #f2f2f2;
+                font-size: 30px;
+                font-weight: 900;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            TouchArea {
+                clicked => { root.reference-set(round(root.reference-hz) + (-1)); }
+            }
+        }
+        Rectangle {
+            x: 216px;
+            width: 44px;
+            height: 44px;
+            y: (parent.height - self.height) / 2;
+            background: #3a3d40;
+            border-radius: 8px;
+            Text {
+                text: "+";
+                color: #f2f2f2;
+                font-size: 30px;
+                font-weight: 900;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            TouchArea {
+                clicked => { root.reference-set(round(root.reference-hz) + (1)); }
+            }
+        }
         Text {
-            x: parent.width - 100px;
-            width: 100px;
+            x: 52px;
+            width: 156px;
             height: 100%;
             text: reference;
             color: #f2f2f2;
             font-size: 24px;
             font-weight: 900;
+            horizontal-alignment: center;
             vertical-alignment: center;
-        }
-        Rectangle {
-            x: 0px;
-            width: parent.width - 108px;
-            height: 28px;
-            y: (parent.height - self.height) / 2;
-            background: #1e1e1e;
-            border-color: #707070;
-            border-width: 1px;
-            border-radius: 4px;
-            Rectangle {
-                x: 0px;
-                width: parent.width * clamp((reference-hz - 400) / 80, 0, 1);
-                height: 100%;
-                background: #b8c0c8;
-                border-radius: 3px;
-            }
-        }
-        TouchArea {
-            pointer-event(event) => {
-                if (event.kind == PointerEventKind.down || event.kind == PointerEventKind.move) {
-                    root.reference-set(round(400 + 80 * clamp((self.mouse-x - 14px) / max(self.width - 108px - 28px, 1px), 0, 1)));
-                }
-            }
         }
     }
     Rectangle {
@@ -1308,6 +1325,9 @@ export component AppWindow inherits Window {
     callback copy-tapped();
     callback library-tapped();
 
+    // 4.3B panel size; the firmware overrides it with set_size().
+    preferred-width: 800px;
+    preferred-height: 480px;
     background: #000000;
     default-font-family: "IBM Plex Sans";
     default-font-size: 17px;
