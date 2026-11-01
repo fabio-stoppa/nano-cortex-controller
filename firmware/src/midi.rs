@@ -34,7 +34,8 @@ const MODEL_START: usize = USB_PLAYBACK + 1;
 const PRESET_START: usize = MODEL_START + BLOCKS * 2;
 const CAPTURE_START: usize = PRESET_START + 64;
 const MUTE_START: usize = CAPTURE_START + 25;
-pub const ACTION_COUNT: usize = MUTE_START + 6;
+const BANK_START: usize = MUTE_START + 6;
+pub const ACTION_COUNT: usize = BANK_START + 14;
 
 const BLOCK_NAMES: [&str; BLOCKS] = [
     "Pre FX 1",
@@ -138,7 +139,7 @@ pub fn action_name(index: usize) -> String {
         format!("Select preset {}", index - PRESET_START + 1)
     } else if index < MUTE_START {
         format!("Select capture {}", index - CAPTURE_START + 1)
-    } else {
+    } else if index < BANK_START {
         String::from(
             [
                 "Mute input",
@@ -149,6 +150,12 @@ pub fn action_name(index: usize) -> String {
                 "Unmute tuner output",
             ][index - MUTE_START],
         )
+    } else if index < BANK_START + 2 {
+        String::from(if index == BANK_START { "Next bank" } else { "Previous bank" })
+    } else if index < BANK_START + 6 {
+        format!("Recall bank slot {}", index - BANK_START - 1)
+    } else {
+        format!("Select bank {}", index - BANK_START - 5)
     }
 }
 
@@ -201,7 +208,7 @@ pub fn load() {
             false
         }
     };
-    if let Some(keys) = crate::settings::load_midi(ACTION_COUNT) {
+    if let Some(keys) = crate::settings::load_midi(ACTION_COUNT.min(256)) {
         TABLE.lock(|t| {
             let mut t = t.borrow_mut();
             for (slot, key) in t.keys.iter_mut().zip(keys) {
@@ -580,7 +587,7 @@ pub fn command(index: usize, value: u8, continuous: bool) -> Option<Cmd> {
         Some(Cmd::PresetAt((index - PRESET_START + 1) as u8))
     } else if index < MUTE_START {
         Some(Cmd::CaptureAt((index - CAPTURE_START + 1) as u8))
-    } else {
+    } else if index < BANK_START {
         let n = index - MUTE_START;
         if n < 4 {
             Some(Cmd::Mute {
@@ -590,6 +597,12 @@ pub fn command(index: usize, value: u8, continuous: bool) -> Option<Cmd> {
         } else {
             Some(Cmd::TunerOutputMute(n == 4))
         }
+    } else if index < BANK_START + 2 {
+        Some(Cmd::BankStep(if index == BANK_START { 1 } else { -1 }))
+    } else if index < BANK_START + 6 {
+        Some(Cmd::BankSlot((index - BANK_START - 2) as u8))
+    } else {
+        Some(Cmd::BankAt((index - BANK_START - 6) as u8))
     }
 }
 

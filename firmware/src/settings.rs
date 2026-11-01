@@ -139,22 +139,36 @@ impl json_record::Storage for JsonStorage<'_, '_> {
     }
 }
 
-fn with_json<T>(f: impl FnOnce(&mut JsonStorage<'_, '_>) -> Result<T, &'static str>) -> Result<T, &'static str> {
+fn with_json<T>(label: &str, capacity: u32, f: impl FnOnce(&mut JsonStorage<'_, '_>) -> Result<T, &'static str>) -> Result<T, &'static str> {
     let flash = flash().ok_or("Flash unavailable")?;
     let mut buf = vec![0; PARTITION_TABLE_MAX_LEN];
     let table = read_partition_table(&mut *flash, &mut buf).map_err(|_| "Cannot read partition table")?;
-    let entry = table.iter().find(|entry| entry.label_as_str() == "midi")
-        .ok_or("MIDI partition missing; flash using flash.sh")?;
-    if entry.len() < json_record::CAPACITY {
-        return Err("MIDI partition too small");
+    let entry = table.iter().find(|entry| entry.label_as_str() == label)
+        .ok_or("Configuration partition missing; flash using flash.sh")?;
+    if entry.len() < capacity {
+        return Err("Configuration partition too small");
     }
     f(&mut JsonStorage(entry.as_flash_region(flash)))
 }
 
 pub fn load_midi_json() -> Result<Option<String>, &'static str> {
-    with_json(|storage| json_record::load(storage))
+    with_json("midi", json_record::CAPACITY, |storage| json_record::load(storage))
 }
 
 pub fn save_midi_json(json: &str) -> Result<(), &'static str> {
-    with_json(|storage| json_record::save(storage, json))
+    with_json("midi", json_record::CAPACITY, |storage| json_record::save(storage, json))
+}
+
+const PERFORMANCE_SLOT: u32 = 1024 * 1024;
+
+pub fn load_performance_json() -> Result<Option<String>, &'static str> {
+    with_json("performance", PERFORMANCE_SLOT * 2, |storage| {
+        json_record::load_sized(storage, PERFORMANCE_SLOT, crate::performance::data::MAX_JSON)
+    })
+}
+
+pub fn save_performance_json(json: &str) -> Result<(), &'static str> {
+    with_json("performance", PERFORMANCE_SLOT * 2, |storage| {
+        json_record::save_sized(storage, json, PERFORMANCE_SLOT, crate::performance::data::MAX_JSON)
+    })
 }

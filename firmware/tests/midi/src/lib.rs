@@ -4,6 +4,10 @@ extern crate alloc;
 
 #[path = "../../../src/hci.rs"]
 mod hci;
+#[path = "../../../src/performance.rs"]
+mod performance;
+#[path = "../../../src/syncutil.rs"]
+mod syncutil;
 #[path = "../../../src/fx/catalog.rs"]
 pub mod catalog;
 #[path = "../../../src/link.rs"]
@@ -60,6 +64,16 @@ mod settings {
     pub static FAIL: AtomicBool = AtomicBool::new(false);
     pub static SAVES: AtomicUsize = AtomicUsize::new(0);
     pub static RECORD: Mutex<Option<String>> = Mutex::new(None);
+    pub static PERFORMANCE: Mutex<Option<String>> = Mutex::new(None);
+
+    pub fn load_performance_json() -> Result<Option<String>, &'static str> {
+        Ok(PERFORMANCE.lock().unwrap().clone())
+    }
+    pub fn save_performance_json(json: &str) -> Result<(), &'static str> {
+        if FAIL.load(Ordering::Relaxed) { return Err("Mock flash save failed"); }
+        *PERFORMANCE.lock().unwrap() = Some(json.to_owned());
+        Ok(())
+    }
 
     pub fn load_midi(count: usize) -> Option<[u16; midi_record::MAX]> {
         let json = RECORD.lock().unwrap();
@@ -136,6 +150,38 @@ mod tests {
             }
         }
         result
+    }
+
+    #[test]
+    fn custom_banks_edit_persist_recall_and_refuse_failed_saves() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        *settings::PERFORMANCE.lock().unwrap() = None;
+        performance::load();
+        assert!(performance::recall_slot(0).is_err());
+        performance::add_bank("Set 1").unwrap();
+        performance::assign_slot(0, Some(64)).unwrap();
+        performance::add_bank("Set 2").unwrap();
+        performance::assign_slot(1, Some(3)).unwrap();
+        performance::step_bank(1).unwrap();
+        assert_eq!(performance::bank(), 0);
+        assert_eq!(performance::recall_slot(0).unwrap(), 64);
+        performance::step_bank(-1).unwrap();
+        assert_eq!(performance::recall_slot(1).unwrap(), 3);
+        performance::load();
+        assert_eq!(performance::banks(), ["Set 1", "Set 2"]);
+        assert!(performance::rename_bank(1, "set 1").is_err());
+        let before = performance::export_json().unwrap();
+        settings::FAIL.store(true, Ordering::Relaxed);
+        assert!(performance::delete_bank(0).is_err());
+        assert_eq!(performance::export_json().unwrap(), before);
+        settings::FAIL.store(false, Ordering::Relaxed);
+        performance::delete_bank(0).unwrap();
+        assert_eq!(performance::banks(), ["Set 2"]);
+        link::set_up(false);
+        assert!(performance::recall_slot(1).is_err());
+        assert!(matches!(midi::command(index("Next bank"), 127, false), Some(link::Cmd::BankStep(1))));
+        assert!(matches!(midi::command(index("Recall bank slot 4"), 127, false), Some(link::Cmd::BankSlot(3))));
     }
 
     #[test]
@@ -236,11 +282,11 @@ mod tests {
     fn queue_overflow_is_atomic_and_disconnect_clears_every_path() {
         let _guard = LOCK.lock().unwrap();
         reset();
-        for _ in 0..255 {
+        for _ in 0..link::COMMAND_CAPACITY - 1 {
             link::push_cmd(link::Cmd::Save);
         }
         assert!(!link::push_midi([0, 1].into_iter(), 127, false));
-        for _ in 0..255 {
+        for _ in 0..link::COMMAND_CAPACITY - 1 {
             assert!(matches!(link::pop_cmd(), Some(link::Cmd::Save)));
         }
         assert!(link::pop_cmd().is_none());
@@ -295,7 +341,7 @@ mod tests {
         settings::FAIL.store(false, Ordering::Relaxed);
         clock::NOW.store(15_000_000, Ordering::Relaxed);
         midi::persist();
-        let saved = settings::load_midi(midi::ACTION_COUNT).unwrap();
+        let saved = midi::keys_from_json(&settings::load_midi_json().unwrap().unwrap()).unwrap();
         assert_ne!(saved[0], 0);
         assert_eq!(saved[0], saved[midi::ACTION_COUNT - 1]);
         midi::clear(0);
@@ -312,7 +358,7 @@ mod tests {
     fn expanded_actions_and_endpoints_keep_legacy_indices() {
         let _guard = LOCK.lock().unwrap();
         reset();
-        assert_eq!(midi::ACTION_COUNT, 249);
+        assert_eq!(midi::ACTION_COUNT, 263);
         assert_eq!(midi::action_name(13), "Pre FX 1 knob 1");
         assert_eq!(midi::action_name(33), "Amp gain");
         assert_eq!(midi::action_name(41), "Cab low-pass");
@@ -412,7 +458,7 @@ mod tests {
             r#"{"format":"nano-midi","version":1,"bindings":[{"action":0,"kind":"cc","channel":0,"number":7}]}"#,
             r#"{"format":"nano-midi","version":1,"bindings":[{"action":0,"kind":"cc","channel":17,"number":7}]}"#,
             r#"{"format":"nano-midi","version":1,"bindings":[{"action":0,"kind":"cc","channel":1,"number":128}]}"#,
-            r#"{"format":"nano-midi","version":1,"bindings":[{"action":249,"kind":"cc","channel":1,"number":7}]}"#,
+            r#"{"format":"nano-midi","version":1,"bindings":[{"action":999999,"kind":"cc","channel":1,"number":7}]}"#,
             r#"{"format":"nano-midi","version":1,"bindings":[{"action":33,"kind":"note","channel":1,"number":7}]}"#,
             r#"{"format":"nano-midi","version":1,"bindings":[{"action":0,"kind":"cc","channel":1,"number":7},{"action":0,"kind":"cc","channel":1,"number":8}]}"#,
             r#"{"format":"nano-midi","version":1,"bindings":[],"unexpected":true}"#,

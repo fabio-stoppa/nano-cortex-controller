@@ -4,3 +4,4 @@ phy_init, data, phy, 0xf000, 0x1000,
 factory, app, factory, 0x10000, 0x7f0000,
 # Application-managed JSON records, not an ESP-IDF NVS filesystem.
 midi, data, nvs, 0x800000, 0x20000,
+performance, data, nvs, 0xa00000, 0x200000,

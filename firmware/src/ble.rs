@@ -559,6 +559,22 @@ pub static LIBRARY_WANTED: core::sync::atomic::AtomicBool = core::sync::atomic::
 
 fn apply_cmd(cmd: crate::link::Cmd) {
     match cmd {
+        crate::link::Cmd::BankStep(delta) => {
+            if let Err(error) = crate::performance::step_bank(delta) { crate::performance::report(error); }
+        }
+        crate::link::Cmd::BankAt(index) => {
+            if let Err(error) = crate::performance::select_bank(usize::from(index)) { crate::performance::report(error); }
+        }
+        crate::link::Cmd::BankSlot(slot) => {
+            match crate::performance::recall_slot(usize::from(slot)) {
+                Ok(preset) => {
+                    if !crate::state::nano_state_select_preset(preset) {
+                        crate::performance::report("Bank preset selection refused");
+                    }
+                }
+                Err(error) => crate::performance::report(error),
+            }
+        }
         crate::link::Cmd::Gate(on) => {
             if !crate::fx::nano_fx_write_gate_enabled(on) {
                 log::warn!("Gate toggle write failed");

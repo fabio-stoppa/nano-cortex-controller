@@ -37,6 +37,7 @@ slint::include_modules!();
 
 mod lines;
 mod presets;
+mod performance;
 use lines::PartialLines;
 
 struct Backend {
@@ -137,6 +138,8 @@ fn ensure() {
         app.set_layout_mode(mode);
     }
     crate::midi::load();
+    crate::performance::load();
+    performance::register(&app);
     let weak = app.as_weak();
     app.on_chain_tapped({
         let weak = weak.clone();
@@ -421,6 +424,11 @@ fn ensure() {
                 2 => crate::link::push_cmd(Cmd::CabAt(index as u16)),
                 3 if index <= 255 => crate::link::push_cmd(Cmd::PresetAt(index as u8)),
                 kind @ (4 | 5) if index <= 255 => choose_target(&app, kind, index as u8),
+                6 if (1..=64).contains(&index) => {
+                    if let Err(error) = crate::performance::assign_slot(app.get_performance_assign_slot() as usize, Some(index as u8)) {
+                        crate::performance::report(error);
+                    }
+                }
                 0 if index <= 255 => {
                     let Some(block) = fx_block_for_chain(app.get_chain()) else {
                         return;
@@ -459,7 +467,11 @@ fn ensure() {
                 text.push_str(key.as_str());
             }
             app.set_kbd_text(text.as_str().into());
-            app.set_kbd_error(preset_name_error(&text).into());
+            app.set_kbd_error(if app.get_performance_name_action() != 0 {
+                crate::performance::data::name_error(&text)
+            } else {
+                preset_name_error(&text)
+            }.into());
         }
     });
     app.on_kbd_accepted({
@@ -469,6 +481,10 @@ fn ensure() {
                 return;
             };
             let name = String::from(app.get_kbd_text().as_str());
+            if app.get_performance_name_action() != 0 {
+                performance::accept_name(&app, &name);
+                return;
+            }
             if preset_name_error(&name).is_empty() {
                 crate::link::push_cmd(Cmd::PresetRename {
                     slot: ACTION_SLOT.load(Ordering::Relaxed),
@@ -477,12 +493,25 @@ fn ensure() {
             }
         }
     });
-    app.on_confirm_accepted(move || match CONFIRM.load(Ordering::Relaxed) {
+    app.on_confirm_accepted({
+        let weak = weak.clone();
+        move || {
+            if let Some(app) = weak.upgrade() {
+                let bank = app.get_performance_delete_bank();
+                if bank >= 0 {
+                    app.set_performance_delete_bank(-1);
+                    if let Err(error) = crate::performance::delete_bank(bank as usize) { crate::performance::report(error); }
+                    return;
+                }
+            }
+            match CONFIRM.load(Ordering::Relaxed) {
         CONFIRM_DELETE => {
             crate::link::push_cmd(Cmd::PresetDelete(ACTION_SLOT.load(Ordering::Relaxed)));
         }
         kind @ (LIST_MOVE | LIST_COPY) => run_transfer(kind),
         _ => {}
+            }
+        }
     });
     app.on_save_tapped(move || crate::link::push_cmd(Cmd::Save));
     app.on_copy_tapped(move || crate::link::push_cmd(Cmd::Copy));
@@ -993,6 +1022,7 @@ static MIDI_SHOWN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32
 
 /// Repaints the MIDI page when its bindings change and saves new ones.
 pub fn refresh_midi() {
+    if let Some(ui) = state().as_ref() { performance::refresh(&ui.app, false); }
     if state().as_ref().is_some_and(|ui| ui.app.get_usb_storage_open()) {
         return;
     }

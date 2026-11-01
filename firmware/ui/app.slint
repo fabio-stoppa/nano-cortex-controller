@@ -949,6 +949,7 @@ component HeaderBar inherits Rectangle {
     callback tempo-tapped();
     callback preset-list-tapped();
     callback settings-tapped();
+    callback performance-tapped();
     background: transparent;
     beat := Timer {
         interval: root.bpm-value > 0 ? 60000ms / root.bpm-value : 1000ms;
@@ -1036,6 +1037,13 @@ component HeaderBar inherits Rectangle {
             alignment: end;
             spacing: portrait ? 8px : 14px;
             width: portrait ? 134px : 214px;
+            VCenter { HeaderButton {
+                label: "Banks";
+                min-width: 72px;
+                preferred-width: 72px;
+                height: 44px;
+                tapped => { root.performance-tapped(); }
+            } }
             VCenter { SettingsButton {
                 open: root.settings-shown;
                 tapped => { root.settings-tapped(); }
@@ -2291,6 +2299,7 @@ component ConnectingOverlay inherits Rectangle {
     in property <string> loading: "";
     in property <string> version: "";
     callback usb-storage();
+    callback performance();
     background: #1e1e1e;
     TouchArea {}
     VerticalLayout {
@@ -2384,6 +2393,63 @@ component ConnectingOverlay inherits Rectangle {
         height: 32px;
         label: "USB drive";
         tapped => { root.usb-storage(); }
+    }
+    HeaderButton {
+        x: parent.width - self.width - 12px;
+        y: 52px;
+        width: 100px;
+        height: 32px;
+        label: "Banks";
+        tapped => { root.performance(); }
+    }
+}
+
+component BankPanel inherits Rectangle {
+    in property <[string]> banks;
+    in property <[string]> slots;
+    in property <int> bank: 0;
+    in property <int> current-slot: -1;
+    in property <string> notice;
+    callback closed();
+    callback add();
+    callback selected(int);
+    callback rename(int);
+    callback remove(int);
+    callback recall(int);
+    callback assign(int);
+    callback clear(int);
+    background: Surface.background;
+    TouchArea {}
+    VerticalLayout {
+        padding: 14px;
+        spacing: 8px;
+        PopupHeader { title: "Custom banks"; closed => { root.closed(); } }
+        Text { text: root.notice; color: #909090; font-size: 14px; wrap: word-wrap; }
+        HeaderButton { label: "Add bank (max 8)"; height: 40px; tapped => { root.add(); } }
+        bank-list := Flickable {
+            height: min(152px, root.banks.length * 76px);
+            viewport-width: self.width;
+            viewport-height: root.banks.length * 76px;
+            for name[index] in root.banks: OptionRow {
+                y: index * 76px; width: bank-list.width;
+                label: name; value: ""; highlight: index == root.bank;
+                VCenter { HeaderButton { label: "Select"; height: 40px; tapped => { root.selected(index); } } }
+                VCenter { HeaderButton { label: "Name"; height: 40px; tapped => { root.rename(index); } } }
+                VCenter { HeaderButton { label: "Delete"; height: 40px; tapped => { root.remove(index); } } }
+            }
+        }
+        slot-list := Flickable {
+            vertical-stretch: 1;
+            viewport-width: self.width;
+            viewport-height: root.slots.length * 76px;
+            for label[index] in root.slots: OptionRow {
+                y: index * 76px; width: slot-list.width;
+                label: label; value: ""; highlight: index == root.current-slot;
+                VCenter { HeaderButton { label: "Play"; height: 44px; tapped => { root.recall(index); } } }
+                VCenter { HeaderButton { label: "Assign"; height: 44px; tapped => { root.assign(index); } } }
+                VCenter { HeaderButton { label: "Clear"; height: 44px; tapped => { root.clear(index); } } }
+            }
+        }
     }
 }
 
@@ -2837,6 +2903,24 @@ export component AppWindow inherits Window {
     callback midi-clear-all();
     callback midi-clear-all-requested();
     callback midi-usb-storage();
+    callback performance-opened();
+    callback performance-add();
+    callback performance-selected(int);
+    callback performance-rename(int);
+    callback performance-delete(int);
+    callback performance-recall(int);
+    callback performance-assign(int);
+    callback performance-clear(int);
+    in-out property <bool> performance-open: false;
+    in-out property <[string]> performance-banks: [];
+    in-out property <[string]> performance-slots: [];
+    in-out property <int> performance-bank: 0;
+    in-out property <int> performance-slot: -1;
+    in-out property <string> performance-notice: "";
+    in-out property <int> performance-name-action: 0;
+    in-out property <int> performance-name-bank: -1;
+    in-out property <int> performance-delete-bank: -1;
+    in-out property <int> performance-assign-slot: -1;
     callback usb-storage-cancel();
     callback usb-storage-restart();
     in-out property <bool> usb-storage-open: false;
@@ -2876,7 +2960,7 @@ export component AppWindow inherits Window {
     // The software renderer draws everything under an overlay, so hide what an
     // opaque or full-screen layer covers.
     // Confirmations are cards over whatever is open, so they do not hide it.
-    property <bool> popup-open: root.kbd-open || root.model-open || root.settings-open || root.usb-storage-open;
+    property <bool> popup-open: root.kbd-open || root.model-open || root.settings-open || root.usb-storage-open || root.performance-open;
     property <bool> main-covered: root.popup-open || root.page == 2 || root.connecting;
 
     Rectangle {
@@ -2899,6 +2983,7 @@ export component AppWindow inherits Window {
                 preset-list-tapped => { root.preset-list-tapped(); }
                 settings-shown: root.settings-open;
                 settings-tapped => { root.tools-opened(); }
+                performance-tapped => { root.performance-opened(); }
             }
             if !root.portrait: HorizontalLayout {
                 // With the panels' 2px inset this is the 8px gap used between chain tabs.
@@ -3202,6 +3287,21 @@ export component AppWindow inherits Window {
         closed => { root.model-open = false; }
     }
 
+    if root.performance-open && !root.usb-storage-open && !root.model-open: BankPanel {
+        width: root.width; height: root.height;
+        banks: root.performance-banks; slots: root.performance-slots;
+        bank: root.performance-bank; current-slot: root.performance-slot;
+        notice: root.performance-notice;
+        closed => { root.performance-open = false; }
+        add => { root.performance-add(); }
+        selected(index) => { root.performance-selected(index); }
+        rename(index) => { root.performance-rename(index); }
+        remove(index) => { root.midi-clear-confirm = false; root.performance-delete(index); }
+        recall(index) => { root.performance-recall(index); }
+        assign(index) => { root.performance-assign(index); }
+        clear(index) => { root.performance-clear(index); }
+    }
+
     if root.confirm-open: ConfirmDialog {
         x: 0px; y: 0px; width: root.width; height: root.height;
         visible: !root.kbd-open;
@@ -3218,7 +3318,7 @@ export component AppWindow inherits Window {
                 root.confirm-accepted();
             }
         }
-        closed => { root.confirm-open = false; root.midi-clear-confirm = false; }
+        closed => { root.confirm-open = false; root.midi-clear-confirm = false; root.performance-delete-bank = -1; }
     }
 
     if root.usb-storage-open: Rectangle {
@@ -3262,14 +3362,15 @@ export component AppWindow inherits Window {
             root.kbd-open = false;
             root.kbd-accepted();
         }
-        closed => { root.kbd-open = false; }
+        closed => { root.kbd-open = false; root.performance-name-action = 0; }
     }
 
-    if root.connecting && !root.usb-storage-open: ConnectingOverlay {
+    if root.connecting && !root.usb-storage-open && !root.performance-open: ConnectingOverlay {
         amp-state: root.conn-amp;
         foot-state: root.conn-foot;
         loading: root.load-status;
         version: root.app-version;
         usb-storage => { root.midi-usb-storage(); }
+        performance => { root.performance-opened(); }
     }
 }

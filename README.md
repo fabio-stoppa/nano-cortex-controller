@@ -50,6 +50,9 @@ It retains the default NVS and application start addresses and adds a 128 KiB
 configuration support; do not erase the entire chip if you want to retain
 existing MIDI assignments and screen layout.
 
+Custom banks additionally use a checked 2 MiB `performance` partition at 10 MiB.
+Reflash with the updated table when upgrading; existing partitions keep their offsets.
+
 Monitor (keep DTR/RTS off on Waveshare):
 
 ```bash
@@ -93,6 +96,23 @@ cargo +stable test --manifest-path firmware/tests/midi/Cargo.toml --target x86_6
 
 ## MIDI configuration USB drive
 
+### Custom banks
+
+Tap **Banks** in the editor header or connecting screen. Create up to eight named
+banks with four slots each, assign Nano preset numbers 1-64, and tap **Play**.
+Selecting a bank only changes the controller's bank; it does not load a preset
+until you play a slot. Bank stepping wraps. Unassigned slots and disconnected
+recall are refused with a notice. Rename/delete affect controller data only;
+deletion asks for confirmation and never deletes Nano presets.
+
+MIDI Learn includes next/previous bank, four bank-slot recalls and direct bank
+selection. Existing action IDs remain unchanged. Banks persist in controller flash.
+The USB drive exposes `performance.json` beside `midi.json` (512 KiB maximum).
+Both files must remain on the drive, and both are validated before saving on eject.
+An invalid file leaves both configurations unchanged. Records are committed
+independently; if a flash error occurs after performance saves but before MIDI saves,
+the screen explicitly reports that partial result. Cancel discards computer edits.
+
 Tools → MIDI → **Clear all bindings** asks for confirmation before removing all
 learned assignments. Cancel leaves them unchanged. This does not change presets
 on the Nano.
@@ -113,7 +133,7 @@ MIDI Learn and Bluetooth control pause while the computer owns the drive.
 Serial monitoring/flashing is unavailable during USB storage mode; no serial
 backup commands or computer scripts are required. **Cancel USB edits** discards
 computer changes. Restarting/powering off before eject also discards them.
-Other files on the drive are temporary; only `midi.json` is retained. Do not
+Other files on the drive are temporary; only the two configuration files are retained. Do not
 format the drive.
 
 Replacing the file **replaces all bindings**, including clearing actions omitted

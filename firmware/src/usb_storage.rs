@@ -68,7 +68,19 @@ pub async fn run(resources: Resources, board: &mut crate::panel::Board<'_>) {
             return;
         }
     };
-    let mut disk = match disk::Disk::new(json.as_bytes(), crate::midi::storage_help().as_bytes()) {
+    let performance = match crate::performance::export_json() {
+        Ok(json) => json,
+        Err(error) => {
+            crate::performance::report(error);
+            crate::ui::usb_storage_status(error, true);
+            crate::ble::touch_only(board).await;
+            return;
+        }
+    };
+    let mut help = crate::midi::storage_help();
+    help.push_str("\r\nperformance.json contains controller banks. Maximum size: 512 KiB.\r\n\
+        Edit both files, then safely eject. Both are validated before saving.\r\n");
+    let mut disk = match disk::Disk::with_performance(json.as_bytes(), performance.as_bytes(), help.as_bytes()) {
         Ok(disk) => disk,
         Err(err) => {
             crate::ui::usb_storage_status(err, true);
@@ -77,7 +89,7 @@ pub async fn run(resources: Resources, board: &mut crate::panel::Board<'_>) {
         }
     };
     crate::ui::usb_storage_status(
-        "Open NANO MIDI on your computer. Edit or replace midi.json, then safely eject the drive.\n\
+        "Open NANO MIDI on your computer. Edit midi.json or performance.json, then safely eject the drive.\n\
          MIDI editing and Bluetooth control are paused. Cancel discards computer edits.", false,
     );
     let usb = Usb::new_fs(resources.usb, resources.dp, resources.dm);
@@ -128,10 +140,19 @@ pub async fn run(resources: Resources, board: &mut crate::panel::Board<'_>) {
                 .json()
                 .and_then(|data| {
                     let json = core::str::from_utf8(&data).map_err(|_| "midi.json is not UTF-8")?;
-                    crate::midi::import_json(json)
+                    let performance = disk.performance()?;
+                    let performance = core::str::from_utf8(&performance).map_err(|_| "performance.json is not UTF-8")?;
+                    crate::midi::keys_from_json(json)?;
+                    crate::performance::validate_json(performance)?;
+                    crate::performance::import_json(performance)?;
+                    if let Err(error) = crate::midi::import_json(json) {
+                        crate::midi::report(error);
+                        return Err("Performance saved, but MIDI save failed; previous MIDI retained");
+                    }
+                    Ok(())
                 })
                 .map(|()| {
-                    "midi.json saved and verified. Restart to resume Bluetooth and USB serial."
+                    "Both configuration files saved and verified. Restart to resume control."
                 })
                 .unwrap_or_else(|err| {
                     crate::midi::report(err);

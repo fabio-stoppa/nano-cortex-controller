@@ -22,6 +22,7 @@ mod memsafe;
 mod midi;
 mod usb_storage;
 mod panel;
+mod performance;
 mod screen;
 mod settings;
 mod state;

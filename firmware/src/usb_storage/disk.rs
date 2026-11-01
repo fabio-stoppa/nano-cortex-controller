@@ -68,6 +68,43 @@ impl Disk {
         Ok(disk)
     }
 
+    pub fn with_performance(
+        json: &[u8],
+        performance: &[u8],
+        help: &[u8],
+    ) -> Result<Self, &'static str> {
+        if performance.is_empty() || performance.len() > 512 * 1024 {
+            return Err("performance.json must be 1 byte to 512 KiB");
+        }
+        let mut disk = Self::new(json, help)?;
+        let start = 2 + json.len().div_ceil(SECTOR) + help.len().div_ceil(SECTOR);
+        let alias = b"PERFOR~1JSN";
+        let name = b"performance.json";
+        for (entry, ordinal) in [(4, 2usize), (5, 1)] {
+            let offset = ROOT * SECTOR + entry * 32;
+            let lfn = &mut disk.bytes[offset..offset + 32];
+            lfn.fill(0xff);
+            lfn[0] = ordinal as u8 | if ordinal == 2 { 0x40 } else { 0 };
+            lfn[11] = 0x0f;
+            lfn[12] = 0;
+            lfn[13] = Self::name_checksum(alias);
+            lfn[26..28].fill(0);
+            for (i, &offset) in Self::LFN_OFFSETS.iter().enumerate() {
+                let position = (ordinal - 1) * 13 + i;
+                let character = if position < name.len() {
+                    u16::from(name[position])
+                } else if position == name.len() {
+                    0
+                } else {
+                    0xffff
+                };
+                lfn[offset..offset + 2].copy_from_slice(&character.to_le_bytes());
+            }
+        }
+        disk.add_file(6, alias, start, performance)?;
+        Ok(disk)
+    }
+
     const LFN_OFFSETS: [usize; 13] = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
 
     fn name_checksum(name: &[u8]) -> u8 {
@@ -146,6 +183,14 @@ impl Disk {
     }
 
     pub fn json(&self) -> Result<Vec<u8>, &'static str> {
+        self.file(b"midi.json", MAX_JSON)
+    }
+
+    pub fn performance(&self) -> Result<Vec<u8>, &'static str> {
+        self.file(b"performance.json", 512 * 1024)
+    }
+
+    fn file(&self, name: &[u8], maximum: usize) -> Result<Vec<u8>, &'static str> {
         let boot = &self.bytes[..SECTOR];
         if boot[11..24] != [0, 2, 1, 1, 0, 2, 0, 1, 0, 8, 0xf8, 6, 0]
             || boot[510..512] != [0x55, 0xaa]
@@ -158,6 +203,8 @@ impl Disk {
         }
         let mut found = None;
         let mut long_name = None;
+        let mut characters = [0xffffu16; 26];
+        let mut expected = 0;
         for entry in self.bytes[ROOT * SECTOR..DATA * SECTOR].chunks_exact(32) {
             if entry[0] == 0 {
                 break;
@@ -167,41 +214,56 @@ impl Disk {
                 continue;
             }
             if entry[11] == 0x0f {
-                let target = entry[0] == 0x41
-                    && entry[12] == 0
-                    && entry[26..28] == [0, 0]
-                    && Self::LFN_OFFSETS.iter().enumerate().all(|(i, &offset)| {
-                        let character = u16::from_le_bytes([entry[offset], entry[offset + 1]]);
-                        if i < 9 {
-                            character <= 127
-                                && (character as u8).eq_ignore_ascii_case(&b"midi.json"[i])
-                        } else if i == 9 {
-                            character == 0
-                        } else {
-                            character == 0xffff || character == 0
-                        }
-                    });
-                long_name = target.then_some(entry[13]);
+                let ordinal = usize::from(entry[0] & 0x3f);
+                if entry[0] & 0x40 != 0 {
+                    characters.fill(0xffff);
+                    expected = ordinal;
+                    long_name = Some(entry[13]);
+                }
+                if !(1..=2).contains(&ordinal)
+                    || ordinal != expected
+                    || entry[12] != 0
+                    || entry[26..28] != [0, 0]
+                    || long_name != Some(entry[13])
+                {
+                    long_name = None;
+                    expected = 0;
+                    continue;
+                }
+                for (i, &offset) in Self::LFN_OFFSETS.iter().enumerate() {
+                    characters[(ordinal - 1) * 13 + i] =
+                        u16::from_le_bytes([entry[offset], entry[offset + 1]]);
+                }
+                expected -= 1;
                 continue;
             }
             let target = long_name
                 .take()
-                .is_some_and(|check| check == Self::name_checksum(&entry[..11]));
+                .is_some_and(|check| expected == 0 && check == Self::name_checksum(&entry[..11]))
+                && characters.iter().enumerate().all(|(i, &character)| {
+                    if i < name.len() {
+                        character <= 127 && (character as u8).eq_ignore_ascii_case(&name[i])
+                    } else if i == name.len() {
+                        character == 0
+                    } else {
+                        character == 0xffff || character == 0
+                    }
+                });
             if entry[11] & 0x18 != 0 {
                 continue;
             }
             if target {
                 if found.is_some() {
-                    return Err("Duplicate midi.json files");
+                    return Err("Duplicate configuration files");
                 }
                 found = Some(entry);
             }
         }
-        let entry = found.ok_or("midi.json is missing; previous bindings retained")?;
+        let entry = found.ok_or("Configuration file is missing; previous settings retained")?;
         let length =
             u32::from_le_bytes(entry[28..32].try_into().map_err(|_| "Invalid directory")?) as usize;
-        if length == 0 || length > MAX_JSON {
-            return Err("midi.json must be between 1 byte and 48 KiB");
+        if length == 0 || length > maximum {
+            return Err("Configuration file exceeds its size limit or is empty");
         }
         let mut cluster = usize::from(u16::from_le_bytes([entry[26], entry[27]]));
         let mut visited = vec![false; CLUSTERS + 2];
@@ -293,6 +355,34 @@ mod tests {
             fs.unmount().unwrap();
         }
         assert_eq!(disk.json().unwrap(), data);
+    }
+
+    #[test]
+    fn performance_long_filename_and_editor_replacement_round_trip() {
+        let mut disk = Disk::with_performance(b"{}", b"{\"banks\":[]}", b"help").unwrap();
+        assert_eq!(disk.performance().unwrap(), b"{\"banks\":[]}");
+        {
+            let fs =
+                fatfs::FileSystem::new(Cursor::new(disk.image()), fatfs::FsOptions::new()).unwrap();
+            let root = fs.root_dir();
+            let mut read = Vec::new();
+            root.open_file("performance.json")
+                .unwrap()
+                .read_to_end(&mut read)
+                .unwrap();
+            assert_eq!(read, b"{\"banks\":[]}");
+            {
+                let mut file = root.create_file("replacement.json").unwrap();
+                file.write_all(&vec![b' '; 10000]).unwrap();
+            }
+            root.remove("performance.json").unwrap();
+            root.rename("replacement.json", &root, "performance.json")
+                .unwrap();
+            drop(root);
+            fs.unmount().unwrap();
+        }
+        assert_eq!(disk.json().unwrap(), b"{}");
+        assert_eq!(disk.performance().unwrap(), vec![b' '; 10000]);
     }
 
     #[test]

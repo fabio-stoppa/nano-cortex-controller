@@ -27,10 +27,15 @@ impl SlotError {
     }
 }
 
-fn slot(storage: &mut impl Storage, index: u32) -> Result<Option<(u64, String)>, SlotError> {
+fn slot(
+    storage: &mut impl Storage,
+    index: u32,
+    size: u32,
+    maximum: usize,
+) -> Result<Option<(u64, String)>, SlotError> {
     let mut header = [0u8; HEADER];
     storage
-        .read(index * SLOT, &mut header)
+        .read(index * size, &mut header)
         .map_err(SlotError::Read)?;
     if header.iter().all(|byte| *byte == 0xff) {
         return Ok(None);
@@ -42,12 +47,12 @@ fn slot(storage: &mut impl Storage, index: u32) -> Result<Option<(u64, String)>,
     }
     let generation = u64::from_le_bytes(header[8..16].try_into().unwrap());
     let length = u32::from_le_bytes(header[16..20].try_into().unwrap()) as usize;
-    if length == 0 || length > MAX_JSON {
+    if length == 0 || length > maximum || length + HEADER > size as usize {
         return Err(SlotError::Invalid("Invalid MIDI JSON record length"));
     }
     let mut data = vec![0; length];
     storage
-        .read(index * SLOT + HEADER as u32, &mut data)
+        .read(index * size + HEADER as u32, &mut data)
         .map_err(SlotError::Read)?;
     if checksum(&data) != u32::from_le_bytes(header[20..24].try_into().unwrap()) {
         return Err(SlotError::Invalid("MIDI JSON record checksum failed"));
@@ -63,9 +68,9 @@ enum Current {
     Damaged,
 }
 
-fn current(storage: &mut impl Storage) -> Result<Current, &'static str> {
-    let a = slot(storage, 0);
-    let b = slot(storage, 1);
+fn current(storage: &mut impl Storage, size: u32, maximum: usize) -> Result<Current, &'static str> {
+    let a = slot(storage, 0, size, maximum);
+    let b = slot(storage, 1, size, maximum);
     let mut invalid = false;
     for result in [&a, &b] {
         if let Err(err) = result {
@@ -86,7 +91,15 @@ fn current(storage: &mut impl Storage) -> Result<Current, &'static str> {
 }
 
 pub fn load(storage: &mut impl Storage) -> Result<Option<String>, &'static str> {
-    match current(storage)? {
+    load_sized(storage, SLOT, MAX_JSON)
+}
+
+pub fn load_sized(
+    storage: &mut impl Storage,
+    size: u32,
+    maximum: usize,
+) -> Result<Option<String>, &'static str> {
+    match current(storage, size, maximum)? {
         Current::Valid(_, _, json) => Ok(Some(json)),
         Current::Empty => Ok(None),
         Current::Damaged => Err("No valid MIDI JSON record; storage recovery required"),
@@ -94,10 +107,24 @@ pub fn load(storage: &mut impl Storage) -> Result<Option<String>, &'static str> 
 }
 
 pub fn save(storage: &mut impl Storage, json: &str) -> Result<(), &'static str> {
-    if json.is_empty() || json.len() > MAX_JSON {
+    save_sized(storage, json, SLOT, MAX_JSON)
+}
+
+pub fn save_sized(
+    storage: &mut impl Storage,
+    json: &str,
+    size: u32,
+    maximum: usize,
+) -> Result<(), &'static str> {
+    if size % 4096 != 0
+        || size <= HEADER as u32
+        || json.is_empty()
+        || json.len() > maximum
+        || json.len() + HEADER > size as usize
+    {
         return Err("midi.json exceeds storage limits");
     }
-    let (index, generation) = match current(storage)? {
+    let (index, generation) = match current(storage, size, maximum)? {
         Current::Valid(_, _, old) if old == json => return Ok(()),
         Current::Valid(index, generation, _) => (
             1 - index,
@@ -111,8 +138,8 @@ pub fn save(storage: &mut impl Storage, json: &str) -> Result<(), &'static str> 
             (0, 1)
         }
     };
-    let offset = index * SLOT;
-    storage.erase(offset, offset + SLOT)?;
+    let offset = index * size;
+    storage.erase(offset, offset + size)?;
     storage.write(offset + HEADER as u32, json.as_bytes())?;
     let mut check = vec![0; json.len()];
     storage.read(offset + HEADER as u32, &mut check)?;
@@ -127,7 +154,7 @@ pub fn save(storage: &mut impl Storage, json: &str) -> Result<(), &'static str> 
     let crc = checksum(&header[..28]);
     header[28..32].copy_from_slice(&crc.to_le_bytes());
     storage.write(offset, &header)?;
-    let verified = slot(storage, index)
+    let verified = slot(storage, index, size, maximum)
         .map_err(|err| err.message())?
         .ok_or("MIDI JSON commit missing")?;
     if verified.0 != generation || verified.1 != json {
@@ -274,5 +301,22 @@ mod tests {
         assert!(save(&mut flash, &" ".repeat(MAX_JSON + 1)).is_err());
         assert!(save(&mut flash, "").is_err());
         assert_eq!(load(&mut flash).unwrap().unwrap(), maximum);
+    }
+
+    #[test]
+    fn performance_geometry_round_trip_and_interrupted_commit() {
+        let size = 1024 * 1024;
+        let maximum = 512 * 1024;
+        let mut original = flash();
+        original.bytes.resize(size as usize * 2, 0xff);
+        let json = " ".repeat(maximum);
+        save_sized(&mut original, &json, size, maximum).unwrap();
+        assert_eq!(load_sized(&mut original, size, maximum).unwrap().unwrap(), json);
+        for budget in 0..HEADER + 2 {
+            let mut failed = original.clone();
+            failed.budget = Some(budget);
+            assert!(save_sized(&mut failed, "{}", size, maximum).is_err());
+            assert_eq!(load_sized(&mut failed, size, maximum).unwrap().unwrap(), json);
+        }
     }
 }

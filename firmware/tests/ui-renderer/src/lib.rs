@@ -613,6 +613,42 @@ mod tests {
         window.set_size(PhysicalSize::new(800, 480));
     }
 
+    fn check_bank_screen(app: &AppWindow, window: &MinimalSoftwareWindow) {
+        let additions = Rc::new(std::cell::Cell::new(0));
+        app.on_performance_add({
+            let additions = additions.clone();
+            move || additions.set(additions.get() + 1)
+        });
+        let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
+        app.set_performance_banks(slint::ModelRc::new(slint::VecModel::from(vec!["Set 1".into(), "Set 2".into()])));
+        app.set_performance_slots(slint::ModelRc::new(slint::VecModel::from(vec![
+            "1: 4 Clean".into(), "2: 8 Lead".into(), "3: (unassigned)".into(), "4: (unassigned)".into(),
+        ])));
+        app.set_performance_notice("".into());
+        for (width, height, portrait) in [(800, 480, false), (480, 800, true)] {
+            app.set_portrait(portrait);
+            window.set_size(PhysicalSize::new(width, height));
+            app.set_connecting(true);
+            app.set_performance_open(true);
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                renderer.render(&mut pixels, width as usize);
+                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            });
+            let before = additions.get();
+            let position = LogicalPosition::new(100.0, 116.0);
+            window.dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+            window.dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+            assert_eq!(additions.get(), before + 1, "Banks screen is covered or Add is inaccessible");
+        }
+        app.set_performance_open(false);
+        app.set_connecting(false);
+        app.set_portrait(false);
+        window.set_size(PhysicalSize::new(800, 480));
+    }
+
     fn check_usb_storage_screen(app: &AppWindow, window: &MinimalSoftwareWindow) {
         let started = Rc::new(std::cell::Cell::new(0));
         let cancelled = Rc::new(std::cell::Cell::new(0));
@@ -887,6 +923,7 @@ mod tests {
         check_fx_cell_contrast(&app, &window);
         check_midi_clear_confirmation(&app, &window);
         check_usb_storage_screen(&app, &window);
+        check_bank_screen(&app, &window);
         let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
 
         for (width, height, rotation, portrait) in [

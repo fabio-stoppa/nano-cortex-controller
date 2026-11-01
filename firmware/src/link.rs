@@ -26,9 +26,12 @@ static OUT: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<Vec<u8>>>> =
 static CMDS: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<Cmd>>> =
     Mutex::new(RefCell::new(VecDeque::new()));
 
-const COMMAND_CAPACITY: usize = 256;
+pub(crate) const COMMAND_CAPACITY: usize = 384;
 
 pub enum Cmd {
+    BankStep(i8),
+    BankAt(u8),
+    BankSlot(u8),
     Gate(bool),
     GateAmount(u8),
     Tuner(bool),
