@@ -104,22 +104,87 @@ pub fn nano_state_copy_preset(slot: u8, name: &str) -> bool {
     send(&format!("Copy preset {slot}"), &buf, n)
 }
 
-pub fn nano_state_rename_preset(slot: u8, name: &str) -> bool {
-    if !(1..=64).contains(&slot) || name.len() < 4 {
-        return false;
-    }
+/// True when another preset already uses `name` (the pedal compares case-insensitively).
+pub fn nano_state_preset_name_taken(slot: u8, name: &str) -> bool {
+    nano_state_preset_names()
+        .iter()
+        .enumerate()
+        .any(|(i, other)| i + 1 != usize::from(slot) && other.eq_ignore_ascii_case(name))
+}
+
+fn send_rename(slot: u8, name: &str) -> bool {
     let mut buf = [0u8; 128];
     let n = rename_preset_payload(slot - 1, name, &mut buf);
     send(&format!("Rename preset {slot}"), &buf, n)
 }
 
-pub fn nano_state_delete_preset(slot: u8) -> bool {
-    if !(1..=64).contains(&slot) {
-        return false;
-    }
+fn send_delete(slot: u8) -> bool {
     let mut buf = [0u8; 32];
     let n = delete_preset_payload(slot - 1, &mut buf);
     send(&format!("Delete preset {slot}"), &buf, n)
+}
+
+/// Re-read the catalog so the list shows what the pedal actually kept.
+fn refresh_catalog() {
+    super::api::nano_state_begin_sync();
+}
+
+pub fn nano_state_rename_preset(slot: u8, name: &str) -> bool {
+    if !(1..=64).contains(&slot)
+        || !nano_wire::editor::preset_name_valid(name)
+        || nano_state_preset_name_taken(slot, name)
+    {
+        return false;
+    }
+    if !send_rename(slot, name) {
+        return false;
+    }
+    refresh_catalog();
+    true
+}
+
+pub fn nano_state_delete_preset(slot: u8) -> bool {
+    if !(1..=64).contains(&slot) || !send_delete(slot) {
+        return false;
+    }
+    refresh_catalog();
+    true
+}
+
+/// Copy or move preset `src` to `dst` (both 1..=64). An occupied `dst` is
+/// deleted first. The pedal wants unique names, so a copy gets a "name 2"
+/// style name and a move parks the sound under a temporary name until the
+/// source is gone, then renames it back.
+pub fn nano_state_transfer_preset(src: u8, dst: u8, remove_src: bool) -> bool {
+    if !(1..=64).contains(&src) || !(1..=64).contains(&dst) || src == dst {
+        return false;
+    }
+    let names = nano_state_preset_names();
+    let src_name = match names.get(usize::from(src - 1)) {
+        Some(name) if name.len() >= 4 => name.clone(),
+        _ => return false,
+    };
+    let dst_used = names
+        .get(usize::from(dst - 1))
+        .is_some_and(|name| !name.is_empty());
+    let parked = unique_copy_name(&src_name, &names);
+    if !nano_state_select_preset(src) {
+        return false;
+    }
+    if dst_used && !send_delete(dst) {
+        return false;
+    }
+    if !nano_state_copy_preset(dst, &parked) {
+        return false;
+    }
+    if remove_src {
+        let ok = send_delete(src) && send_rename(dst, &src_name) && nano_state_select_preset(dst);
+        if !ok {
+            return false;
+        }
+    }
+    refresh_catalog();
+    true
 }
 
 /// Assign `slot` (1..=64) to one Nano footswitch. This drops unsaved edits.
@@ -396,7 +461,7 @@ fn unique_copy_name(current: &str, names: &[String]) -> String {
     for ch in current.chars() {
         let mut next = stem.clone();
         next.push(ch);
-        if next.len() > 40 {
+        if next.len() > nano_wire::editor::PRESET_NAME_LIMIT - 3 {
             break;
         }
         stem = next;
@@ -408,7 +473,7 @@ fn unique_copy_name(current: &str, names: &[String]) -> String {
     };
     for n in 2..100 {
         let candidate = format!("{stem} {n}");
-        if candidate.len() > 64 {
+        if candidate.len() > nano_wire::editor::PRESET_NAME_LIMIT {
             continue;
         }
         if names

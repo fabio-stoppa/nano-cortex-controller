@@ -1,0 +1,11 @@
+[package]
+name = "nano-ui-renderer-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+slint = { version = "=1.13.1", default-features = false, features = ["std", "compat-1-2", "renderer-software"] }
+
+[build-dependencies]
+slint-build = "=1.13.1"

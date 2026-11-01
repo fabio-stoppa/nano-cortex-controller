@@ -70,12 +70,17 @@ pub struct Seen {
 /// How long a device stays listed as available after its last advertisement.
 const AVAILABLE_FOR: Duration = Duration::from_secs(8);
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 type Shared<T> = Mutex<CriticalSectionRawMutex, RefCell<T>>;
 
 const SEEN_MAX: usize = 8;
 static SEEN: Shared<Vec<Seen>> = Mutex::new(RefCell::new(Vec::new()));
 static PICK_NANO: Shared<Option<Address>> = Mutex::new(RefCell::new(None));
 static PICK_FOOT: Shared<Option<Address>> = Mutex::new(RefCell::new(None));
+// Set by `forget`: the kind stays disconnected until a device is picked again.
+static PAUSED_NANO: AtomicBool = AtomicBool::new(false);
+static PAUSED_FOOT: AtomicBool = AtomicBool::new(false);
 static NANO_RESTART: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 static FOOT_RESTART: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
@@ -101,7 +106,34 @@ pub fn pick(index: usize) {
     }
     let slot = if device.nano { &PICK_NANO } else { &PICK_FOOT };
     slot.lock(|pick| *pick.borrow_mut() = Some(device.addr));
+    paused(device.nano).store(false, Ordering::Relaxed);
     // The two links are independent, so only the chosen one restarts.
+    if device.nano {
+        NANO_RESTART.signal(());
+    } else {
+        FOOT_RESTART.signal(());
+    }
+}
+
+fn paused(nano: bool) -> &'static AtomicBool {
+    if nano {
+        &PAUSED_NANO
+    } else {
+        &PAUSED_FOOT
+    }
+}
+
+/// Disconnects the device at `index` of [`devices`]. It stays listed and can be picked again.
+pub fn forget(index: usize) {
+    let Some(device) = devices().get(index).cloned() else {
+        return;
+    };
+    if device.state == 0 {
+        return;
+    }
+    let slot = if device.nano { &PICK_NANO } else { &PICK_FOOT };
+    slot.lock(|pick| *pick.borrow_mut() = None);
+    paused(device.nano).store(true, Ordering::Relaxed);
     if device.nano {
         NANO_RESTART.signal(());
     } else {
@@ -154,6 +186,10 @@ fn reset_state(nano: bool) {
 }
 
 fn wanted(slot: &Shared<Option<Address>>, addr: Address) -> bool {
+    let nano = core::ptr::eq(slot, &PICK_NANO);
+    if paused(nano).load(Ordering::Relaxed) {
+        return false;
+    }
     slot.lock(|pick| pick.borrow().map_or(true, |p| p == addr))
 }
 
@@ -571,6 +607,25 @@ fn apply_cmd(cmd: crate::link::Cmd) {
         crate::link::Cmd::PresetAt(slot) => {
             let _ = crate::state::nano_state_select_preset(slot);
         }
+        crate::link::Cmd::PresetRename { slot, name } => {
+            if !crate::state::nano_state_rename_preset(slot, &name) {
+                log::warn!("Preset rename refused");
+            }
+        }
+        crate::link::Cmd::PresetDelete(slot) => {
+            if !crate::state::nano_state_delete_preset(slot) {
+                log::warn!("Preset delete failed");
+            }
+        }
+        crate::link::Cmd::PresetTransfer {
+            src,
+            dst,
+            remove_src,
+        } => {
+            if !crate::state::nano_state_transfer_preset(src, dst, remove_src) {
+                log::warn!("Preset transfer failed");
+            }
+        }
         crate::link::Cmd::CaptureAt(slot) => {
             let _ = crate::state::nano_state_write_capture_slot(slot);
         }
@@ -592,6 +647,27 @@ fn apply_cmd(cmd: crate::link::Cmd) {
         crate::link::Cmd::CabParam { which, normalized } => {
             if !crate::state::nano_state_write_cab_float(which, normalized) {
                 log::warn!("Cab parameter write failed");
+            }
+        }
+        crate::link::Cmd::AmpKnob { knob, raw } => {
+            if !crate::state::nano_state_write_amp_knob(u32::from(knob), raw) {
+                log::warn!("MIDI amp control write failed");
+            }
+        }
+        crate::link::Cmd::CaptureVolume(raw) => {
+            if !crate::state::nano_state_write_capture_volume(raw) {
+                log::warn!("MIDI capture volume write failed");
+            }
+        }
+        crate::link::Cmd::ExpressionSave { slot, assignments } => {
+            if !crate::state::nano_state_write_expression(
+                slot,
+                &assignments.ranges,
+                &assignments.bypasses,
+            ) {
+                log::warn!("Expression assignment write failed");
+            } else if !crate::state::nano_state_read_expression(slot) {
+                log::warn!("Expression assignment verification request failed");
             }
         }
         crate::link::Cmd::ToolsOpen => {

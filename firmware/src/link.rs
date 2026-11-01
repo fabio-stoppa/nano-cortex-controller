@@ -15,6 +15,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 
 use nano_wire::editor::CabFloat;
+use nano_wire::editor::ExpressionAssignments;
 use nano_wire::types::JackMode;
 
 static UP: AtomicBool = AtomicBool::new(false);
@@ -56,11 +57,31 @@ pub enum Cmd {
     /// Select factory capture slot 1..=25.
     CaptureAt(u8),
     PresetAt(u8),
+    PresetRename {
+        slot: u8,
+        name: alloc::string::String,
+    },
+    PresetDelete(u8),
+    /// Copy (or move, when `remove_src`) a preset to another slot.
+    PresetTransfer {
+        src: u8,
+        dst: u8,
+        remove_src: bool,
+    },
     /// Load the Nth library IR into the active cab slot.
     CabAt(u16),
     CabParam {
         which: CabFloat,
         normalized: f32,
+    },
+    AmpKnob {
+        knob: u8,
+        raw: u8,
+    },
+    CaptureVolume(u8),
+    ExpressionSave {
+        slot: u8,
+        assignments: ExpressionAssignments,
     },
     ToolsOpen,
     JackMode(JackMode),

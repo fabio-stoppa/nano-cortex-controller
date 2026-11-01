@@ -59,11 +59,7 @@ pub fn nano_ui_set_amp(
         "-"
     };
     let capture_slot = if capture_active {
-        alloc::format!(
-            "BANK {} OF 5 · SLOT {}",
-            (amp.capture_slot - 1) / 5 + 1,
-            (amp.capture_slot - 1) % 5 + 1
-        )
+        crate::amp::nano_amp_format_bank_line(amp.capture_slot)
     } else if amp.have_capture_slot {
         String::from("BYPASS")
     } else {
@@ -87,7 +83,7 @@ pub fn nano_ui_set_amp(
         String::from("-")
     };
     let cab_slot = if let Some(slot) = active_cab_slot {
-        alloc::format!("BANK {slot} OF 5")
+        alloc::format!("Slot {slot}")
     } else if amp.have_cab_slot {
         String::from("BYPASS")
     } else {
@@ -137,6 +133,10 @@ pub fn nano_ui_set_preset_dirty(dirty: bool) {
 
 pub fn nano_ui_set_preset_name(name: &str) {
     crate::ui::show_preset(name);
+}
+
+pub fn nano_ui_refresh_preset_catalog() {
+    crate::ui::refresh_preset_catalog();
 }
 
 pub fn nano_ui_set_device_settings(settings: &DeviceSettings) {

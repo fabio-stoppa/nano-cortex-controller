@@ -11,8 +11,12 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - **BLE in Rust** — TrouBLE central on `esp-radio` (`firmware/src/ble.rs`)
 - **Preset, effects, and tuner** — the same behavior as the old ESP-IDF app, driven by Embassy deadlines (`firmware/src/state`, `firmware/src/fx`, `firmware/src/tuner`)
 - **800×480 LCD** — Slint UI drawn into the RGB panel (`firmware/src/ui.rs`)
-- **Bluetooth Tools page** — reads expression assignments and cab settings, shows live input/output/expression meters, and reads or changes the EXP/MIDI jack and USB playback level
-- **MIDI learn page** (Tools → MIDI) — tap Learn on an action, then press a footswitch (BLE MIDI note, CC, or program change). Every message toggles on/off actions. Bindings cover FX block on/off, gate, tuner, tap tempo, preset/capture step, save, and the first four knobs of each FX block via CC. Saved in flash
+- **Bluetooth Tools page** — reads and edits per-preset expression sweeps and bypass assignments, calibrates the pedal, reads cab settings, shows live input/output/expression meters, and reads or changes the EXP/MIDI jack and USB playback level
+- **MIDI learn page** (Tools → MIDI) — tap Learn on an action, then send a BLE-MIDI note, CC, or program change. Bindings cover FX block on/off, gate, tuner, tap tempo, preset/capture step, save, all five amp controls, capture volume, cab level/high-pass/low-pass, and the first four knobs of each FX block via CC. Saved in flash
+- **Preset manager** — browse presets in 12-slot tabs and use the three-dot menu to rename (on-screen keyboard; 4–64 ASCII letters, digits, spaces, `-`, `_`, unique), delete, move, or copy to any slot. Overwriting an occupied slot asks for confirmation
+- Open preset lists update in place when the refreshed catalog arrives after a rename, delete, move, or copy.
+- Preset three-dot menus have a 64px-wide, full-row-height touch target separate from preset selection.
+- Preset, capture, and cab popup names wrap to two lines; the rename keyboard has a blinking cursor.
 - **Expression calibration** — guided reset, pedal sweep, and save flow; the screen shows the sampled range before saving
 - **Protocol responses** — handles Nano preset-change requests and surfaces supported write acknowledgements
 
@@ -57,6 +61,16 @@ Host-test the protocol crate:
 ```bash
 cd crates/nano-wire && cargo +stable test --target x86_64-unknown-linux-gnu
 ```
+
+Host-test the embedded-font rename keyboard and partial framebuffer redraws:
+
+```bash
+cargo +stable test --manifest-path firmware/tests/ui-renderer/Cargo.toml --target x86_64-unknown-linux-gnu
+```
+
+Flipped landscape is rendered unrotated and its finished scan-line spans are
+reversed into the framebuffer, avoiding Slint 1.13's mirrored glyph-sampling
+panic while retaining partial redraws and the existing touch mapping.
 
 ## Before testing BLE
 

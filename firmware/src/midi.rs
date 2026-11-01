@@ -18,9 +18,22 @@ use crate::link::Cmd;
 pub const BLOCKS: usize = 5;
 pub const KNOBS_PER_BLOCK: usize = 4;
 const TRIGGERS: usize = 8;
-pub const ACTION_COUNT: usize = BLOCKS + TRIGGERS + BLOCKS * KNOBS_PER_BLOCK;
+const FX_KNOBS: usize = BLOCKS * KNOBS_PER_BLOCK;
+const AMP_KNOBS: usize = 5;
+const CAB_CONTROLS: usize = 3;
+const LEGACY_ACTION_COUNT: usize = BLOCKS + TRIGGERS + FX_KNOBS;
+pub const ACTION_COUNT: usize = LEGACY_ACTION_COUNT + AMP_KNOBS + 1 + CAB_CONTROLS;
 
-const BLOCK_NAMES: [&str; BLOCKS] = ["Pre FX 1", "Pre FX 2", "Post FX 1", "Post FX 2", "Post FX 3"];
+const BLOCK_NAMES: [&str; BLOCKS] = [
+    "Pre FX 1",
+    "Pre FX 2",
+    "Post FX 1",
+    "Post FX 2",
+    "Post FX 3",
+];
+const AMP_KNOB_NAMES: [&str; AMP_KNOBS] =
+    ["Amp gain", "Amp level", "Amp bass", "Amp mid", "Amp treble"];
+const CAB_CONTROL_NAMES: [&str; CAB_CONTROLS] = ["Cab level", "Cab high-pass", "Cab low-pass"];
 const TRIGGER_NAMES: [&str; TRIGGERS] = [
     "Noise gate",
     "Tuner",
@@ -78,13 +91,19 @@ pub fn action_name(index: usize) -> String {
         format!("{} on/off", BLOCK_NAMES[index])
     } else if index < BLOCKS + TRIGGERS {
         String::from(TRIGGER_NAMES[index - BLOCKS])
-    } else {
+    } else if index < LEGACY_ACTION_COUNT {
         let n = index - BLOCKS - TRIGGERS;
         format!(
             "{} knob {}",
             BLOCK_NAMES[n / KNOBS_PER_BLOCK],
             n % KNOBS_PER_BLOCK + 1
         )
+    } else if index < LEGACY_ACTION_COUNT + AMP_KNOBS {
+        String::from(AMP_KNOB_NAMES[index - LEGACY_ACTION_COUNT])
+    } else if index == LEGACY_ACTION_COUNT + AMP_KNOBS {
+        String::from("Capture volume")
+    } else {
+        String::from(CAB_CONTROL_NAMES[index - LEGACY_ACTION_COUNT - AMP_KNOBS - 1])
     }
 }
 
@@ -310,10 +329,32 @@ fn run(index: usize, msg: Msg) {
             6 => crate::link::push_cmd(Cmd::Capture(-1)),
             _ => crate::link::push_cmd(Cmd::Save),
         }
-    } else if msg.kind == Kind::Cc {
+    } else if index < LEGACY_ACTION_COUNT && msg.kind == Kind::Cc {
         let n = index - BLOCKS - TRIGGERS;
         set_knob(n / KNOBS_PER_BLOCK, n % KNOBS_PER_BLOCK, msg.value);
+    } else if index < LEGACY_ACTION_COUNT + AMP_KNOBS && msg.kind == Kind::Cc {
+        let knob = (index - LEGACY_ACTION_COUNT) as u8;
+        crate::link::push_cmd(Cmd::AmpKnob {
+            knob,
+            raw: scale_midi_value(msg.value),
+        });
+    } else if index == LEGACY_ACTION_COUNT + AMP_KNOBS && msg.kind == Kind::Cc {
+        crate::link::push_cmd(Cmd::CaptureVolume(scale_midi_value(msg.value)));
+    } else if msg.kind == Kind::Cc {
+        let which = match index - LEGACY_ACTION_COUNT - AMP_KNOBS - 1 {
+            0 => nano_wire::editor::CabFloat::Level,
+            1 => nano_wire::editor::CabFloat::HighPass,
+            _ => nano_wire::editor::CabFloat::LowPass,
+        };
+        crate::link::push_cmd(Cmd::CabParam {
+            which,
+            normalized: f32::from(msg.value) / 127.0,
+        });
     }
+}
+
+fn scale_midi_value(value: u8) -> u8 {
+    ((u16::from(value.min(127)) * u16::from(u8::MAX) + 63) / 127) as u8
 }
 
 fn set_knob(block: usize, cell: usize, value: u8) {

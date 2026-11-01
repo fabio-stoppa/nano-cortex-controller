@@ -404,6 +404,23 @@ pub fn assign_footswitch_payload(which: Footswitch, index: u8, buf: &mut [u8]) -
     finish(p.bytes(), MSG_PRESET_SLOTS, buf)
 }
 
+/// Shortest name the pedal accepts.
+pub const PRESET_NAME_MIN: usize = 4;
+/// Longest name the web editor accepts (UTF-8 bytes; the touch keyboard is ASCII).
+pub const PRESET_NAME_LIMIT: usize = 64;
+
+/// Typed names: 4..=64 of letters, digits, space, `-` and `_`, not starting
+/// or ending with a space.
+pub fn preset_name_valid(name: &str) -> bool {
+    !name.trim().is_empty()
+        && (PRESET_NAME_MIN..=PRESET_NAME_LIMIT).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b' ' | b'-' | b'_'))
+        && !name.starts_with(' ')
+        && !name.ends_with(' ')
+}
+
 fn name_bytes(name: &str) -> Option<&[u8]> {
     let bytes = name.as_bytes();
     if bytes.is_empty() || bytes.len() > 64 || bytes.contains(&0) {
@@ -903,6 +920,22 @@ mod tests {
         assert!(buf[..n].windows(2).any(|w| w == [0x30, 0x00]));
         assert_eq!(&buf[n - 6..n - 4], &[0x48, 0x00]);
         assert_eq!(message_type(&buf[..n]), Some(29));
+    }
+
+    #[test]
+    fn typed_preset_names_are_limited() {
+        assert!(preset_name_valid("Clean"));
+        assert!(!preset_name_valid(""));
+        assert!(!preset_name_valid("      "));
+        assert!(!preset_name_valid("abc"));
+        assert!(!preset_name_valid(" Clean"));
+        assert!(!preset_name_valid("Clean "));
+        assert!(!preset_name_valid("Café Rig"));
+        assert!(!preset_name_valid("Lead/Rhythm"));
+        assert!(preset_name_valid("Heavy Lead_1-b"));
+        assert!(preset_name_valid(&"a".repeat(PRESET_NAME_LIMIT)));
+        assert!(!preset_name_valid(&"a".repeat(PRESET_NAME_LIMIT + 1)));
+        assert_eq!(crate::types::PRESET_NAME_MAX, PRESET_NAME_LIMIT + 1);
     }
 
     #[test]

@@ -65,6 +65,8 @@ pub fn catalog() -> &'static [NanoAmpCapture] {
 fn bank_short_name(bank: u32) -> Option<&'static str> {
     match bank {
         NANO_AMP_BANK_CLEAN => Some("Clean"),
+        NANO_AMP_BANK_2 => Some("Edge"),
+        NANO_AMP_BANK_3 => Some("Crunch"),
         NANO_AMP_BANK_HIGH_GAIN => Some("High Gain"),
         NANO_AMP_BANK_BASS => Some("Bass"),
         _ => None,
@@ -92,22 +94,11 @@ pub fn nano_amp_format_bank_line(slot: u8) -> String {
     }
 
     let bank = nano_amp_bank_from_slot(slot);
-    let bank_num = (slot - 1) / 5 + 1;
-    match bank_short_name(bank) {
-        Some(name) if !name.is_empty() => format!("Bank {bank_num} - {name}"),
-        _ => format!("Bank {bank_num}"),
-    }
+    format!("{} - Slot {}", nano_amp_bank_label(bank), (slot - 1) % 5 + 1)
 }
 
 pub fn nano_amp_bank_label(bank: u32) -> &'static str {
-    match bank {
-        NANO_AMP_BANK_CLEAN => "Bank 1 - Clean",
-        NANO_AMP_BANK_2 => "Bank 2",
-        NANO_AMP_BANK_3 => "Bank 3",
-        NANO_AMP_BANK_HIGH_GAIN => "Bank 4 - High Gain",
-        NANO_AMP_BANK_BASS => "Bank 5 - Bass",
-        _ => "Captures",
-    }
+    bank_short_name(bank).unwrap_or("Captures")
 }
 
 pub fn nano_amp_capture_by_slot(slot: u8) -> Option<&'static NanoAmpCapture> {

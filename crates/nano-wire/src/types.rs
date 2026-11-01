@@ -9,7 +9,7 @@ pub const BPM_MAX: u16 = 240;
 pub const AMP_CAPTURE_NAME_MAX: usize = 40;
 pub const AMP_CAB_NAME_MAX: usize = 64;
 pub const PRESET_COUNT: usize = 64;
-pub const PRESET_NAME_MAX: usize = 48;
+pub const PRESET_NAME_MAX: usize = 65;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

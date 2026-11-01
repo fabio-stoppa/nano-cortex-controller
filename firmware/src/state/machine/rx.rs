@@ -80,6 +80,7 @@ pub(super) fn finish_fe_capture() {
                 target: TAG,
                 "Preset catalog loaded ({} names)", s.preset_catalog.count
             );
+            crate::screen::nano_ui_refresh_preset_catalog();
         } else {
             warn!(
                 target: TAG,
@@ -190,6 +191,7 @@ pub(super) fn apply_full_state_response(data: &[u8]) {
                 "Preset catalog loaded ({} names)",
                 s.preset_catalog.count
             );
+            crate::screen::nano_ui_refresh_preset_catalog();
         } else {
             warn!(
                 target: TAG,

@@ -21,9 +21,30 @@ component DevChip inherits Rectangle {
 }
 
 export component Preview inherits AppWindow {
-    // Which popup is showing: none, bluetooth, preset, model, capture, cab, library, connecting.
+    // Which popup is showing: none, bluetooth, preset, preset-menu, rename, model, capture, cab, library, connecting.
     in-out property <string> popup: "none";
     in-out property <bool> tap-mode: false;
+    property <[ModelItem]> preset-items: [
+        { name: "1-12", header: true, index: -1, col: 0, y: 0, section: 0, height: 152 },
+        { name: "Clean", header: false, index: 1, col: 0, y: 0, section: 0, height: 0 },
+        { name: "Summer Drive", header: false, index: 2, col: 1, y: 0, section: 0, height: 0 },
+        { name: "Heavy Lead 1", header: false, index: 3, col: 2, y: 0, section: 0, height: 0 },
+        { name: "Ambient", header: false, index: 4, col: 0, y: 76, section: 0, height: 0 },
+    ];
+    property <[ModelItem]> model-items: [
+        { name: "Clean", header: true, index: -1, col: 0, y: 0, section: 0, height: 152 },
+        { name: "Rew D20 Clean", header: false, index: 0, col: 0, y: 0, section: 0, height: 0 },
+        { name: "Rew D20 Clean NF53", header: false, index: 1, col: 1, y: 0, section: 0, height: 0 },
+        { name: "Twin Reverb", header: false, index: 2, col: 2, y: 0, section: 0, height: 0 },
+        { name: "Deluxe", header: false, index: 3, col: 0, y: 76, section: 0, height: 0 },
+        { name: "Crunch", header: true, index: -1, col: 0, y: 0, section: 1, height: 152 },
+        { name: "Plexi 100", header: false, index: 4, col: 0, y: 0, section: 1, height: 0 },
+        { name: "JCM800", header: false, index: 5, col: 1, y: 0, section: 1, height: 0 },
+        { name: "AC30 Top Boost", header: false, index: 6, col: 2, y: 0, section: 1, height: 0 },
+        { name: "Bluesbreaker", header: false, index: 7, col: 0, y: 76, section: 1, height: 0 },
+        { name: "High Gain", header: true, index: -1, col: 0, y: 0, section: 2, height: 76 },
+        { name: "5150", header: false, index: 8, col: 0, y: 0, section: 2, height: 0 },
+    ];
 
     connecting: root.popup == "connecting";
     conn-amp: 2;
@@ -32,8 +53,13 @@ export component Preview inherits AppWindow {
     conn-foot: 0;
     settings-open: root.popup == "settings";
     bt-open: root.popup == "bluetooth";
-    model-open: root.popup == "preset" || root.popup == "model" || root.popup == "capture"
+    model-open: root.popup == "preset" || root.popup == "preset-menu" || root.popup == "model" || root.popup == "capture"
         || root.popup == "cab" || root.popup == "library";
+    list-kind: root.popup == "preset" || root.popup == "preset-menu" ? 3 : 0;
+    preset-menu-index: root.popup == "preset-menu" ? 2 : -1;
+    kbd-open: root.popup == "rename";
+    kbd-title: "Rename preset 2";
+    kbd-text: "Summer Drive";
 
     preset: "Summer Drive";
     ble-on: true;
@@ -41,10 +67,10 @@ export component Preview inherits AppWindow {
     model-enabled: true;
     capture-title: "CAPTURE · AMP HEAD";
     capture-value: "Rew D20 Clean NF53";
-    capture-slot: "BANK 1 OF 5 · SLOT 3";
+    capture-slot: "High Gain - Slot 3";
     capture-active: true;
     cab-value: "810 Amped VT Aln 70s";
-    cab-slot: "BANK 2 OF 5";
+    cab-slot: "Slot 2";
     cab-active: true;
     save-dirty: true;
     gate-text: "OFF";
@@ -134,26 +160,14 @@ export component Preview inherits AppWindow {
     ];
     midi-last: "CC 20 = 127";
     model-list-title: root.popup == "preset" ? "Presets"
+        : root.popup == "preset-menu" ? "Presets · action menu"
         : root.popup == "capture" ? "Captures"
         : root.popup == "cab" ? "Cabs"
         : root.popup == "library" ? "Library" : "Models";
     model-list-height: 152;
-    model-list-current: 1;
+    model-list-current: root.popup == "preset" || root.popup == "preset-menu" ? 2 : 1;
     model-list-section: 0;
-    model-list: [
-        { name: "Clean", header: true, index: -1, col: 0, y: 0, section: 0, height: 152 },
-        { name: "Rew D20 Clean", header: false, index: 0, col: 0, y: 0, section: 0, height: 0 },
-        { name: "Rew D20 Clean NF53", header: false, index: 1, col: 1, y: 0, section: 0, height: 0 },
-        { name: "Twin Reverb", header: false, index: 2, col: 2, y: 0, section: 0, height: 0 },
-        { name: "Deluxe", header: false, index: 3, col: 0, y: 76, section: 0, height: 0 },
-        { name: "Crunch", header: true, index: -1, col: 0, y: 0, section: 1, height: 152 },
-        { name: "Plexi 100", header: false, index: 4, col: 0, y: 0, section: 1, height: 0 },
-        { name: "JCM800", header: false, index: 5, col: 1, y: 0, section: 1, height: 0 },
-        { name: "AC30 Top Boost", header: false, index: 6, col: 2, y: 0, section: 1, height: 0 },
-        { name: "Bluesbreaker", header: false, index: 7, col: 0, y: 76, section: 1, height: 0 },
-        { name: "High Gain", header: true, index: -1, col: 0, y: 0, section: 2, height: 76 },
-        { name: "5150", header: false, index: 8, col: 0, y: 0, section: 2, height: 0 },
-    ];
+    model-list: root.popup == "preset" || root.popup == "preset-menu" ? root.preset-items : root.model-items;
 
     chain-tapped(index) => {
         root.popup = "none";
@@ -164,6 +178,22 @@ export component Preview inherits AppWindow {
     tempo-tapped => { root.tap-mode = !root.tap-mode; }
     tools-opened => { root.popup = root.popup == "settings" ? "none" : "settings"; }
     preset-list-tapped => { root.popup = "preset"; }
+    model-preset-action-chosen(index, action) => {
+        root.preset-menu-index = -1;
+        if (action == 0) {
+            root.popup = "rename";
+        } else if (action == 3) {
+            root.confirm-title = "Delete preset " + index + "?";
+            root.confirm-message = "“" + (index == 2 ? "Summer Drive" : "Selected preset") + "” will be removed from the pedal.";
+            root.confirm-label = "Delete";
+            root.confirm-danger = true;
+            root.confirm-open = true;
+        }
+    }
+    name-error(text) => { return ""; }
+    kbd-key(key) => { }
+    kbd-accepted => { root.popup = "none"; }
+    changed kbd-open => { if !root.kbd-open && root.popup == "rename" { root.popup = "none"; } }
     model-list-tapped => { root.popup = "model"; }
     capture-list-tapped => { root.popup = "capture"; }
     cab-list-tapped => { root.popup = "cab"; }
@@ -174,7 +204,7 @@ export component Preview inherits AppWindow {
     }
     // Pickers also close themselves through bt-open / model-open, so mirror that here.
     changed bt-open => { if !root.bt-open && root.popup == "bluetooth" { root.popup = "none"; } }
-    changed model-open => { if !root.model-open && root.popup != "connecting" && root.popup != "bluetooth" { root.popup = "none"; } }
+    changed model-open => { if !root.model-open && root.popup != "connecting" && root.popup != "bluetooth" && root.popup != "rename" { root.popup = "none"; } }
 
     // Dev bar: jump straight to any screen or popup.
     HorizontalLayout {
@@ -197,6 +227,8 @@ export component Preview inherits AppWindow {
         for p in [
             { l: "BT", v: "bluetooth" },
             { l: "Presets", v: "preset" },
+            { l: "Dots menu", v: "preset-menu" },
+            { l: "Rename", v: "rename" },
             { l: "Models", v: "model" },
             { l: "Captures", v: "capture" },
             { l: "Cabs", v: "cab" },

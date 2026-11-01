@@ -220,7 +220,7 @@ component ChainRail inherits Rectangle {
         }
         ChainTab {
             label: "AMP";
-            accent: #e85040;
+            accent: #f8281a;
             active: true;
             selected: (root.page == 0 || root.page == 1) && root.chain == 2;
             vertical-stretch: 1;
@@ -284,7 +284,7 @@ component ChainRail inherits Rectangle {
         }
         ChainTab {
             label: "AMP";
-            accent: #e85040;
+            accent: #f8281a;
             active: true;
             selected: (root.page == 0 || root.page == 1) && root.chain == 2;
             horizontal-stretch: 1;
@@ -398,17 +398,18 @@ component OptionRow inherits Rectangle {
     in property <string> value;
     in property <bool> highlight: false;
     in property <length> label-width: 0px;
+    in property <length> pad-right: 14px;
     height: 68px;
     background: highlight ? #1a3af8 : #262626;
     border-radius: Radius.default;
     HorizontalLayout {
         padding-left: 14px;
-        padding-right: 14px;
+        padding-right: root.pad-right;
         spacing: 8px;
         Text {
             text: root.label;
             color: #e0e0e0;
-            font-size: 18px;
+            font-size: 20px;
             font-weight: 700;
             vertical-alignment: center;
             overflow: elide;
@@ -434,6 +435,24 @@ export struct MidiRow {
     name: string,
     assigned: string,
     learning: bool,
+}
+
+export struct ExpressionRangeRow {
+    target: int,
+    name: string,
+    enabled: bool,
+    summary: string,
+    inverted: bool,
+}
+
+export struct ExpressionBypassRow {
+    target: int,
+    name: string,
+    enabled: bool,
+    summary: string,
+    mode: int,
+    inverted: bool,
+    latch: bool,
 }
 
 export struct BtDevice {
@@ -558,12 +577,13 @@ component PopupTab inherits Rectangle {
 component BluetoothPicker inherits Rectangle {
     in property <[BtDevice]> devices;
     callback picked(int);
+    callback forget(int);
     callback closed();
     background: #000000b0;
     TouchArea { clicked => { root.closed(); } }
     Rectangle {
         width: min(root.width - 24px, 460px);
-        height: min(root.height - 24px, 360px);
+        height: min(root.height - 24px, 420px);
         background: #1e1e1e;
         border-radius: Radius.default;
         TouchArea {}
@@ -584,32 +604,30 @@ component BluetoothPicker inherits Rectangle {
                 vertical-stretch: 1;
             }
             for device[index] in root.devices: Rectangle {
-                height: 52px;
-                background: device.state == 2 ? #1a3af8 : #2a2a2a;
-                border-color: device.state > 0 ? #1a3af8 : #3a3a3a;
-                border-width: 1px;
-                border-radius: Radius.default;
+                height: 68px;
                 TouchArea { clicked => { root.picked(index); } }
-                HorizontalLayout {
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    spacing: 8px;
-                    VerticalLayout {
-                        alignment: center;
-                        horizontal-stretch: 1;
-                        Text {
-                            text: device.name;
-                            color: #ececec;
-                            font-size: 19px;
-                            overflow: elide;
+                OptionRow {
+                    width: parent.width;
+                    label: device.name;
+                    value: device.state == 2 ? "Connected" : (device.state == 1 ? "Connecting" : device.kind);
+                    highlight: device.state == 2;
+                    // Matches the 8px above and below the 52px button.
+                    pad-right: 8px;
+                    VCenter {
+                        Rectangle {
+                            width: 52px;
+                            height: 52px;
+                            background: #000000;
+                            border-radius: Radius.default;
+                            Image {
+                                width: 22px;
+                                height: 22px;
+                                source: device.state == 2 ? @image-url("icons/unlink.png") : (device.state == 1 ? @image-url("icons/refresh.png") : @image-url("icons/link.png"));
+                                colorize: #e0e0e0;
+                                rotation-angle: device.state == 1 ? mod(animation-tick() / 900ms, 1) * 360deg : 0deg;
+                            }
+                            TouchArea { clicked => { if (device.state > 0) { root.forget(index); } else { root.picked(index); } } }
                         }
-                        Text { text: device.kind; color: #909090; font-size: 14px; }
-                    }
-                    Text {
-                        text: device.state == 2 ? "Connected" : (device.state == 1 ? "Connecting..." : "Tap to connect");
-                        color: device.state > 0 ? #ffffff : #909090;
-                        font-size: 15px;
-                        vertical-alignment: center;
                     }
                 }
             }
@@ -638,9 +656,17 @@ component ModelPicker inherits Rectangle {
     in property <int> initial-section: 0;
     property <int> tab: 0;
     init => { root.tab = root.initial-section; }
+    in property <bool> show-preset-actions: false;
+    in property <bool> show-preset-numbers: false;
+    in property <bool> two-line-names: false;
     callback picked(int);
+    callback preset-action-chosen(int, int);
     callback closed();
     property <length> gap: 8px;
+    property <length> action-width: 64px;
+    in-out property <int> menu-index: -1;
+    property <length> menu-x: 0px;
+    property <length> menu-y: 0px;
     background: #000000b0;
     TouchArea { clicked => { root.closed(); } }
     Rectangle {
@@ -708,16 +734,59 @@ component ModelPicker inherits Rectangle {
                             visible: !item.header && item.section == hdr.section;
                             background: item.index == root.current ? #1a3af8 : #2a2a2a;
                             border-radius: Radius.default;
-                            TouchArea { enabled: !item.header; clicked => { root.picked(item.index); } }
+                            TouchArea {
+                                width: parent.width - (root.show-preset-actions && item.name != "" ? root.action-width : 0px);
+                                enabled: !item.header;
+                                clicked => { root.picked(item.index); }
+                            }
                             Text {
-                                x: 12px;
-                                width: parent.width - 24px;
+                                x: root.show-preset-numbers ? 48px : 12px;
+                                y: root.two-line-names ? 8px : 0px;
+                                height: root.two-line-names ? 52px : parent.height;
+                                width: parent.width - (root.show-preset-actions ? root.action-width + 60px : (root.show-preset-numbers ? 60px : 24px));
                                 text: item.header ? "" : item.name;
                                 color: item.index == root.current ? #ffffff : #ececec;
                                 font-size: 19px;
                                 font-weight: 700;
                                 vertical-alignment: center;
                                 overflow: elide;
+                                wrap: root.two-line-names ? word-wrap : no-wrap;
+                            }
+                            if root.show-preset-numbers && !item.header: Text {
+                                x: 10px;
+                                width: 32px;
+                                text: item.index < 10 ? "0" + item.index : "" + item.index;
+                                color: #ffffff70;
+                                font-size: 19px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            if root.show-preset-actions && item.name != "": Rectangle {
+                                x: parent.width - root.action-width;
+                                width: root.action-width;
+                                height: parent.height;
+                                background: #00000000;
+                                VerticalLayout {
+                                    x: parent.width - 34px;
+                                    width: 28px;
+                                    height: parent.height;
+                                    alignment: center;
+                                    spacing: 4px;
+                                    for dot in 3: Rectangle {
+                                        width: 5px;
+                                        height: 5px;
+                                        background: #e0e0e0;
+                                        border-radius: 3px;
+                                    }
+                                }
+                                TouchArea {
+                                    clicked => {
+                                        root.menu-index = item.index;
+                                        root.menu-x = max(8px, min(root.width - 228px, 14px + item.col * (cell + root.gap) + cell - 42px));
+                                        root.menu-y = max(8px, min(root.height - 248px, 90px + item.y * 1px - tab-list.viewport-y));
+                                    }
+                                }
                             }
                         }
                         ScrollFade {
@@ -748,16 +817,59 @@ component ModelPicker inherits Rectangle {
                         visible: !item.header;
                         background: item.index == root.current ? #1a3af8 : #2a2a2a;
                         border-radius: Radius.default;
-                        TouchArea { enabled: !item.header; clicked => { root.picked(item.index); } }
+                        TouchArea {
+                            width: parent.width - (root.show-preset-actions && item.name != "" ? root.action-width : 0px);
+                            enabled: !item.header;
+                            clicked => { root.picked(item.index); }
+                        }
                         Text {
-                            x: 12px;
-                            width: parent.width - 24px;
+                            x: root.show-preset-numbers ? 48px : 12px;
+                            y: root.two-line-names ? 8px : 0px;
+                            height: root.two-line-names ? 52px : parent.height;
+                            width: parent.width - (root.show-preset-actions ? root.action-width + 60px : (root.show-preset-numbers ? 60px : 24px));
                             text: item.header ? "" : item.name;
                             color: item.index == root.current ? #ffffff : #ececec;
                             font-size: 19px;
                             font-weight: 700;
                             vertical-alignment: center;
                             overflow: elide;
+                            wrap: root.two-line-names ? word-wrap : no-wrap;
+                        }
+                        if root.show-preset-numbers && !item.header: Text {
+                            x: 10px;
+                            width: 32px;
+                            text: item.index < 10 ? "0" + item.index : "" + item.index;
+                            color: #ffffff70;
+                            font-size: 19px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        if root.show-preset-actions && item.name != "": Rectangle {
+                            x: parent.width - root.action-width;
+                            width: root.action-width;
+                            height: parent.height;
+                            background: #00000000;
+                            VerticalLayout {
+                                x: parent.width - 34px;
+                                width: 28px;
+                                height: parent.height;
+                                alignment: center;
+                                spacing: 4px;
+                                for dot in 3: Rectangle {
+                                    width: 5px;
+                                    height: 5px;
+                                    background: #e0e0e0;
+                                    border-radius: 3px;
+                                }
+                            }
+                            TouchArea {
+                                clicked => {
+                                    root.menu-index = item.index;
+                                    root.menu-x = max(8px, min(root.width - 228px, 14px + item.col * (cell + root.gap) + cell - 42px));
+                                    root.menu-y = max(8px, min(root.height - 248px, 90px + item.y * 1px - plain-list.viewport-y));
+                                }
+                            }
                         }
                     }
                     ScrollFade {
@@ -771,6 +883,43 @@ component ModelPicker inherits Rectangle {
                         offset: -plain-list.viewport-y;
                         page: plain-list.height;
                         total: plain-list.viewport-height;
+                    }
+                }
+            }
+        }
+        if root.menu-index >= 0: Rectangle {
+            x: root.menu-x;
+            y: root.menu-y;
+            z: 1000;
+            width: 220px;
+            height: 240px;
+            background: #303030;
+            border-radius: Radius.default;
+            for action in 4: Rectangle {
+                x: 4px;
+                y: action * 59px;
+                width: parent.width - 8px;
+                height: 58px;
+                background: #00000000;
+                Text {
+                    x: 12px;
+                    text: action == 0 ? "Rename" : action == 1 ? "Move to..." : action == 2 ? "Copy to..." : "Delete";
+                    color: #f0f0f0;
+                    font-size: 18px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                if action == 2: Rectangle {
+                    x: 8px;
+                    y: parent.height - 1px;
+                    width: parent.width - 16px;
+                    height: 1px;
+                    background: #ffffff30;
+                }
+                TouchArea {
+                    clicked => {
+                        root.preset-action-chosen(root.menu-index, action);
+                        root.menu-index = -1;
                     }
                 }
             }
@@ -1779,6 +1928,8 @@ component ToolsPanel inherits Rectangle {
     callback mute-set(bool, bool);
     in property <string> cab-settings;
     in property <string> expression-summary;
+    in property <[ExpressionRangeRow]> expression-ranges;
+    in property <[ExpressionBypassRow]> expression-bypasses;
     in property <string> calibration-status;
     in property <string> protocol-status;
     in-out property <bool> tempo-global: true;
@@ -1804,6 +1955,11 @@ component ToolsPanel inherits Rectangle {
     callback jack-selected(bool);
     callback calibration-start();
     callback calibration-save();
+    callback expression-range-toggle(int);
+    callback expression-range-adjust(int, int, int);
+    callback expression-bypass-toggle(int);
+    callback expression-bypass-adjust(int, int);
+    callback expression-save();
     background: #000000b0;
     TouchArea { clicked => { root.closed(); } }
     Rectangle {
@@ -1914,6 +2070,88 @@ component ToolsPanel inherits Rectangle {
                         OptionRow {
                             label: "Expression";
                             value: root.expression-summary;
+                        }
+                        OptionRow {
+                            label: "Sweep assignments";
+                            VCenter {
+                                HeaderButton {
+                                    label: "Save";
+                                    hot: root.expression-summary != "Not loaded";
+                                    tapped => { root.expression-save(); }
+                                }
+                            }
+                        }
+                        Text {
+                            text: "Adjust heel/toe in 5% steps. Bypass modes support delay, inversion and switch latch.";
+                            color: #909090;
+                            font-size: 14px;
+                            height: 28px;
+                            vertical-alignment: center;
+                        }
+                        for row in root.expression-ranges: OptionRow {
+                            label: row.name;
+                            value: row.summary;
+                            VCenter { HeaderButton {
+                                label: row.enabled ? "On" : "Off";
+                                hot: row.enabled;
+                                tapped => { root.expression-range-toggle(row.target); }
+                            } }
+                            if row.enabled: VCenter { HeaderButton {
+                                label: "Min −";
+                                tapped => { root.expression-range-adjust(row.target, 0, -1); }
+                            } }
+                            if row.enabled: VCenter { HeaderButton {
+                                label: "Min +";
+                                tapped => { root.expression-range-adjust(row.target, 0, 1); }
+                            } }
+                            if row.enabled: VCenter { HeaderButton {
+                                label: "Max −";
+                                tapped => { root.expression-range-adjust(row.target, 1, -1); }
+                            } }
+                            if row.enabled: VCenter { HeaderButton {
+                                label: "Max +";
+                                tapped => { root.expression-range-adjust(row.target, 1, 1); }
+                            } }
+                            if row.enabled: VCenter { HeaderButton {
+                                label: row.inverted ? "Rev" : "Norm";
+                                choice: true;
+                                hot: row.inverted;
+                                tapped => { root.expression-range-adjust(row.target, 2, 0); }
+                            } }
+                        }
+                        for row in root.expression-bypasses: OptionRow {
+                            label: row.name + " switch";
+                            value: row.summary;
+                            VCenter { HeaderButton {
+                                label: row.enabled ? "On" : "Off";
+                                hot: row.enabled;
+                                tapped => { root.expression-bypass-toggle(row.target); }
+                            } }
+                            if row.enabled: VCenter { HeaderButton {
+                                label: row.mode == 0 ? "Heel/toe" : (row.mode == 1 ? "Switch" : "Stop");
+                                choice: true;
+                                tapped => { root.expression-bypass-adjust(row.target, 0); }
+                            } }
+                            if row.enabled && row.mode != 1: VCenter { HeaderButton {
+                                label: "Delay −";
+                                tapped => { root.expression-bypass-adjust(row.target, 1); }
+                            } }
+                            if row.enabled && row.mode != 1: VCenter { HeaderButton {
+                                label: "Delay +";
+                                tapped => { root.expression-bypass-adjust(row.target, 2); }
+                            } }
+                            if row.enabled && row.mode != 2: VCenter { HeaderButton {
+                                label: row.inverted ? "Rev" : "Norm";
+                                choice: true;
+                                hot: row.inverted;
+                                tapped => { root.expression-bypass-adjust(row.target, 3); }
+                            } }
+                            if row.enabled && row.mode == 1: VCenter { HeaderButton {
+                                label: row.latch ? "Latch" : "Momentary";
+                                choice: true;
+                                hot: row.latch;
+                                tapped => { root.expression-bypass-adjust(row.target, 4); }
+                            } }
                         }
                         OptionRow {
                             label: "Calibration";
@@ -2115,6 +2353,206 @@ component ConnectingOverlay inherits Rectangle {
     }
 }
 
+// Centered card over a dimmed backdrop; taps outside close it.
+component DialogCard inherits Rectangle {
+    in property <length> card-width: 440px;
+    callback closed();
+    background: #000000b0;
+    TouchArea { clicked => { root.closed(); } }
+    Rectangle {
+        width: min(root.card-width, root.width - 24px);
+        height: card-content.preferred-height + 36px;
+        background: #1e1e1e;
+        border-radius: Radius.default;
+        TouchArea {}
+        card-content := VerticalLayout {
+            padding: 18px;
+            spacing: 10px;
+            @children
+        }
+    }
+}
+
+component DialogButton inherits Rectangle {
+    in property <string> label;
+    in property <color> fill: #2a2a2a;
+    in property <bool> enabled: true;
+    callback tapped();
+    height: 56px;
+    background: root.enabled ? root.fill : #202020;
+    border-radius: Radius.default;
+    Text {
+        text: root.label;
+        color: root.enabled ? #ffffff : #666666;
+        font-size: 19px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    TouchArea { enabled: root.enabled; clicked => { root.tapped(); } }
+}
+
+component ConfirmDialog inherits DialogCard {
+    in property <string> title;
+    in property <string> message;
+    in property <string> accept-label: "OK";
+    in property <color> accept-fill: #1a3af8;
+    callback accepted();
+    Text {
+        text: root.title;
+        color: #e0e0e0;
+        font-size: 22px;
+        font-weight: 700;
+    }
+    Text {
+        text: root.message;
+        color: #c8c8c8;
+        font-size: 17px;
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        DialogButton { label: "Cancel"; fill: #000000; tapped => { root.closed(); } }
+        DialogButton { label: root.accept-label; fill: root.accept-fill; tapped => { root.accepted(); } }
+    }
+}
+
+component KeyCap inherits Rectangle {
+    in property <string> label;
+    in property <bool> hot: false;
+    in property <length> key-height: 56px;
+    callback tapped();
+    height: root.key-height;
+    horizontal-stretch: 1;
+    background: root.hot ? #1a3af8 : #2a2a2a;
+    border-radius: 8px;
+    Text {
+        text: root.label;
+        color: #ffffff;
+        font-size: 20px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    TouchArea { clicked => { root.tapped(); } }
+}
+
+// Typing goes through `key` ("\u{8}" is backspace) so Rust owns the text and its limits.
+component NameKeyboard inherits Rectangle {
+    in property <string> title;
+    in property <string> text;
+    in property <string> error;
+    callback key(string);
+    callback accepted();
+    callback closed();
+    property <bool> shift: true;
+    property <bool> cursor-visible: true;
+    Timer {
+        interval: 500ms;
+        running: true;
+        triggered => { root.cursor-visible = !root.cursor-visible; }
+    }
+    changed text => { root.cursor-visible = true; }
+    property <length> key-height: min(52px, max(40px, (root.height - 180px) / 5));
+    // Padding, header, error line and row gaps around the five key rows.
+    property <length> card-height: 156px + 5 * root.key-height;
+    background: #000000b0;
+    TouchArea { clicked => { root.closed(); } }
+    Rectangle {
+        width: root.width - 24px;
+        height: root.card-height;
+        background: #1e1e1e;
+        border-radius: Radius.default;
+        TouchArea {}
+        VerticalLayout {
+            padding: 14px;
+            spacing: 8px;
+            PopupHeader {
+                title: "";
+                closed => { root.closed(); }
+                Rectangle {
+                    x: 54px;
+                    y: 3px;
+                    width: parent.width - 54px;
+                    height: 42px;
+                    background: #101010;
+                    border-radius: Radius.default;
+                    name-text := Text {
+                        x: 14px;
+                        width: parent.width - 38px;
+                        text: root.text;
+                        color: #e0e0e0;
+                        font-size: 26px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    Text {
+                        x: 14px + min(name-text.preferred-width, name-text.width);
+                        width: 10px;
+                        text: "|";
+                        color: #e0e0e0;
+                        font-size: 26px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                        visible: root.cursor-visible;
+                    }
+                }
+            }
+            Text {
+                height: 22px;
+                text: root.error;
+                color: #ff8a80;
+                font-size: 15px;
+            }
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 6px;
+                for k in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]: KeyCap { label: k; key-height: root.key-height; tapped => { root.key(k); } }
+            }
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 6px;
+                for k in ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"]: KeyCap {
+                    label: root.shift ? k.to-uppercase() : k;
+                    key-height: root.key-height;
+                    tapped => { root.key(root.shift ? k.to-uppercase() : k); root.shift = false; }
+                }
+            }
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 6px;
+                Rectangle { horizontal-stretch: 0.5; }
+                for k in ["a", "s", "d", "f", "g", "h", "j", "k", "l"]: KeyCap {
+                    label: root.shift ? k.to-uppercase() : k;
+                    key-height: root.key-height;
+                    tapped => { root.key(root.shift ? k.to-uppercase() : k); root.shift = false; }
+                }
+                Rectangle { horizontal-stretch: 0.5; }
+            }
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 6px;
+                KeyCap { label: "Aa"; hot: root.shift; key-height: root.key-height; horizontal-stretch: 1.5; tapped => { root.shift = !root.shift; } }
+                for k in ["z", "x", "c", "v", "b", "n", "m"]: KeyCap {
+                    label: root.shift ? k.to-uppercase() : k;
+                    key-height: root.key-height;
+                    tapped => { root.key(root.shift ? k.to-uppercase() : k); root.shift = false; }
+                }
+                KeyCap { label: "<-"; key-height: root.key-height; horizontal-stretch: 1.5; tapped => { root.key("\u{8}"); } }
+            }
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 6px;
+                KeyCap { label: "-"; key-height: root.key-height; tapped => { root.key("-"); } }
+                KeyCap { label: "_"; key-height: root.key-height; tapped => { root.key("_"); } }
+                KeyCap { label: "Space"; key-height: root.key-height; horizontal-stretch: 4; tapped => { root.key(" "); } }
+                KeyCap { label: "Done"; hot: root.error == ""; key-height: root.key-height; horizontal-stretch: 2; tapped => { if (root.error == "") { root.accepted(); } } }
+            }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     in-out property <bool> refreshing: false;
     Timer {
@@ -2158,11 +2596,20 @@ export component AppWindow inherits Window {
     in-out property <bool> settings-open: false;
     in-out property <bool> model-open: false;
     in-out property <int> list-kind: 0;
+    in-out property <int> preset-menu-index: -1;
     in-out property <string> model-list-title: "";
     in-out property <[ModelItem]> model-list: [];
     in-out property <float> model-list-height: 0;
     in-out property <int> model-list-current: -1;
     in-out property <int> model-list-section: 0;
+    in-out property <bool> kbd-open: false;
+    in-out property <string> kbd-title: "";
+    in-out property <string> kbd-text: "";
+    in-out property <bool> confirm-open: false;
+    in-out property <string> confirm-title: "";
+    in-out property <string> confirm-message: "";
+    in-out property <string> confirm-label: "OK";
+    in-out property <bool> confirm-danger: false;
     in-out property <[BtDevice]> bt-devices;
     in-out property <int> conn-amp: -1;
     in-out property <string> load-status: "";
@@ -2306,10 +2753,16 @@ export component AppWindow inherits Window {
     callback copy-tapped();
     callback library-tapped();
     callback bt-picked(int);
+    callback bt-forget(int);
     callback model-list-tapped();
     callback capture-list-tapped();
     callback cab-list-tapped();
     callback model-chosen(int);
+    callback model-preset-action-chosen(int, int);
+    callback kbd-key(string);
+    callback kbd-accepted();
+    callback confirm-accepted();
+    pure callback name-error(string) -> string;
     callback tools-opened();
     callback tools-refresh();
     in-out property <[MidiRow]> midi-rows: [];
@@ -2328,6 +2781,13 @@ export component AppWindow inherits Window {
     callback tools-mute-set(bool, bool);
     callback tools-calibration-start();
     callback tools-calibration-save();
+    in-out property <[ExpressionRangeRow]> tools-expression-ranges: [];
+    in-out property <[ExpressionBypassRow]> tools-expression-bypasses: [];
+    callback tools-expression-range-toggle(int);
+    callback tools-expression-range-adjust(int, int, int);
+    callback tools-expression-bypass-toggle(int);
+    callback tools-expression-bypass-adjust(int, int);
+    callback tools-expression-save();
 
     // 4.3B panel size; the firmware overrides it with set_size().
     preferred-width: 800px;
@@ -2580,6 +3040,8 @@ export component AppWindow inherits Window {
         mute-set(input, muted) => { root.tools-mute-set(input, muted); }
         cab-settings: root.tools-cab-settings;
         expression-summary: root.tools-expression-summary;
+        expression-ranges: root.tools-expression-ranges;
+        expression-bypasses: root.tools-expression-bypasses;
         calibration-status: root.tools-calibration-status;
         protocol-status: root.tools-protocol-status;
         meter-input: root.tools-meter-input;
@@ -2600,6 +3062,15 @@ export component AppWindow inherits Window {
         jack-selected(expression) => { root.tools-jack-selected(expression); }
         calibration-start => { root.tools-calibration-start(); }
         calibration-save => { root.tools-calibration-save(); }
+        expression-range-toggle(target) => { root.tools-expression-range-toggle(target); }
+        expression-range-adjust(target, field, delta) => {
+            root.tools-expression-range-adjust(target, field, delta);
+        }
+        expression-bypass-toggle(target) => { root.tools-expression-bypass-toggle(target); }
+        expression-bypass-adjust(target, action) => {
+            root.tools-expression-bypass-adjust(target, action);
+        }
+        expression-save => { root.tools-expression-save(); }
         tempo-global <=> root.tempo-global;
         x: 0px; y: 0px; width: root.width; height: root.height;
         closed => { root.settings-open = false; }
@@ -2611,15 +3082,46 @@ export component AppWindow inherits Window {
         x: 0px; y: 0px; width: root.width; height: root.height;
         title: root.model-list-title;
         items: root.model-list;
+        menu-index <=> root.preset-menu-index;
         columns: root.portrait ? 2 : 3;
         content-height: root.model-list-height;
         current: root.model-list-current;
         initial-section: root.model-list-section;
+        show-preset-numbers: root.list-kind == 3 || root.list-kind == 4 || root.list-kind == 5;
+        show-preset-actions: root.list-kind == 3;
+        two-line-names: root.list-kind >= 1 && root.list-kind <= 5;
         picked(index) => {
             root.model-chosen(index);
             root.model-open = false;
         }
+        preset-action-chosen(index, action) => { root.model-preset-action-chosen(index, action); }
         closed => { root.model-open = false; }
+    }
+
+    if root.confirm-open: ConfirmDialog {
+        x: 0px; y: 0px; width: root.width; height: root.height;
+        title: root.confirm-title;
+        message: root.confirm-message;
+        accept-label: root.confirm-label;
+        accept-fill: root.confirm-danger ? #f8281a : #1a3af8;
+        accepted => {
+            root.confirm-open = false;
+            root.confirm-accepted();
+        }
+        closed => { root.confirm-open = false; }
+    }
+
+    if root.kbd-open: NameKeyboard {
+        x: 0px; y: 0px; width: root.width; height: root.height;
+        title: root.kbd-title;
+        text: root.kbd-text;
+        error: root.name-error(root.kbd-text);
+        key(k) => { root.kbd-key(k); }
+        accepted => {
+            root.kbd-open = false;
+            root.kbd-accepted();
+        }
+        closed => { root.kbd-open = false; }
     }
 
     if root.connecting: ConnectingOverlay {
@@ -2633,6 +3135,7 @@ export component AppWindow inherits Window {
         x: 0px; y: 0px; width: root.width; height: root.height;
         devices: root.bt-devices;
         picked(index) => { root.bt-picked(index); }
+        forget(index) => { root.bt-forget(index); }
         closed => { root.bt-open = false; }
     }
 }

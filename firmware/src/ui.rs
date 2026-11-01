@@ -10,11 +10,12 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::String;
+use core::sync::atomic::{AtomicU8, Ordering};
 use core::cell::UnsafeCell;
 
 use core::cell::RefCell;
 use slint::platform::software_renderer::{
-    LineBufferProvider, MinimalSoftwareWindow, RenderingRotation, RepaintBufferType, Rgb565Pixel,
+    MinimalSoftwareWindow, RenderingRotation, RepaintBufferType, Rgb565Pixel,
 };
 use slint::platform::{Platform, PointerEventButton, WindowAdapter, WindowEvent};
 
@@ -24,12 +25,19 @@ use embassy_time::{Duration, Instant};
 use slint::{LogicalPosition, PhysicalSize};
 
 use nano_wire::editor::CabFloat;
+use nano_wire::editor::{
+    ExpBypass, ExpBypassTarget, ExpRange, ExpRangeTarget, ExpressionAssignments,
+};
 
 use crate::bounce::{Framebuffer, HEIGHT, WIDTH};
 use crate::fx::types::NanoFxState;
 use crate::link::Cmd;
 
 slint::include_modules!();
+
+mod lines;
+mod presets;
+use lines::PartialLines;
 
 struct Backend {
     window: Rc<MinimalSoftwareWindow>,
@@ -59,6 +67,8 @@ struct State {
     fx: NanoFxState,
     fx_valid: bool,
     amp_title: String,
+    expression_slot: u8,
+    expression: ExpressionAssignments,
 }
 
 struct Slot(UnsafeCell<Option<State>>);
@@ -263,6 +273,28 @@ fn ensure() {
     app.on_tools_calibration_save(move || {
         crate::link::push_cmd(Cmd::ExpressionCalibrationSave);
     });
+    app.on_tools_expression_range_toggle(|target| {
+        edit_expression_range(target, 0, 0);
+    });
+    app.on_tools_expression_range_adjust(|target, field, delta| {
+        edit_expression_range(target, field + 1, delta);
+    });
+    app.on_tools_expression_bypass_toggle(|target| {
+        edit_expression_bypass(target, 0);
+    });
+    app.on_tools_expression_bypass_adjust(|target, action| {
+        edit_expression_bypass(target, action + 1);
+    });
+    app.on_tools_expression_save(|| {
+        if let Some(ui) = state().as_ref() {
+            if ui.expression_slot != 0 {
+                crate::link::push_cmd(Cmd::ExpressionSave {
+                    slot: ui.expression_slot,
+                    assignments: ui.expression.clone(),
+                });
+            }
+        }
+    });
     app.on_tempo_tapped(move || {
         crate::link::push_cmd(Cmd::Tempo);
     });
@@ -380,6 +412,7 @@ fn ensure() {
                 1 if index <= 255 => crate::link::push_cmd(Cmd::CaptureAt(index as u8)),
                 2 => crate::link::push_cmd(Cmd::CabAt(index as u16)),
                 3 if index <= 255 => crate::link::push_cmd(Cmd::PresetAt(index as u8)),
+                kind @ (4 | 5) if index <= 255 => choose_target(&app, kind, index as u8),
                 0 if index <= 255 => {
                     let Some(block) = fx_block_for_chain(app.get_chain()) else {
                         return;
@@ -393,11 +426,66 @@ fn ensure() {
             }
         }
     });
+    app.on_model_preset_action_chosen({
+        let weak = weak.clone();
+        move |index, action| {
+            if let Some(app) = weak.upgrade() {
+                if !(1..=64).contains(&index) {
+                    return;
+                }
+                ACTION_SLOT.store(index as u8, Ordering::Relaxed);
+                preset_action(&app, action);
+            }
+        }
+    });
+    app.on_name_error(|text| preset_name_error(text.as_str()).into());
+    app.on_kbd_key({
+        let weak = weak.clone();
+        move |key| {
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
+            let mut text = String::from(app.get_kbd_text().as_str());
+            if key.as_str() == "\u{8}" {
+                text.pop();
+            } else if key.len() == 1 && text.len() < nano_wire::editor::PRESET_NAME_LIMIT {
+                text.push_str(key.as_str());
+            }
+            app.set_kbd_text(text.as_str().into());
+        }
+    });
+    app.on_kbd_accepted({
+        let weak = weak.clone();
+        move || {
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
+            let name = String::from(app.get_kbd_text().as_str());
+            if preset_name_error(&name).is_empty() {
+                crate::link::push_cmd(Cmd::PresetRename {
+                    slot: ACTION_SLOT.load(Ordering::Relaxed),
+                    name,
+                });
+            }
+        }
+    });
+    app.on_confirm_accepted(move || match CONFIRM.load(Ordering::Relaxed) {
+        CONFIRM_DELETE => {
+            crate::link::push_cmd(Cmd::PresetDelete(ACTION_SLOT.load(Ordering::Relaxed)));
+        }
+        kind @ (LIST_MOVE | LIST_COPY) => run_transfer(kind),
+        _ => {}
+    });
     app.on_save_tapped(move || crate::link::push_cmd(Cmd::Save));
     app.on_copy_tapped(move || crate::link::push_cmd(Cmd::Copy));
     app.on_bt_picked(move |index| {
         if index >= 0 {
             crate::ble::pick(index as usize);
+        }
+    });
+    app.on_bt_forget(move |index| {
+        if index >= 0 {
+            crate::ble::forget(index as usize);
         }
     });
     app.on_library_tapped(move || crate::link::push_cmd(Cmd::Library));
@@ -471,6 +559,8 @@ fn ensure() {
         fx: NanoFxState::zeroed(),
         fx_valid: false,
         amp_title: String::from("Amp"),
+        expression_slot: 0,
+        expression: ExpressionAssignments::default(),
     });
 }
 
@@ -601,7 +691,7 @@ fn open_preset_list(app: &AppWindow) {
     if names.is_empty() {
         rows.header("Loading presets...");
     }
-    const PER_TAB: usize = 20;
+    const PER_TAB: usize = 12;
     for (position, name) in names.iter().enumerate() {
         if position % PER_TAB == 0 {
             let last = (position + PER_TAB).min(names.len());
@@ -611,6 +701,122 @@ fn open_preset_list(app: &AppWindow) {
     }
     let current = i32::from(crate::state::nano_state_preset_slot());
     rows.show(app, 3, "Presets", current);
+}
+
+const LIST_MOVE: u8 = 4;
+const LIST_COPY: u8 = 5;
+const CONFIRM_DELETE: u8 = 1;
+
+/// Preset the action menu is acting on (1..=64), and what the open confirm
+/// dialog will do.
+static ACTION_SLOT: AtomicU8 = AtomicU8::new(0);
+static ACTION_DST: AtomicU8 = AtomicU8::new(0);
+static CONFIRM: AtomicU8 = AtomicU8::new(0);
+
+fn preset_name_error(text: &str) -> &'static str {
+    let slot = ACTION_SLOT.load(Ordering::Relaxed);
+    if text.trim().is_empty() {
+        "Name can't be empty or only spaces"
+    } else if text.len() < nano_wire::editor::PRESET_NAME_MIN {
+        "At least 4 characters"
+    } else if !nano_wire::editor::preset_name_valid(text) {
+        "Letters, digits, space, - and _ only"
+    } else if crate::state::nano_state_preset_name_taken(slot, text) {
+        "Another preset already has this name"
+    } else {
+        ""
+    }
+}
+
+fn slot_name(slot: u8) -> String {
+    crate::state::nano_state_preset_names()
+        .get(usize::from(slot).wrapping_sub(1))
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn preset_action(app: &AppWindow, action: i32) {
+    let slot = ACTION_SLOT.load(Ordering::Relaxed);
+    if !(1..=64).contains(&slot) {
+        return;
+    }
+    let name = slot_name(slot);
+    match action {
+        0 => {
+            let start = if nano_wire::editor::preset_name_valid(&name) {
+                name.as_str()
+            } else {
+                ""
+            };
+            app.set_kbd_title(alloc::format!("Rename preset {slot}").as_str().into());
+            app.set_kbd_text(start.into());
+            app.set_kbd_open(true);
+        }
+        3 => {
+            CONFIRM.store(CONFIRM_DELETE, Ordering::Relaxed);
+            app.set_confirm_title(alloc::format!("Delete preset {slot}?").as_str().into());
+            app.set_confirm_message(alloc::format!("\"{name}\" will be removed from the pedal.").as_str().into());
+            app.set_confirm_label("Delete".into());
+            app.set_confirm_danger(true);
+            app.set_confirm_open(true);
+        }
+        1 => open_target_list(app, LIST_MOVE),
+        2 => open_target_list(app, LIST_COPY),
+        _ => {}
+    }
+}
+
+/// Every slot, empty ones included, as the destination for a move or copy.
+fn open_target_list(app: &AppWindow, kind: u8) {
+    let names = crate::state::nano_state_preset_names();
+    let mut rows = ListRows::new(list_columns(app));
+    const PER_TAB: usize = 12;
+    for position in 0..64usize {
+        if position % PER_TAB == 0 {
+            let last = (position + PER_TAB).min(64);
+            rows.header(&alloc::format!("{}-{}", position + 1, last));
+        }
+        let name = names.get(position).map_or("", String::as_str);
+        let label = if name.is_empty() { "(empty)" } else { name };
+        rows.item(label, position as i32 + 1);
+    }
+    let title = if kind == LIST_MOVE { "Move to..." } else { "Copy to..." };
+    rows.show(app, i32::from(kind), title, -1);
+}
+
+fn choose_target(app: &AppWindow, kind: i32, dst: u8) {
+    let src = ACTION_SLOT.load(Ordering::Relaxed);
+    if !(1..=64).contains(&src) || !(1..=64).contains(&dst) || src == dst {
+        return;
+    }
+    let kind = kind as u8;
+    ACTION_DST.store(dst, Ordering::Relaxed);
+    let existing = slot_name(dst);
+    if existing.is_empty() {
+        run_transfer(kind);
+        return;
+    }
+    CONFIRM.store(kind, Ordering::Relaxed);
+    app.set_confirm_title(alloc::format!("Overwrite preset {dst}?").as_str().into());
+    app.set_confirm_message(
+        alloc::format!(
+            "\"{existing}\" will be deleted and replaced by \"{}\". Unsaved edits are lost.",
+            slot_name(src)
+        )
+        .as_str()
+        .into(),
+    );
+    app.set_confirm_label("Overwrite".into());
+    app.set_confirm_danger(false);
+    app.set_confirm_open(true);
+}
+
+fn run_transfer(kind: u8) {
+    crate::link::push_cmd(Cmd::PresetTransfer {
+        src: ACTION_SLOT.load(Ordering::Relaxed),
+        dst: ACTION_DST.load(Ordering::Relaxed),
+        remove_src: kind == LIST_MOVE,
+    });
 }
 
 fn open_cab_list(app: &AppWindow) {
@@ -663,46 +869,6 @@ pub fn library_updated() {
     }
 }
 
-/// One scan line in internal RAM. Slint blends into this, then the finished
-/// span is stored in the PSRAM frame. Blending straight into PSRAM contends
-/// with the bounce copy and the picture breaks up.
-struct PartialLines {
-    fb: *mut Rgb565Pixel,
-    line: [Rgb565Pixel; WIDTH],
-}
-
-impl LineBufferProvider for PartialLines {
-    type TargetPixel = Rgb565Pixel;
-
-    fn process_line(
-        &mut self,
-        line: usize,
-        range: core::ops::Range<usize>,
-        render_fn: impl FnOnce(&mut [Rgb565Pixel]),
-    ) {
-        let start = range.start;
-        let len = range.len();
-        if start.saturating_add(len) > WIDTH || line >= HEIGHT {
-            return;
-        }
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                self.fb.add(line * WIDTH + start),
-                self.line.as_mut_ptr(),
-                len,
-            );
-        }
-        render_fn(&mut self.line[..len]);
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                self.line.as_ptr(),
-                self.fb.add(line * WIDTH + start),
-                len,
-            );
-        }
-    }
-}
-
 fn redraw(framebuffer: &mut Framebuffer) {
     let ui = state().as_mut().unwrap();
     let layout_changed = apply_layout(ui);
@@ -710,19 +876,24 @@ fn redraw(framebuffer: &mut Framebuffer) {
     // The old layout's pixels are still in the framebuffer, and a rotation
     // change alone does not mark them dirty. Repaint the whole frame once.
     let rotation = ui.rotation;
+    // Slint 1.13's mirrored glyph sampling can underflow during partial
+    // redraws. Flip finished spans instead; touch mapping still uses rotation.
+    let flipped = rotation == RenderingRotation::Rotate180;
+    let rendering_rotation = if flipped {
+        RenderingRotation::NoRotation
+    } else {
+        rotation
+    };
     let fb = framebuffer
         .as_pixels_mut()
         .as_mut_ptr()
         .cast::<Rgb565Pixel>();
     ui.window.draw_if_needed(|renderer| {
-        renderer.set_rendering_rotation(rotation);
+        renderer.set_rendering_rotation(rendering_rotation);
         if layout_changed {
             renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
         }
-        renderer.render_by_line(PartialLines {
-            fb,
-            line: [Rgb565Pixel(0); WIDTH],
-        });
+        renderer.render_by_line(PartialLines::new(fb, flipped));
         renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
     });
 }
@@ -977,6 +1148,14 @@ pub fn show_preset(name: &str) {
     ui.window.request_redraw();
 }
 
+pub fn refresh_preset_catalog() {
+    ensure();
+    let names = crate::state::nano_state_preset_names();
+    let ui = state().as_mut().unwrap();
+    presets::refresh_preset_rows(&ui.app, &names);
+    ui.window.request_redraw();
+}
+
 pub fn show_model(name: &str) {
     if name.is_empty() {
         return;
@@ -1203,6 +1382,13 @@ pub fn show_expression_assignments(
 ) {
     ensure();
     let ui = state().as_mut().unwrap();
+    ui.expression_slot = slot;
+    ui.expression = assignments.clone();
+    publish_expression(ui);
+    ui.window.request_redraw();
+}
+
+fn expression_summary(slot: u8, assignments: &ExpressionAssignments) -> String {
     let text = if slot == 0 {
         String::from("Not loaded")
     } else if assignments.ranges.is_empty() && assignments.bypasses.is_empty() {
@@ -1211,17 +1397,17 @@ pub fn show_expression_assignments(
         let mut text = String::new();
         for (target, range) in &assignments.ranges {
             let name = match target {
-                nano_wire::editor::ExpRangeTarget::Gain => "Gain",
-                nano_wire::editor::ExpRangeTarget::Bass => "Bass",
-                nano_wire::editor::ExpRangeTarget::Mid => "Mid",
-                nano_wire::editor::ExpRangeTarget::Treble => "Treble",
-                nano_wire::editor::ExpRangeTarget::Pre1Amount => "Pre1",
-                nano_wire::editor::ExpRangeTarget::Pre2Amount => "Pre2",
-                nano_wire::editor::ExpRangeTarget::Post1Amount => "Post1",
-                nano_wire::editor::ExpRangeTarget::Post2Amount => "Post2",
-                nano_wire::editor::ExpRangeTarget::Post3Amount => "Post3",
-                nano_wire::editor::ExpRangeTarget::CaptureVolume => "Volume",
-                nano_wire::editor::ExpRangeTarget::Gate => "Gate",
+                ExpRangeTarget::Gain => "Gain",
+                ExpRangeTarget::Bass => "Bass",
+                ExpRangeTarget::Mid => "Mid",
+                ExpRangeTarget::Treble => "Treble",
+                ExpRangeTarget::Pre1Amount => "Pre1",
+                ExpRangeTarget::Pre2Amount => "Pre2",
+                ExpRangeTarget::Post1Amount => "Post1",
+                ExpRangeTarget::Post2Amount => "Post2",
+                ExpRangeTarget::Post3Amount => "Post3",
+                ExpRangeTarget::CaptureVolume => "Volume",
+                ExpRangeTarget::Gate => "Gate",
             };
             if !text.is_empty() {
                 text.push_str(" · ");
@@ -1235,27 +1421,27 @@ pub fn show_expression_assignments(
         }
         for (target, bypass) in &assignments.bypasses {
             let name = match target {
-                nano_wire::editor::ExpBypassTarget::Capture => "Capture",
-                nano_wire::editor::ExpBypassTarget::Cab => "Cab",
-                nano_wire::editor::ExpBypassTarget::Pre1 => "Pre1",
-                nano_wire::editor::ExpBypassTarget::Pre2 => "Pre2",
-                nano_wire::editor::ExpBypassTarget::Post1 => "Post1",
-                nano_wire::editor::ExpBypassTarget::Post2 => "Post2",
-                nano_wire::editor::ExpBypassTarget::Post3 => "Post3",
-                nano_wire::editor::ExpBypassTarget::Gate => "Gate",
+                ExpBypassTarget::Capture => "Capture",
+                ExpBypassTarget::Cab => "Cab",
+                ExpBypassTarget::Pre1 => "Pre1",
+                ExpBypassTarget::Pre2 => "Pre2",
+                ExpBypassTarget::Post1 => "Post1",
+                ExpBypassTarget::Post2 => "Post2",
+                ExpBypassTarget::Post3 => "Post3",
+                ExpBypassTarget::Gate => "Gate",
             };
             let detail = match bypass {
-                nano_wire::editor::ExpBypass::HeelToe { inverted, delay_ms } => alloc::format!(
+                ExpBypass::HeelToe { inverted, delay_ms } => alloc::format!(
                     "heel/toe{} {}ms",
                     if *inverted { " rev" } else { "" },
                     delay_ms
                 ),
-                nano_wire::editor::ExpBypass::Switch { inverted, latch } => alloc::format!(
+                ExpBypass::Switch { inverted, latch } => alloc::format!(
                     "switch{}{}",
                     if *inverted { " rev" } else { "" },
                     if *latch { " latch" } else { "" }
                 ),
-                nano_wire::editor::ExpBypass::Stop { delay_ms } => {
+                ExpBypass::Stop { delay_ms } => {
                     alloc::format!("stop {}ms", delay_ms)
                 }
             };
@@ -1266,7 +1452,7 @@ pub fn show_expression_assignments(
         }
         text
     };
-    let summary = if slot == 0 {
+    if slot == 0 {
         text
     } else {
         alloc::format!(
@@ -1274,8 +1460,254 @@ pub fn show_expression_assignments(
             assignments.ranges.len(),
             assignments.bypasses.len()
         )
+    }
+}
+
+fn publish_expression(ui: &mut State) {
+    const RANGES: [(ExpRangeTarget, &str); 11] = [
+        (ExpRangeTarget::Gain, "Gain"),
+        (ExpRangeTarget::Bass, "Bass"),
+        (ExpRangeTarget::Mid, "Mid"),
+        (ExpRangeTarget::Treble, "Treble"),
+        (ExpRangeTarget::Pre1Amount, "Pre FX 1 amount"),
+        (ExpRangeTarget::Pre2Amount, "Pre FX 2 amount"),
+        (ExpRangeTarget::Post1Amount, "Post FX 1 amount"),
+        (ExpRangeTarget::Post2Amount, "Post FX 2 amount"),
+        (ExpRangeTarget::Post3Amount, "Post FX 3 amount"),
+        (ExpRangeTarget::CaptureVolume, "Capture volume"),
+        (ExpRangeTarget::Gate, "Gate amount"),
+    ];
+    const BYPASSES: [(ExpBypassTarget, &str); 8] = [
+        (ExpBypassTarget::Capture, "Capture"),
+        (ExpBypassTarget::Cab, "Cab"),
+        (ExpBypassTarget::Pre1, "Pre FX 1"),
+        (ExpBypassTarget::Pre2, "Pre FX 2"),
+        (ExpBypassTarget::Post1, "Post FX 1"),
+        (ExpBypassTarget::Post2, "Post FX 2"),
+        (ExpBypassTarget::Post3, "Post FX 3"),
+        (ExpBypassTarget::Gate, "Gate"),
+    ];
+    let ranges = RANGES
+        .iter()
+        .map(|(target, name)| {
+            let current = ui
+                .expression
+                .ranges
+                .iter()
+                .find(|(candidate, _)| candidate == target)
+                .map(|(_, value)| *value);
+            ExpressionRangeRow {
+                target: *target as i32,
+                name: (*name).into(),
+                enabled: current.is_some(),
+                summary: current
+                    .map(|range| {
+                        let min = (u16::from(range.min) * 100 + 127) / 255;
+                        let max = (u16::from(range.max) * 100 + 127) / 255;
+                        alloc::format!(
+                            "{min}-{max}%{}",
+                            if range.inverted { " Rev" } else { "" }
+                        )
+                        .into()
+                    })
+                    .unwrap_or_else(|| "Not assigned".into()),
+                inverted: current.is_some_and(|range| range.inverted),
+            }
+        })
+        .collect::<alloc::vec::Vec<_>>();
+    let bypasses = BYPASSES
+        .iter()
+        .map(|(target, name)| {
+            let current = ui
+                .expression
+                .bypasses
+                .iter()
+                .find(|(candidate, _)| candidate == target)
+                .map(|(_, value)| *value);
+            let (enabled, summary, mode, inverted, latch) = match current {
+                Some(ExpBypass::HeelToe { inverted, delay_ms }) => (
+                    true,
+                    alloc::format!(
+                        "Heel/toe · {delay_ms}ms{}",
+                        if inverted { " · reversed" } else { "" }
+                    ),
+                    0,
+                    inverted,
+                    false,
+                ),
+                Some(ExpBypass::Switch { inverted, latch }) => (
+                    true,
+                    alloc::format!(
+                        "Footswitch{}{}",
+                        if inverted { " · reversed" } else { "" },
+                        if latch { " · latch" } else { "" }
+                    ),
+                    1,
+                    inverted,
+                    latch,
+                ),
+                Some(ExpBypass::Stop { delay_ms }) => (
+                    true,
+                    alloc::format!("Stop · {delay_ms}ms"),
+                    2,
+                    false,
+                    false,
+                ),
+                None => (false, String::from("Not assigned"), 0, false, false),
+            };
+            ExpressionBypassRow {
+                target: *target as i32,
+                name: (*name).into(),
+                enabled,
+                summary: summary.into(),
+                mode,
+                inverted,
+                latch,
+            }
+        })
+        .collect::<alloc::vec::Vec<_>>();
+    ui.app.set_tools_expression_summary(
+        expression_summary(ui.expression_slot, &ui.expression).into(),
+    );
+    ui.app.set_tools_expression_ranges(slint::ModelRc::new(slint::VecModel::from(ranges)));
+    ui.app
+        .set_tools_expression_bypasses(slint::ModelRc::new(slint::VecModel::from(bypasses)));
+}
+
+fn range_target(value: i32) -> Option<ExpRangeTarget> {
+    match value {
+        4 => Some(ExpRangeTarget::Gain),
+        5 => Some(ExpRangeTarget::Bass),
+        6 => Some(ExpRangeTarget::Mid),
+        7 => Some(ExpRangeTarget::Treble),
+        8 => Some(ExpRangeTarget::Pre1Amount),
+        9 => Some(ExpRangeTarget::Pre2Amount),
+        10 => Some(ExpRangeTarget::Post1Amount),
+        11 => Some(ExpRangeTarget::Post2Amount),
+        12 => Some(ExpRangeTarget::Post3Amount),
+        13 => Some(ExpRangeTarget::CaptureVolume),
+        21 => Some(ExpRangeTarget::Gate),
+        _ => None,
+    }
+}
+
+fn edit_expression_range(target: i32, action: i32, delta: i32) {
+    let Some(target) = range_target(target) else {
+        return;
     };
-    ui.app.set_tools_expression_summary(summary.into());
+    let Some(ui) = state().as_mut() else {
+        return;
+    };
+    if ui.expression_slot == 0 {
+        return;
+    }
+    let ranges = &mut ui.expression.ranges;
+    if action == 0 {
+        if let Some(index) = ranges.iter().position(|(candidate, _)| *candidate == target) {
+            ranges.remove(index);
+        } else {
+            ranges.push((
+                target,
+                ExpRange {
+                    inverted: false,
+                    min: 0,
+                    max: u8::MAX,
+                },
+            ));
+        }
+    } else if let Some((_, range)) = ranges.iter_mut().find(|(candidate, _)| *candidate == target) {
+        match action {
+            1 => range.min = (i32::from(range.min) + delta * 13).clamp(0, 255) as u8,
+            2 => range.max = (i32::from(range.max) + delta * 13).clamp(0, 255) as u8,
+            3 => range.inverted = !range.inverted,
+            _ => return,
+        }
+    }
+    publish_expression(ui);
+    ui.window.request_redraw();
+}
+
+fn bypass_target(value: i32) -> Option<ExpBypassTarget> {
+    match value {
+        14 => Some(ExpBypassTarget::Capture),
+        15 => Some(ExpBypassTarget::Cab),
+        16 => Some(ExpBypassTarget::Pre1),
+        17 => Some(ExpBypassTarget::Pre2),
+        18 => Some(ExpBypassTarget::Post1),
+        19 => Some(ExpBypassTarget::Post2),
+        20 => Some(ExpBypassTarget::Post3),
+        22 => Some(ExpBypassTarget::Gate),
+        _ => None,
+    }
+}
+
+fn edit_expression_bypass(target: i32, action: i32) {
+    let Some(target) = bypass_target(target) else {
+        return;
+    };
+    let Some(ui) = state().as_mut() else {
+        return;
+    };
+    if ui.expression_slot == 0 {
+        return;
+    }
+    let bypasses = &mut ui.expression.bypasses;
+    let found = bypasses.iter().position(|(candidate, _)| *candidate == target);
+    if action == 0 {
+        if let Some(index) = found {
+            bypasses.remove(index);
+        } else {
+            bypasses.push((
+                target,
+                ExpBypass::HeelToe {
+                    inverted: false,
+                    delay_ms: 0,
+                },
+            ));
+        }
+    } else if let Some(index) = found {
+        let (_, current) = bypasses[index];
+        let updated = match (current, action) {
+            (ExpBypass::HeelToe { .. }, 1) => ExpBypass::Switch {
+                inverted: false,
+                latch: false,
+            },
+            (ExpBypass::Switch { .. }, 1) => ExpBypass::Stop { delay_ms: 0 },
+            (ExpBypass::Stop { .. }, 1) => ExpBypass::HeelToe {
+                inverted: false,
+                delay_ms: 0,
+            },
+            (ExpBypass::HeelToe { inverted, delay_ms }, 2) => ExpBypass::HeelToe {
+                inverted,
+                delay_ms: delay_ms.saturating_sub(100),
+            },
+            (ExpBypass::Stop { delay_ms }, 2) => ExpBypass::Stop {
+                delay_ms: delay_ms.saturating_sub(100),
+            },
+            (ExpBypass::HeelToe { inverted, delay_ms }, 3) => ExpBypass::HeelToe {
+                inverted,
+                delay_ms: delay_ms.saturating_add(100).min(2000),
+            },
+            (ExpBypass::Stop { delay_ms }, 3) => ExpBypass::Stop {
+                delay_ms: delay_ms.saturating_add(100).min(2000),
+            },
+            (ExpBypass::HeelToe { inverted, delay_ms }, 4) => ExpBypass::HeelToe {
+                inverted: !inverted,
+                delay_ms,
+            },
+            (ExpBypass::Switch { inverted, latch }, 4) => ExpBypass::Switch {
+                inverted: !inverted,
+                latch,
+            },
+            (ExpBypass::Switch { inverted, latch }, 5) => ExpBypass::Switch {
+                inverted,
+                latch: !latch,
+            },
+            _ => return,
+        };
+        bypasses[index].1 = updated;
+    }
+    publish_expression(ui);
     ui.window.request_redraw();
 }
 
