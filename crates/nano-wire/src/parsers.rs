@@ -8,10 +8,71 @@ use alloc::{
 };
 
 use crate::types::{
-    Amp, LibraryCatalog, LibraryCategory, LibraryItem, PresetCatalog, TunerRoute, TunerSettings,
+    Amp, CabSettings, DeviceSettings, JackMode, LibraryCatalog, LibraryCategory, LibraryItem,
+    Metering, MeteringKind, PresetCatalog, TunerRoute, TunerSettings, AMP_CAB_NAME_MAX,
     AMP_CAPTURE_NAME_MAX, BPM_MAX, BPM_MIN, PRESET_COUNT, PRESET_NAME_MAX,
 };
 use crate::varint::read_varint;
+
+#[derive(Clone, Copy)]
+struct ProtoField<'a> {
+    number: u32,
+    wire: u8,
+    varint: Option<u32>,
+    bytes: Option<&'a [u8]>,
+    fixed32: Option<f32>,
+}
+
+fn next_proto_field<'a>(data: &'a [u8], offset: &mut usize) -> Option<ProtoField<'a>> {
+    if *offset >= data.len() {
+        return None;
+    }
+    let (tag, next) = read_varint(data, *offset)?;
+    *offset = next;
+    let number = u32::try_from(tag >> 3).ok()?;
+    let wire = (tag & 7) as u8;
+    let mut field = ProtoField {
+        number,
+        wire,
+        varint: None,
+        bytes: None,
+        fixed32: None,
+    };
+    match wire {
+        0 => {
+            let (value, next) = read_varint(data, *offset)?;
+            *offset = next;
+            field.varint = Some(value);
+        }
+        1 => {
+            let end = offset.checked_add(8)?;
+            if end > data.len() {
+                return None;
+            }
+            *offset = end;
+        }
+        2 => {
+            let (len, next) = read_varint(data, *offset)?;
+            let start = next;
+            let end = start.checked_add(usize::try_from(len).ok()?)?;
+            if end > data.len() {
+                return None;
+            }
+            *offset = end;
+            field.bytes = Some(&data[start..end]);
+        }
+        5 => {
+            let end = offset.checked_add(4)?;
+            if end > data.len() {
+                return None;
+            }
+            field.fixed32 = Some(read_f32_le(&data[*offset..end]));
+            *offset = end;
+        }
+        _ => return None,
+    }
+    Some(field)
+}
 
 fn read_f32_le(p: &[u8]) -> f32 {
     f32::from_le_bytes([p[0], p[1], p[2], p[3]])
@@ -123,9 +184,233 @@ pub fn field_varint(data: &[u8], field_num: u32) -> Option<u32> {
     None
 }
 
+pub fn parse_device_settings(data: &[u8]) -> Option<DeviceSettings> {
+    let mut settings = DeviceSettings::default();
+    let mut found = false;
+    let mut jack_seen = false;
+    let mut offset = 0;
+    while offset < data.len() {
+        let field = next_proto_field(data, &mut offset)?;
+        match (field.number, field.wire) {
+            (10, 0) => {
+                jack_seen = true;
+                settings.jack_mode = match field.varint? {
+                    0 => Some(JackMode::Midi),
+                    1 => Some(JackMode::Expression),
+                    _ => None,
+                };
+                found |= settings.jack_mode.is_some();
+            }
+            (17, 5) => {
+                let db = field.fixed32?;
+                if db.is_finite() && (-40.0..=0.0).contains(&db) {
+                    settings.usb_playback_db = Some(db);
+                    found = true;
+                }
+            }
+            (17, 1) => {
+                let start = offset - 8;
+                let db = f64::from_le_bytes(data[start..offset].try_into().ok()?) as f32;
+                if db.is_finite() && (-40.0..=0.0).contains(&db) {
+                    settings.usb_playback_db = Some(db);
+                    found = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    if found && !jack_seen {
+        settings.jack_mode = Some(JackMode::Midi);
+    }
+    found.then_some(settings)
+}
+
+fn cab_inner_values(inner: &[u8]) -> Option<[f32; 3]> {
+    let mut found = [0.0f32; 3];
+    let mut offset = 0;
+    while offset < inner.len() {
+        let field = next_proto_field(inner, &mut offset)?;
+        if field.wire != 5 || !(1..=3).contains(&field.number) {
+            return None;
+        }
+        found[field.number as usize - 1] = field.fixed32?;
+    }
+    Some(found)
+}
+
+/// Field 8 `{1: output, 2: high pass, 3: low pass}` (float32, zeros omitted),
+/// found by shape on each level first, then inside nested messages.
+fn cab_settings_block(data: &[u8], depth: u8) -> Option<CabSettings> {
+    let mut offset = 0;
+    while offset < data.len() {
+        let Some(field) = next_proto_field(data, &mut offset) else {
+            break;
+        };
+        if field.number != 8 || field.wire != 2 {
+            continue;
+        }
+        let Some(inner) = field.bytes else { continue };
+        if inner.len() < 5 || inner.len() > 15 || inner.len() % 5 != 0 {
+            continue;
+        }
+        if let Some([output, high_pass, low_pass]) = cab_inner_values(inner) {
+            return Some(CabSettings {
+                output: Some(output),
+                high_pass: Some(high_pass),
+                low_pass: Some(low_pass),
+            });
+        }
+    }
+    if depth >= 3 {
+        return None;
+    }
+    offset = 0;
+    while offset < data.len() {
+        let Some(field) = next_proto_field(data, &mut offset) else {
+            break;
+        };
+        if field.wire == 2 {
+            if let Some(values) = field.bytes.and_then(|b| cab_settings_block(b, depth + 1)) {
+                return Some(values);
+            }
+        }
+    }
+    None
+}
+
+pub fn parse_cab_settings(data: &[u8]) -> Option<CabSettings> {
+    cab_settings_block(data, 0)
+}
+
+pub fn parse_metering(data: &[u8]) -> Option<Metering> {
+    let mut kind = None;
+    let mut value = None;
+    let mut kind_seen = false;
+    let mut value_seen = false;
+    let mut offset = 0;
+    while offset < data.len() {
+        let field = next_proto_field(data, &mut offset)?;
+        if field.wire != 0 {
+            continue;
+        }
+        match field.number {
+            3 => {
+                kind_seen = true;
+                kind = match field.varint? {
+                    0 => Some(MeteringKind::CaptureInput),
+                    1 => Some(MeteringKind::CaptureOutput),
+                    2 => Some(MeteringKind::ExpressionPedal),
+                    _ => None,
+                };
+            }
+            4 => {
+                value_seen = true;
+                value = field.varint;
+            }
+            _ => {}
+        }
+    }
+    if !kind_seen && !value_seen {
+        return None;
+    }
+    if kind_seen && kind.is_none() {
+        return None;
+    }
+    Some(Metering {
+        kind: kind.unwrap_or(MeteringKind::CaptureInput),
+        value: value.unwrap_or(0),
+    })
+}
+
+pub fn parse_expression_assignments(data: &[u8]) -> Option<crate::editor::ExpressionAssignments> {
+    use crate::editor::{
+        ExpBypass, ExpBypassTarget, ExpRange, ExpRangeTarget, ExpressionAssignments,
+    };
+
+    let mut assignments = ExpressionAssignments::default();
+    let mut offset = 0;
+    while offset < data.len() {
+        let record = next_proto_field(data, &mut offset)?;
+        let Some(inner) = record.bytes.filter(|_| record.wire == 2) else {
+            continue;
+        };
+        let field = record.number;
+        let range_target = match field {
+            3 => Some(ExpRangeTarget::Gain),
+            4 => Some(ExpRangeTarget::Bass),
+            5 => Some(ExpRangeTarget::Mid),
+            6 => Some(ExpRangeTarget::Treble),
+            7 => Some(ExpRangeTarget::Pre1Amount),
+            8 => Some(ExpRangeTarget::Pre2Amount),
+            9 => Some(ExpRangeTarget::Post1Amount),
+            10 => Some(ExpRangeTarget::Post2Amount),
+            11 => Some(ExpRangeTarget::Post3Amount),
+            12 => Some(ExpRangeTarget::CaptureVolume),
+            20 => Some(ExpRangeTarget::Gate),
+            _ => None,
+        };
+        if let Some(target) = range_target {
+            let inverted = field_varint(inner, 1).unwrap_or(0) != 0;
+            let min = field_varint(inner, 2).unwrap_or(0).min(255) as u8;
+            let max = field_varint(inner, 3).unwrap_or(0).min(255) as u8;
+            assignments
+                .ranges
+                .push((target, ExpRange { inverted, min, max }));
+            continue;
+        }
+        let bypass_target = match field {
+            13 => Some(ExpBypassTarget::Capture),
+            14 => Some(ExpBypassTarget::Cab),
+            15 => Some(ExpBypassTarget::Pre1),
+            16 => Some(ExpBypassTarget::Pre2),
+            17 => Some(ExpBypassTarget::Post1),
+            18 => Some(ExpBypassTarget::Post2),
+            19 => Some(ExpBypassTarget::Post3),
+            21 => Some(ExpBypassTarget::Gate),
+            _ => None,
+        };
+        let Some(target) = bypass_target else {
+            continue;
+        };
+        let mut oneof_offset = 0;
+        let mut bypass = None;
+        while oneof_offset < inner.len() {
+            let oneof = next_proto_field(inner, &mut oneof_offset)?;
+            let Some(body) = oneof.bytes.filter(|_| oneof.wire == 2) else {
+                continue;
+            };
+            let first = field_varint(body, 1).unwrap_or(0) != 0;
+            let second = field_varint(body, 2).unwrap_or(0);
+            bypass = match oneof.number {
+                1 => Some(ExpBypass::HeelToe {
+                    inverted: first,
+                    delay_ms: second.min(2000) as u16,
+                }),
+                2 => Some(ExpBypass::Switch {
+                    inverted: first,
+                    latch: second != 0,
+                }),
+                3 => Some(ExpBypass::Stop {
+                    delay_ms: field_varint(body, 1).unwrap_or(0).min(2000) as u16,
+                }),
+                _ => None,
+            };
+            if bypass.is_some() {
+                break;
+            }
+        }
+        if let Some(bypass) = bypass {
+            assignments.bypasses.push((target, bypass));
+        }
+    }
+    Some(assignments)
+}
+
 pub fn parse_amp(data: &[u8]) -> Option<Amp> {
     let mut out = Amp::default();
     let mut have = [false; 5];
+    let mut capture_bank = 1u32;
+    let mut capture_position = None;
     let mut i = 0;
 
     while i < data.len() {
@@ -143,6 +428,7 @@ pub fn parse_amp(data: &[u8]) -> Option<Amp> {
                 };
                 let raw = clamp_u8(val);
                 match field {
+                    9 => capture_bank = val,
                     3 if !have[0] => {
                         out.gain = raw;
                         have[0] = true;
@@ -163,9 +449,13 @@ pub fn parse_amp(data: &[u8]) -> Option<Amp> {
                         out.treble = raw;
                         have[4] = true;
                     }
-                    11 if !out.have_capture_slot => {
-                        out.capture_slot = raw;
+                    11 if capture_position.is_none() => {
+                        capture_position = Some(raw);
                         out.have_capture_slot = true;
+                    }
+                    12 if !out.have_cab_slot => {
+                        out.cab_slot = raw;
+                        out.have_cab_slot = true;
                     }
                     44 if !out.have_capture_volume => {
                         out.capture_volume = raw;
@@ -196,6 +486,14 @@ pub fn parse_amp(data: &[u8]) -> Option<Amp> {
                             out.capture_name =
                                 name.chars().take(AMP_CAPTURE_NAME_MAX - 1).collect();
                             out.have_capture_name = true;
+                        }
+                    }
+                }
+                if field == 33 && !out.have_cab_name {
+                    if let Some(name) = first_string(&data[i..i + flen], 2) {
+                        if !name.is_empty() {
+                            out.cab_name = name.chars().take(AMP_CAB_NAME_MAX - 1).collect();
+                            out.have_cab_name = true;
                         }
                     }
                 }
@@ -233,6 +531,18 @@ pub fn parse_amp(data: &[u8]) -> Option<Amp> {
     out.have_bass = have[2];
     out.have_mid = have[3];
     out.have_treble = have[4];
+    if let Some(position) = capture_position {
+        let bank = if (1..=5).contains(&capture_bank) {
+            capture_bank
+        } else {
+            1
+        };
+        out.capture_slot = if position == 0 {
+            0
+        } else {
+            ((bank - 1) * 5 + position as u32).min(u8::MAX as u32) as u8
+        };
+    }
     out.valid = have.iter().any(|&h| h) || out.have_capture_volume;
     out.valid.then_some(out)
 }
@@ -1182,6 +1492,18 @@ pub fn log_tuner_state_fields(tag: &str, data: &[u8]) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn current_preset_index_is_field_13_not_field_1() {
+        // Head of a real state dump: field 1 is a constant, field 13 is the preset.
+        let head = [
+            0x08, 0x01, 0x18, 0x83, 0x01, 0x20, 0xFF, 0x01, 0x28, 0x52, 0x30, 0xA8, 0x01, 0x38,
+            0x7E, 0x48, 0x04, 0x50, 0x01, 0x58, 0x03, 0x60, 0x01, 0x68, 0x0F, 0x70, 0x0F, 0x78,
+            0x12,
+        ];
+        assert_eq!(field_varint(&head, 1), Some(1));
+        assert_eq!(field_varint(&head, 13), Some(15));
+    }
+
     fn encode_varint_u32(mut v: u32) -> Vec<u8> {
         let mut out = Vec::new();
         while v >= 0x80 {
@@ -1231,6 +1553,93 @@ mod tests {
         );
         assert_eq!(parse_tuner_settings(&field_fixed32(46, 900.0)), None);
         assert_eq!(parse_tuner_settings(&[0x75, 0x00]), None);
+    }
+
+    #[test]
+    fn device_settings_parse_jack_and_usb_gain() {
+        let mut data = field_varint_bytes(10, 1);
+        data.extend(field_fixed32(17, -12.5));
+        assert_eq!(
+            parse_device_settings(&data),
+            Some(DeviceSettings {
+                jack_mode: Some(JackMode::Expression),
+                usb_playback_db: Some(-12.5),
+            })
+        );
+        assert_eq!(
+            parse_device_settings(&field_varint_bytes(10, 0))
+                .unwrap()
+                .jack_mode,
+            Some(JackMode::Midi)
+        );
+        assert_eq!(parse_device_settings(&[0x52, 0x02, 0x01]), None);
+    }
+
+    #[test]
+    fn cab_settings_parse_nested_float_values() {
+        let mut settings = field_fixed32(1, 0.5);
+        settings.extend(field_fixed32(2, 0.25));
+        settings.extend(field_fixed32(3, 0.75));
+        let payload = field_bytes(8, &settings);
+        assert_eq!(
+            parse_cab_settings(&payload),
+            Some(CabSettings {
+                output: Some(0.5),
+                high_pass: Some(0.25),
+                low_pass: Some(0.75),
+            })
+        );
+        assert_eq!(parse_cab_settings(&[0x42, 0x05, 0x0D, 0, 0, 0]), None);
+    }
+
+    #[test]
+    fn metering_parses_kind_and_value() {
+        let mut payload = field_varint_bytes(3, 2);
+        payload.extend(field_varint_bytes(4, 128));
+        assert_eq!(
+            parse_metering(&payload),
+            Some(Metering {
+                kind: MeteringKind::ExpressionPedal,
+                value: 128,
+            })
+        );
+        assert_eq!(parse_metering(&field_varint_bytes(3, 9)), None);
+    }
+
+    #[test]
+    fn expression_assignments_parse_ranges_and_switches() {
+        let mut range = field_varint_bytes(1, 1);
+        range.extend(field_varint_bytes(2, 10));
+        range.extend(field_varint_bytes(3, 200));
+        let mut heel_toe = field_varint_bytes(1, 1);
+        heel_toe.extend(field_varint_bytes(2, 750));
+        let switch = field_bytes(1, &heel_toe);
+        let mut payload = field_bytes(3, &range);
+        payload.extend(field_bytes(13, &switch));
+
+        let parsed = parse_expression_assignments(&payload).unwrap();
+        assert_eq!(
+            parsed.ranges,
+            vec![(
+                crate::editor::ExpRangeTarget::Gain,
+                crate::editor::ExpRange {
+                    inverted: true,
+                    min: 10,
+                    max: 200,
+                }
+            )]
+        );
+        assert_eq!(
+            parsed.bypasses,
+            vec![(
+                crate::editor::ExpBypassTarget::Capture,
+                crate::editor::ExpBypass::HeelToe {
+                    inverted: true,
+                    delay_ms: 750,
+                }
+            )]
+        );
+        assert!(parse_expression_assignments(&[0x1A, 0x04, 0x08]).is_none());
     }
 
     #[test]
@@ -1294,6 +1703,46 @@ mod tests {
         assert_eq!(amp.treble, 132);
         assert_eq!(amp.capture_volume, 200);
         assert!(amp.have_capture_volume);
+    }
+
+    #[test]
+    fn parse_amp_capture_and_cab_sources() {
+        let mut data = Vec::new();
+        data.extend(field_varint_bytes(9, 2));
+        data.extend(field_varint_bytes(11, 3));
+        data.extend(field_varint_bytes(12, 2));
+        let capture_name = field_bytes(2, b"Rew D20 Clean NF53");
+        data.extend(field_bytes(32, &capture_name));
+        let cab_name = field_bytes(2, b"810 Amped VT Aln 70s");
+        data.extend(field_bytes(33, &cab_name));
+        data.extend(field_varint_bytes(3, 100));
+
+        let amp = parse_amp(&data).unwrap();
+        assert_eq!(amp.capture_slot, 8);
+        assert!(amp.have_capture_slot);
+        assert_eq!(amp.capture_name, "Rew D20 Clean NF53");
+        assert!(amp.have_capture_name);
+        assert_eq!(amp.cab_slot, 2);
+        assert!(amp.have_cab_slot);
+        assert_eq!(amp.cab_name, "810 Amped VT Aln 70s");
+        assert!(amp.have_cab_name);
+
+        let fixed = crate::types::NanoAmpC::from(&amp);
+        assert_eq!(fixed.cab_slot, 2);
+        assert_eq!(fixed.to_amp().cab_name, amp.cab_name);
+    }
+
+    #[test]
+    fn parse_amp_bypassed_sources() {
+        let mut data = field_varint_bytes(11, 0);
+        data.extend(field_varint_bytes(12, 0));
+        data.extend(field_varint_bytes(3, 100));
+
+        let amp = parse_amp(&data).unwrap();
+        assert_eq!(amp.capture_slot, 0);
+        assert_eq!(amp.cab_slot, 0);
+        assert!(amp.have_capture_slot);
+        assert!(amp.have_cab_slot);
     }
 
     #[test]

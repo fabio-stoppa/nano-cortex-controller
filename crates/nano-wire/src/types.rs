@@ -7,6 +7,7 @@ pub const BPM_MIN: u16 = 40;
 pub const BPM_MAX: u16 = 240;
 
 pub const AMP_CAPTURE_NAME_MAX: usize = 40;
+pub const AMP_CAB_NAME_MAX: usize = 64;
 pub const PRESET_COUNT: usize = 64;
 pub const PRESET_NAME_MAX: usize = 48;
 
@@ -45,6 +46,40 @@ pub enum TunerRoute {
 pub struct TunerSettings {
     pub reference_hz: Option<f32>,
     pub muted: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum JackMode {
+    #[default]
+    Midi = 0,
+    Expression = 1,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DeviceSettings {
+    pub jack_mode: Option<JackMode>,
+    pub usb_playback_db: Option<f32>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CabSettings {
+    pub output: Option<f32>,
+    pub high_pass: Option<f32>,
+    pub low_pass: Option<f32>,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeteringKind {
+    CaptureInput = 0,
+    CaptureOutput = 1,
+    ExpressionPedal = 2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Metering {
+    pub kind: MeteringKind,
+    pub value: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,9 +121,13 @@ pub struct Amp {
     pub capture_volume: u8,
     pub capture_slot: u8,
     pub capture_name: String,
+    pub cab_slot: u8,
+    pub cab_name: String,
     pub have_capture_slot: bool,
     pub have_capture_name: bool,
     pub have_capture_volume: bool,
+    pub have_cab_slot: bool,
+    pub have_cab_name: bool,
     pub valid: bool,
 }
 
@@ -108,9 +147,13 @@ impl Default for Amp {
             capture_volume: 128,
             capture_slot: 0,
             capture_name: String::new(),
+            cab_slot: 0,
+            cab_name: String::new(),
             have_capture_slot: false,
             have_capture_name: false,
             have_capture_volume: false,
+            have_cab_slot: false,
+            have_cab_name: false,
             valid: false,
         }
     }
@@ -134,9 +177,13 @@ pub struct NanoAmpC {
     pub capture_volume: u8,
     pub capture_slot: u8,
     pub capture_name: [u8; AMP_CAPTURE_NAME_MAX],
+    pub cab_slot: u8,
+    pub cab_name: [u8; AMP_CAB_NAME_MAX],
     pub have_capture_slot: bool,
     pub have_capture_name: bool,
     pub have_capture_volume: bool,
+    pub have_cab_slot: bool,
+    pub have_cab_name: bool,
     pub valid: bool,
 }
 
@@ -166,12 +213,17 @@ impl From<&Amp> for NanoAmpC {
             capture_volume: amp.capture_volume,
             capture_slot: amp.capture_slot,
             capture_name: [0; AMP_CAPTURE_NAME_MAX],
+            cab_slot: amp.cab_slot,
+            cab_name: [0; AMP_CAB_NAME_MAX],
             have_capture_slot: amp.have_capture_slot,
             have_capture_name: amp.have_capture_name,
             have_capture_volume: amp.have_capture_volume,
+            have_cab_slot: amp.have_cab_slot,
+            have_cab_name: amp.have_cab_name,
             valid: amp.valid,
         };
         write_c_string(&mut out.capture_name, &amp.capture_name);
+        write_c_string(&mut out.cab_name, &amp.cab_name);
         out
     }
 }
@@ -184,6 +236,11 @@ impl NanoAmpC {
             .iter()
             .position(|&b| b == 0)
             .unwrap_or(self.capture_name.len());
+        let cab_end = self
+            .cab_name
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.cab_name.len());
         Amp {
             gain: self.gain,
             level: self.level,
@@ -198,9 +255,13 @@ impl NanoAmpC {
             capture_volume: self.capture_volume,
             capture_slot: self.capture_slot,
             capture_name: String::from_utf8_lossy(&self.capture_name[..end]).into_owned(),
+            cab_slot: self.cab_slot,
+            cab_name: String::from_utf8_lossy(&self.cab_name[..cab_end]).into_owned(),
             have_capture_slot: self.have_capture_slot,
             have_capture_name: self.have_capture_name,
             have_capture_volume: self.have_capture_volume,
+            have_cab_slot: self.have_cab_slot,
+            have_cab_name: self.have_cab_name,
             valid: self.valid,
         }
     }

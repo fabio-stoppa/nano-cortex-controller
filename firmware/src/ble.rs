@@ -8,13 +8,17 @@
 //! heap-backed GATT client so it does not inflate the main task's stack.
 
 use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetDataLength, LeSetScanParams};
 use bt_hci::controller::ControllerCmdSync;
-use embassy_futures::join::join3;
+use core::cell::RefCell;
+use embassy_futures::join::{join, join3};
 use embassy_futures::select::{select, Either};
-use embassy_time::with_timeout;
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
+use embassy_time::with_timeout;
 
 #[derive(Clone, Copy)]
 pub struct SliderWrite {
@@ -52,6 +56,113 @@ const MIDI_IO: [u8; 16] = [
 const CONNECTIONS_MAX: usize = 2;
 const L2CAP_CHANNELS_MAX: usize = 6;
 
+/// A supported device heard during the scan, as listed in the Bluetooth picker.
+#[derive(Clone)]
+pub struct Seen {
+    pub addr: Address,
+    pub name: String,
+    pub nano: bool,
+    /// 0 = nearby, 1 = connecting, 2 = connected.
+    pub state: u8,
+    seen_at: embassy_time::Instant,
+}
+
+/// How long a device stays listed as available after its last advertisement.
+const AVAILABLE_FOR: Duration = Duration::from_secs(8);
+
+type Shared<T> = Mutex<CriticalSectionRawMutex, RefCell<T>>;
+
+const SEEN_MAX: usize = 8;
+static SEEN: Shared<Vec<Seen>> = Mutex::new(RefCell::new(Vec::new()));
+static PICK_NANO: Shared<Option<Address>> = Mutex::new(RefCell::new(None));
+static PICK_FOOT: Shared<Option<Address>> = Mutex::new(RefCell::new(None));
+static NANO_RESTART: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+static FOOT_RESTART: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Devices that are linked, being linked, or were heard recently.
+pub fn devices() -> Vec<Seen> {
+    let now = embassy_time::Instant::now();
+    SEEN.lock(|seen| {
+        seen.borrow()
+            .iter()
+            .filter(|d| d.state > 0 || now - d.seen_at < AVAILABLE_FOR)
+            .cloned()
+            .collect()
+    })
+}
+
+/// Chooses the device at `index` of [`devices`] and restarts the link to use it.
+pub fn pick(index: usize) {
+    let Some(device) = devices().get(index).cloned() else {
+        return;
+    };
+    if device.state == 2 {
+        return;
+    }
+    let slot = if device.nano { &PICK_NANO } else { &PICK_FOOT };
+    slot.lock(|pick| *pick.borrow_mut() = Some(device.addr));
+    // The two links are independent, so only the chosen one restarts.
+    if device.nano {
+        NANO_RESTART.signal(());
+    } else {
+        FOOT_RESTART.signal(());
+    }
+}
+
+fn remember(addr: Address, name: &[u8], nano: bool) {
+    SEEN.lock(|seen| {
+        let mut seen = seen.borrow_mut();
+        if let Some(d) = seen.iter_mut().find(|d| d.addr == addr) {
+            d.seen_at = embassy_time::Instant::now();
+            return;
+        }
+        if seen.len() >= SEEN_MAX {
+            let now = embassy_time::Instant::now();
+            let Some(idle) = seen
+                .iter()
+                .position(|d| d.state == 0 && now - d.seen_at >= AVAILABLE_FOR)
+            else {
+                return;
+            };
+            seen.remove(idle);
+        }
+        seen.push(Seen {
+            addr,
+            name: String::from_utf8_lossy(name).into_owned(),
+            nano,
+            state: 0,
+            seen_at: embassy_time::Instant::now(),
+        });
+    });
+}
+
+fn mark(addr: Address, state: u8) {
+    SEEN.lock(|seen| {
+        if let Some(d) = seen.borrow_mut().iter_mut().find(|d| d.addr == addr) {
+            d.state = state;
+        }
+    });
+}
+
+/// Marks devices of one kind as nearby again after their link ended.
+fn reset_state(nano: bool) {
+    SEEN.lock(|seen| {
+        for d in seen.borrow_mut().iter_mut().filter(|d| d.nano == nano) {
+            d.state = 0;
+        }
+    });
+}
+
+fn wanted(slot: &Shared<Option<Address>>, addr: Address) -> bool {
+    slot.lock(|pick| pick.borrow().map_or(true, |p| p == addr))
+}
+
+fn is_foot(name: &[u8]) -> bool {
+    eq_ignore_ascii_case(name, FOOT_PLUS)
+        || eq_ignore_ascii_case(name, FOOT)
+        || name.len() >= 9 && eq_ignore_ascii_case(&name[..9], b"chocolate")
+}
+
 struct Hunt {
     nano: Signal<NoopRawMutex, Address>,
     foot: Signal<NoopRawMutex, Address>,
@@ -68,12 +179,6 @@ impl Hunt {
             foot_armed: core::sync::atomic::AtomicBool::new(true),
         }
     }
-
-    fn arm(&self) {
-        use core::sync::atomic::Ordering;
-        self.nano_armed.store(true, Ordering::Relaxed);
-        self.foot_armed.store(true, Ordering::Relaxed);
-    }
 }
 
 impl EventHandler for Hunt {
@@ -84,11 +189,18 @@ impl EventHandler for Hunt {
                 continue;
             };
             let addr = Address::new(report.addr_kind, report.addr);
-            if name.starts_with(NANO_PREFIX) && self.nano_armed.swap(false, Ordering::Relaxed) {
+            let nano = name.starts_with(NANO_PREFIX);
+            let foot = !nano && is_foot(name);
+            if !nano && !foot {
+                continue;
+            }
+            remember(addr, name, nano);
+            if nano && wanted(&PICK_NANO, addr) && self.nano_armed.swap(false, Ordering::Relaxed) {
                 log::info!("found Nano Cortex at {addr}");
                 log_pkt("Nano advertisement", report.data, None);
                 self.nano.signal(addr);
-            } else if (eq_ignore_ascii_case(name, FOOT_PLUS) || eq_ignore_ascii_case(name, FOOT))
+            } else if foot
+                && wanted(&PICK_FOOT, addr)
                 && self.foot_armed.swap(false, Ordering::Relaxed)
             {
                 log::info!("found footswitch ({} bytes)", name.len());
@@ -116,6 +228,7 @@ where
         .build();
     let mut runner = stack.runner();
     let hunt = Hunt::new();
+    crate::ui::set_bluetooth_busy();
 
     let _ = join3(
         async {
@@ -133,6 +246,12 @@ pub async fn touch_only(board: &mut Board<'_>) {
     touch_loop(board).await;
 }
 
+type Radio = embassy_sync::mutex::Mutex<NoopRawMutex, ()>;
+type RadioGuard<'a> = embassy_sync::mutex::MutexGuard<'a, NoopRawMutex, ()>;
+
+/// The Nano and the footswitch each get their own loop, so one dropping or
+/// reconnecting never touches the other. The radio lock only keeps their scans
+/// and connection attempts from overlapping.
 async fn links<C>(stack: &Stack<'_, C, DefaultPacketPool>, hunt: &Hunt)
 where
     C: Controller
@@ -140,46 +259,101 @@ where
         + ControllerCmdSync<LeSetDataLength>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 {
-    loop {
-        hunt.arm();
-        session(stack, hunt).await;
-        crate::link::set_up(false);
-        crate::screen::nano_ui_set_ble_connected(false);
-        log::warn!("link ended, scanning again");
-        Timer::after(Duration::from_secs(2)).await;
-    }
+    let radio = Radio::new(());
+    join(nano_loop(stack, hunt, &radio), foot_loop(stack, hunt, &radio)).await;
 }
 
-async fn session<C>(stack: &Stack<'_, C, DefaultPacketPool>, hunt: &Hunt)
+async fn nano_loop<C>(stack: &Stack<'_, C, DefaultPacketPool>, hunt: &Hunt, radio: &Radio)
 where
     C: Controller
         + ControllerCmdSync<LeSetScanParams>
         + ControllerCmdSync<LeSetDataLength>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 {
-    let (nano, foot) = {
-        let central = stack.central();
-        let mut scanner = Scanner::new(central);
-        let config = listen(&[]);
-        let scan = match scanner.scan(&config).await {
-            Ok(scan) => scan,
-            Err(_) => {
-                log::warn!("scan start failed");
-                return;
-            }
-        };
-        log::info!("scanning");
-        let nano = hunt.nano.wait().await;
-        let foot = match select(hunt.foot.wait(), Timer::after(Duration::from_secs(8))).await {
-            Either::First(addr) => Some(addr),
-            Either::Second(_) => None,
-        };
-        // Dropping the session asks the runner to disable scanning.
-        drop(scan);
-        drop(scanner);
-        Timer::after(Duration::from_millis(200)).await;
-        (nano, foot)
+    loop {
+        NANO_RESTART.reset();
+        select(nano_session(stack, hunt, radio), NANO_RESTART.wait()).await;
+        crate::link::set_up(false);
+        crate::screen::nano_ui_set_ble_connected(false);
+        reset_state(true);
+        log::warn!("nano link ended, scanning again");
+        Timer::after(Duration::from_secs(2)).await;
+    }
+}
+
+async fn foot_loop<C>(stack: &Stack<'_, C, DefaultPacketPool>, hunt: &Hunt, radio: &Radio)
+where
+    C: Controller
+        + ControllerCmdSync<LeSetScanParams>
+        + ControllerCmdSync<LeSetDataLength>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+{
+    loop {
+        FOOT_RESTART.reset();
+        select(foot_session(stack, hunt, radio), FOOT_RESTART.wait()).await;
+        reset_state(false);
+        log::warn!("footswitch link ended, scanning again");
+        Timer::after(Duration::from_secs(1)).await;
+    }
+}
+
+/// Scans for up to three seconds for one kind of device. Hold the radio lock while calling.
+async fn scan_for<C>(stack: &Stack<'_, C, DefaultPacketPool>, hunt: &Hunt, nano: bool) -> Option<Address>
+where
+    C: Controller + ControllerCmdSync<LeSetScanParams>,
+{
+    use core::sync::atomic::Ordering;
+    hunt.nano_armed.store(nano, Ordering::Relaxed);
+    hunt.foot_armed.store(!nano, Ordering::Relaxed);
+    let signal = if nano { &hunt.nano } else { &hunt.foot };
+    signal.reset();
+    let mut scanner = Scanner::new(stack.central());
+    let config = listen(&[]);
+    let scan = match scanner.scan(&config).await {
+        Ok(scan) => scan,
+        Err(_) => {
+            log::warn!("scan start failed");
+            return None;
+        }
     };
+    let found = with_timeout(Duration::from_secs(3), signal.wait()).await.ok();
+    // Dropping the session asks the runner to disable scanning.
+    drop(scan);
+    drop(scanner);
+    Timer::after(Duration::from_millis(200)).await;
+    found
+}
+
+/// Waits for a device of one kind and returns its address with the radio lock still held.
+async fn find<'a, C>(
+    stack: &Stack<'_, C, DefaultPacketPool>,
+    hunt: &Hunt,
+    radio: &'a Radio,
+    nano: bool,
+) -> (Address, RadioGuard<'a>)
+where
+    C: Controller + ControllerCmdSync<LeSetScanParams>,
+{
+    loop {
+        let guard = radio.lock().await;
+        if let Some(addr) = scan_for(stack, hunt, nano).await {
+            return (addr, guard);
+        }
+        drop(guard);
+        // Gives the other link a turn at the radio.
+        Timer::after(Duration::from_millis(300)).await;
+    }
+}
+
+async fn nano_session<C>(stack: &Stack<'_, C, DefaultPacketPool>, hunt: &Hunt, radio: &Radio)
+where
+    C: Controller
+        + ControllerCmdSync<LeSetScanParams>
+        + ControllerCmdSync<LeSetDataLength>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+{
+    log::info!("scanning for nano");
+    let (nano, guard) = find(stack, hunt, radio, true).await;
 
     let mut central = stack.central();
     let nano_filter = [nano];
@@ -188,7 +362,10 @@ where
         scan_config: listen(&nano_filter),
     };
     log::info!("connecting to nano");
-    let conn = match central.connect(&connect).await {
+    mark(nano, 1);
+    let conn = central.connect(&connect).await;
+    drop(guard);
+    let conn = match conn {
         Ok(conn) => conn,
         Err(_) => {
             log::warn!("nano connect failed");
@@ -197,6 +374,7 @@ where
     };
     let interval_us = conn.params().conn_interval.as_micros();
     log::info!("nano connected, interval {interval_us} us");
+    mark(nano, 2);
     crate::link::set_up(true);
     crate::screen::nano_ui_set_ble_connected(true);
     // One 251-byte PDU is about 2.1 ms. Without this, the link stays at
@@ -217,16 +395,24 @@ where
     let client = Box::new(client);
     log::info!("nano ATT MTU {}", conn.att_mtu());
 
-    let _ = join3(
+    // Ends when the Nano drops, so `nano_loop` scans again.
+    let _ = select(
         async {
             if let Err(_) = client.task().await {
                 log::warn!("nano gatt task ended");
             }
         },
         nano_link(&client),
-        foot_link(stack, foot),
     )
     .await;
+}
+
+async fn foot_session<C>(stack: &Stack<'_, C, DefaultPacketPool>, hunt: &Hunt, radio: &Radio)
+where
+    C: Controller + ControllerCmdSync<LeSetScanParams>,
+{
+    let (addr, guard) = find(stack, hunt, radio, false).await;
+    foot_link(stack, addr, guard).await;
 }
 
 async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8>) {
@@ -355,6 +541,13 @@ fn apply_cmd(cmd: crate::link::Cmd) {
             let _ = crate::fx::nano_fx_write_block_enabled(u32::from(slot), on);
         }
         crate::link::Cmd::Model { block, delta } => step_model(block, delta),
+        crate::link::Cmd::ModelAt { block, index } => {
+            if let Some(model) =
+                crate::fx::nano_fx_get_allowed_model(u32::from(block), usize::from(index))
+            {
+                let _ = crate::fx::nano_fx_write_block_model(u32::from(block), model);
+            }
+        }
         crate::link::Cmd::Save => {
             let _ = crate::state::nano_state_save_preset();
         }
@@ -369,6 +562,62 @@ fn apply_cmd(cmd: crate::link::Cmd) {
         }
         crate::link::Cmd::Capture(delta) => {
             let _ = crate::state::nano_state_step_capture(delta);
+        }
+        crate::link::Cmd::PresetAt(slot) => {
+            let _ = crate::state::nano_state_select_preset(slot);
+        }
+        crate::link::Cmd::CaptureAt(slot) => {
+            let _ = crate::state::nano_state_write_capture_slot(slot);
+        }
+        crate::link::Cmd::CabAt(position) => {
+            let library = crate::state::nano_state_library_snapshot();
+            let Some(cab) = library.cabs.get(usize::from(position)) else {
+                return;
+            };
+            let mut amp = nano_wire::types::NanoAmpC::from(&nano_wire::types::Amp::default());
+            crate::state::nano_state_snapshot_amp(&mut amp);
+            let slot = if (1..=5).contains(&amp.cab_slot) {
+                amp.cab_slot
+            } else {
+                1
+            };
+            let kind = if cab.user {
+                nano_wire::editor::LibraryKind::User
+            } else {
+                nano_wire::editor::LibraryKind::Factory
+            };
+            let _ = crate::state::nano_state_load_library_cab(slot, kind, cab.index, &cab.name);
+        }
+        crate::link::Cmd::ToolsOpen => {
+            if !crate::state::nano_state_tools_open() {
+                log::warn!("Tools refresh could not send every request");
+            }
+        }
+        crate::link::Cmd::JackMode(mode) => {
+            if !crate::state::nano_state_write_jack_mode(mode) {
+                log::warn!("EXP/MIDI jack setting write failed");
+            }
+        }
+        crate::link::Cmd::UsbPlaybackStep(delta) => {
+            let settings = crate::state::nano_state_device_settings();
+            if let Some(db) = settings.usb_playback_db {
+                let next = (db + f32::from(delta)).clamp(-40.0, 0.0);
+                if !crate::state::nano_state_write_usb_playback(next) {
+                    log::warn!("USB playback setting write failed");
+                }
+            } else {
+                log::warn!("USB playback setting is not known yet");
+            }
+        }
+        crate::link::Cmd::ExpressionCalibrationStart => {
+            if !crate::state::nano_state_expression_calibration_start() {
+                log::warn!("Expression calibration could not start");
+            }
+        }
+        crate::link::Cmd::ExpressionCalibrationSave => {
+            if !crate::state::nano_state_expression_calibration_save() {
+                log::warn!("Expression calibration needs a full pedal sweep before saving");
+            }
         }
     }
 }
@@ -458,37 +707,39 @@ fn slider_payload(write: SliderWrite, buf: &mut [u8]) -> usize {
     }
 }
 
-async fn foot_link<C: Controller>(stack: &Stack<'_, C, DefaultPacketPool>, addr: Option<Address>) {
-    let Some(addr) = addr else {
-        core::future::pending::<()>().await;
-        return;
-    };
+async fn foot_link<C: Controller>(
+    stack: &Stack<'_, C, DefaultPacketPool>,
+    addr: Address,
+    guard: RadioGuard<'_>,
+) {
+    mark(addr, 1);
     let mut central = stack.central();
     let foot_filter = [addr];
     let connect = ConnectConfig {
         connect_params: peer_params(),
         scan_config: listen(&foot_filter),
     };
-    let conn = match central.connect(&connect).await {
+    let conn = central.connect(&connect).await;
+    drop(guard);
+    let conn = match conn {
         Ok(conn) => conn,
         Err(_) => {
             log::warn!("footswitch connect failed");
-            core::future::pending::<()>().await;
             return;
         }
     };
+    mark(addr, 2);
     log::info!("footswitch connected");
     let client = match GattClient::<C, DefaultPacketPool, 4>::new(stack, &conn).await {
         Ok(client) => client,
         Err(_) => {
             log::warn!("footswitch gatt client failed");
-            core::future::pending::<()>().await;
             return;
         }
     };
     let client = Box::new(client);
 
-    let _ = embassy_futures::join::join(
+    let _ = select(
         async {
             if client.task().await.is_err() {
                 log::warn!("footswitch gatt task ended");
@@ -499,13 +750,11 @@ async fn foot_link<C: Controller>(stack: &Stack<'_, C, DefaultPacketPool>, addr:
                 Ok(svcs) => svcs,
                 Err(_) => {
                     log::warn!("midi service missing");
-                    core::future::pending::<()>().await;
                     return;
                 }
             };
             let Some(svc) = svcs.first() else {
                 log::warn!("midi service missing");
-                core::future::pending::<()>().await;
                 return;
             };
             let io = match client
@@ -515,7 +764,6 @@ async fn foot_link<C: Controller>(stack: &Stack<'_, C, DefaultPacketPool>, addr:
                 Ok(io) => io,
                 Err(_) => {
                     log::warn!("midi io missing");
-                    core::future::pending::<()>().await;
                     return;
                 }
             };
@@ -523,7 +771,6 @@ async fn foot_link<C: Controller>(stack: &Stack<'_, C, DefaultPacketPool>, addr:
                 Ok(listener) => listener,
                 Err(_) => {
                     log::warn!("midi subscribe failed");
-                    core::future::pending::<()>().await;
                     return;
                 }
             };
@@ -532,9 +779,8 @@ async fn foot_link<C: Controller>(stack: &Stack<'_, C, DefaultPacketPool>, addr:
             loop {
                 let note = listener.next().await;
                 seen = seen.wrapping_add(1);
-                if seen <= 4 || seen % 32 == 0 {
-                    log_pkt("MIDI RX", note.as_ref(), Some(seen));
-                }
+                log_pkt("MIDI RX", note.as_ref(), Some(seen));
+                crate::midi::feed(note.as_ref());
             }
         },
     )
@@ -644,7 +890,13 @@ fn log_pkt(label: &str, data: &[u8], packet_number: Option<u32>) {
 async fn touch_loop(board: &mut Board<'_>) {
     #[cfg(feature = "scan-diag")]
     let mut tick = 0u32;
+    let mut ticks = 0u32;
     loop {
+        ticks = ticks.wrapping_add(1);
+        if ticks % 3 == 0 {
+            crate::ui::refresh_bluetooth(&devices());
+        }
+        crate::ui::refresh_midi();
         #[cfg(feature = "scan-diag")]
         {
             tick = tick.wrapping_add(1);

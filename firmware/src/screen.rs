@@ -6,7 +6,9 @@ extern crate alloc;
 
 use alloc::string::String;
 
+use nano_wire::editor::ExpressionAssignments;
 use nano_wire::types::NanoAmpC;
+use nano_wire::types::{CabSettings, DeviceSettings, Metering};
 
 use crate::fx::types::NanoFxState;
 use crate::tuner::types::NanoTunerC;
@@ -15,7 +17,10 @@ const NOTES: [&str; 12] = [
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
 ];
 
-pub fn nano_ui_set_amp(amp: Option<&NanoAmpC>) {
+pub fn nano_ui_set_amp(
+    amp: Option<&NanoAmpC>,
+    capture_category: Option<nano_wire::types::LibraryCategory>,
+) {
     let Some(amp) = amp else {
         return;
     };
@@ -30,15 +35,76 @@ pub fn nano_ui_set_amp(amp: Option<&NanoAmpC>) {
     if amp.have_capture_volume {
         crate::ui::show_knob_from_radio(5, amp.capture_volume);
     }
-    if amp.have_capture_name {
+
+    let capture_name = crate::amp::nano_amp_capture_header_text(amp);
+    let capture_active = amp.have_capture_slot && amp.capture_slot > 0;
+    if capture_active {
+        crate::ui::show_model(capture_name.trim());
+    }
+    let capture_kind = capture_category
+        .map(|category| match category {
+            nano_wire::types::LibraryCategory::Amp => "AMP HEAD",
+            nano_wire::types::LibraryCategory::AmpCab => "AMP + CAB",
+            nano_wire::types::LibraryCategory::Cab => "CAB",
+            nano_wire::types::LibraryCategory::Pedal => "PEDAL",
+            nano_wire::types::LibraryCategory::Other => "CAPTURE",
+        })
+        .unwrap_or("CAPTURE");
+    let capture_title = alloc::format!("CAPTURE · {capture_kind}");
+    let capture_value = if capture_active {
+        capture_name.trim()
+    } else if amp.have_capture_slot {
+        "Bypassed"
+    } else {
+        "-"
+    };
+    let capture_slot = if capture_active {
+        alloc::format!(
+            "{}-{}",
+            (amp.capture_slot - 1) / 5 + 1,
+            (amp.capture_slot - 1) % 5 + 1
+        )
+    } else if amp.have_capture_slot {
+        String::from("BYPASS")
+    } else {
+        String::from("-")
+    };
+
+    let cab_active = amp.have_cab_slot && amp.cab_slot > 0;
+    let cab_value = if cab_active && amp.have_cab_name {
         let end = amp
-            .capture_name
+            .cab_name
             .iter()
             .position(|b| *b == 0)
-            .unwrap_or(amp.capture_name.len());
-        let name = String::from_utf8_lossy(&amp.capture_name[..end]);
-        crate::ui::show_model(name.trim());
-    }
+            .unwrap_or(amp.cab_name.len());
+        String::from(String::from_utf8_lossy(&amp.cab_name[..end]).trim())
+    } else if cab_active {
+        String::from("-")
+    } else if amp.have_cab_slot {
+        String::from("Bypassed")
+    } else {
+        String::from("-")
+    };
+    let cab_slot = if cab_active {
+        alloc::format!("{}", amp.cab_slot)
+    } else if amp.have_cab_slot {
+        String::from("BYPASS")
+    } else {
+        String::from("-")
+    };
+    crate::ui::show_amp_sources(
+        &capture_title,
+        capture_value,
+        &capture_slot,
+        capture_active,
+        &cab_value,
+        &cab_slot,
+        cab_active,
+    );
+}
+
+pub fn nano_ui_library_updated() {
+    crate::ui::library_updated();
 }
 
 pub fn nano_ui_set_ble_connected(connected: bool) {
@@ -70,6 +136,34 @@ pub fn nano_ui_set_preset_dirty(dirty: bool) {
 
 pub fn nano_ui_set_preset_name(name: &str) {
     crate::ui::show_preset(name);
+}
+
+pub fn nano_ui_set_device_settings(settings: &DeviceSettings) {
+    crate::ui::show_device_settings(settings);
+}
+
+pub fn nano_ui_set_cab_settings(slot: u8, settings: &CabSettings) {
+    crate::ui::show_cab_settings(slot, settings);
+}
+
+pub fn nano_ui_set_expression_assignments(slot: u8, assignments: &ExpressionAssignments) {
+    crate::ui::show_expression_assignments(slot, assignments);
+}
+
+pub fn nano_ui_set_metering(meter: Metering) {
+    crate::ui::show_metering(meter);
+}
+
+pub fn nano_ui_clear_tool_meters() {
+    crate::ui::clear_tool_meters();
+}
+
+pub fn nano_ui_set_calibration(active: bool, min: Option<u8>, max: Option<u8>) {
+    crate::ui::show_calibration(active, min, max);
+}
+
+pub fn nano_ui_set_protocol_status(status: &str) {
+    crate::ui::show_protocol_status(status);
 }
 
 pub fn nano_ui_set_bpm(bpm: u16, valid: bool) {

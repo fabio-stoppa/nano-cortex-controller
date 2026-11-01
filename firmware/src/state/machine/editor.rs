@@ -7,11 +7,15 @@ use alloc::vec::Vec;
 use nano_wire::editor::{
     assign_footswitch_payload, cab_float_payload, cab_mic_payload, delete_preset_payload,
     library_request_payload, load_cab_mic_payload, load_cab_payload, load_capture_payload,
-    read_expression_payload, read_settings_payload, rename_preset_payload, save_preset_payload,
-    select_preset_payload, state_lists_payload, tuner_mode_payload, write_expression_payload,
-    write_led_usb_payload, write_mute_payload, CabFloat, ExpBypass, ExpBypassTarget, ExpRange,
-    ExpRangeTarget, Footswitch, LibraryKind, MuteTarget, StateLists,
+    read_cab_settings_payload, read_expression_payload, read_settings_payload,
+    rename_preset_payload, reset_expression_calibration_payload,
+    save_expression_calibration_payload, save_preset_payload, select_preset_payload,
+    state_lists_payload, tuner_mode_payload, write_expression_payload, write_jack_mode_payload,
+    write_led_usb_payload, write_mute_payload, write_usb_playback_payload, CabFloat, ExpBypass,
+    ExpBypassTarget, ExpRange, ExpRangeTarget, Footswitch, LibraryKind, MuteTarget, StateLists,
 };
+
+use nano_wire::types::JackMode;
 
 use super::ctx::{ble_write_c304, c_label, st};
 use super::rx::request_current_state_now;
@@ -44,11 +48,32 @@ pub fn nano_state_select_preset(slot: u8) -> bool {
     if !send(&format!("Preset {slot}"), &buf, n) {
         return false;
     }
+    note_preset_selected(slot);
+    true
+}
+
+/// Record `slot` (1..=64) as loaded and show its catalog name.
+pub(super) fn note_preset_selected(slot: u8) {
+    if !(1..=64).contains(&slot) {
+        return;
+    }
     let s = st();
     s.preset_slot = slot;
-    s.preset_dirty = false;
-    crate::screen::nano_ui_set_preset_dirty(false);
-    true
+    let name = if s.preset_catalog.valid {
+        super::ctx::c_bytes_to_string(&s.preset_catalog.names[usize::from(slot - 1)])
+    } else {
+        String::new()
+    };
+    if !name.is_empty() {
+        s.preset_name = name.clone();
+    }
+    if s.preset_dirty {
+        s.preset_dirty = false;
+        crate::screen::nano_ui_set_preset_dirty(false);
+    }
+    if !name.is_empty() {
+        crate::screen::nano_ui_set_preset_name(&name);
+    }
 }
 
 /// Store the loaded sound into the current preset under its current name.
@@ -170,7 +195,14 @@ pub fn nano_state_write_cab_mic(
         return false;
     }
     let mut buf = [0u8; 160];
-    let n = load_cab_mic_payload(slot - 1, library_index, cab_name, position, mic_name, &mut buf);
+    let n = load_cab_mic_payload(
+        slot - 1,
+        library_index,
+        cab_name,
+        position,
+        mic_name,
+        &mut buf,
+    );
     if n == 0 {
         let n = cab_mic_payload(library_index, cab_name, position, mic_name, &mut buf);
         return send("Cab mic", &buf, n);
@@ -184,7 +216,27 @@ pub fn nano_state_read_expression(slot: u8) -> bool {
     }
     let mut buf = [0u8; 24];
     let n = read_expression_payload(slot - 1, &mut buf);
-    send("Expression read", &buf, n)
+    if !send("Expression read", &buf, n) {
+        return false;
+    }
+    st().expression_slot = slot;
+    true
+}
+
+pub fn nano_state_read_cab_settings(slot: u8) -> bool {
+    if !(1..=5).contains(&slot) {
+        return false;
+    }
+    let mut buf = [0u8; 24];
+    let n = read_cab_settings_payload(slot - 1, &mut buf);
+    if !send("Cab settings read", &buf, n) {
+        return false;
+    }
+    let s = st();
+    s.cab_settings_slot = slot;
+    s.cab_settings = nano_wire::types::CabSettings::default();
+    crate::screen::nano_ui_set_cab_settings(slot, &s.cab_settings);
+    true
 }
 
 pub fn nano_state_write_expression(
@@ -204,6 +256,102 @@ pub fn nano_state_read_settings() -> bool {
     let mut buf = [0u8; 16];
     let n = read_settings_payload(&mut buf);
     send("Settings read", &buf, n)
+}
+
+pub fn nano_state_write_jack_mode(mode: JackMode) -> bool {
+    let mut buf = [0u8; 16];
+    let n = write_jack_mode_payload(mode, &mut buf);
+    if !send("EXP MIDI jack mode", &buf, n) {
+        return false;
+    }
+    nano_state_read_settings()
+}
+
+pub fn nano_state_write_usb_playback(db: f32) -> bool {
+    let mut buf = [0u8; 16];
+    let n = write_usb_playback_payload(db, &mut buf);
+    if !send("USB playback level", &buf, n) {
+        return false;
+    }
+    nano_state_read_settings()
+}
+
+/// Reads the cab output / filters whenever the preset or its cab slot changes.
+pub(super) fn sync_cab_settings(complete_dump: bool) {
+    let s = st();
+    // The Nano omits zero fields, so a complete dump without field 12 means no cab.
+    let cab_slot = if s.amp.have_cab_slot {
+        s.amp.cab_slot
+    } else if complete_dump {
+        0
+    } else {
+        return;
+    };
+    let key = (s.preset_slot, cab_slot);
+    if key == s.cab_settings_key {
+        return;
+    }
+    if (1..=5).contains(&key.1) {
+        if nano_state_read_cab_settings(key.1) {
+            st().cab_settings_key = key;
+        }
+    } else {
+        s.cab_settings_key = key;
+        s.cab_settings = nano_wire::types::CabSettings::default();
+        crate::screen::nano_ui_set_cab_settings(0, &s.cab_settings);
+    }
+}
+
+pub fn nano_state_tools_open() -> bool {
+    let mut success = nano_state_read_settings();
+    let s = st();
+    let preset = s.preset_slot;
+    let cab_slot = if s.amp.have_cab_slot {
+        s.amp.cab_slot
+    } else {
+        0
+    };
+    if preset > 0 {
+        success &= nano_state_read_expression(preset);
+    }
+    if (1..=5).contains(&cab_slot) {
+        success &= nano_state_read_cab_settings(cab_slot);
+    } else {
+        crate::screen::nano_ui_set_cab_settings(0, &nano_wire::types::CabSettings::default());
+    }
+    success
+}
+
+pub fn nano_state_expression_calibration_start() -> bool {
+    let mut buf = [0u8; 16];
+    let n = reset_expression_calibration_payload(&mut buf);
+    if !send("Expression calibration reset", &buf, n) {
+        return false;
+    }
+    let s = st();
+    s.calibration_active = true;
+    s.calibration_min = u8::MAX;
+    s.calibration_max = 0;
+    s.calibration_sampled = false;
+    crate::screen::nano_ui_set_calibration(true, None, None);
+    true
+}
+
+pub fn nano_state_expression_calibration_save() -> bool {
+    let s = st();
+    if !s.calibration_active || !s.calibration_sampled || s.calibration_min >= s.calibration_max {
+        return false;
+    }
+    let min = s.calibration_min;
+    let max = s.calibration_max;
+    let mut buf = [0u8; 16];
+    let n = save_expression_calibration_payload(min, max, &mut buf);
+    if !send("Expression calibration save", &buf, n) {
+        return false;
+    }
+    s.calibration_active = false;
+    crate::screen::nano_ui_set_calibration(false, Some(min), Some(max));
+    true
 }
 
 pub fn nano_state_write_led_usb(brightness: u8, usb_db: f32) -> bool {
@@ -311,11 +459,6 @@ pub fn nano_state_step_preset(delta: i8) -> bool {
     let next = step_index(current, delta, 1, count);
     if !nano_state_select_preset(next) {
         return false;
-    }
-    if let Some(name) = names.get((next - 1) as usize) {
-        if !name.is_empty() {
-            crate::screen::nano_ui_set_preset_name(name);
-        }
     }
     true
 }

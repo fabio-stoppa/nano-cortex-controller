@@ -24,6 +24,18 @@ pub const MSG_WRITE_EXPRESSION: u32 = 62;
 pub const MSG_RENAME_PRESET: u32 = 111;
 pub const MSG_DIRTY: u32 = 115;
 pub const MSG_TUNER_MODE: u32 = 127;
+pub const MSG_PRESET_SLOTS_RESPONSE: u32 = 30;
+pub const MSG_EXPRESSION_RESPONSE: u32 = 61;
+pub const MSG_METERING: u32 = 64;
+pub const MSG_SETTINGS_RESPONSE: u32 = 66;
+pub const MSG_SETTINGS_WRITE_RESPONSE: u32 = 68;
+pub const MSG_EXPRESSION_CALIBRATION_RESET: u32 = 69;
+pub const MSG_EXPRESSION_CALIBRATION_SAVE: u32 = 71;
+pub const MSG_CAB_SETTINGS_REQUEST: u32 = 95;
+pub const MSG_CAB_SETTINGS_RESPONSE: u32 = 96;
+pub const MSG_CAB_LOAD_RESPONSE: u32 = 79;
+pub const MSG_CAPTURE_LOAD_RESPONSE: u32 = 81;
+pub const MSG_RENAME_PRESET_RESPONSE: u32 = 112;
 
 /// Footswitch slot in 4-Preset mode. Wire field on a type 29 assignment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +120,12 @@ pub enum MuteTarget {
     Input,
     /// Type 67 field 13. Tag `0x68`.
     Output,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExpressionAssignments {
+    pub ranges: Vec<(ExpRangeTarget, ExpRange)>,
+    pub bypasses: Vec<(ExpBypassTarget, ExpBypass)>,
 }
 
 struct Pay {
@@ -199,6 +217,67 @@ pub fn message_type(data: &[u8]) -> Option<u32> {
             | (u32::from(data[n - 2]) << 16)
             | (u32::from(data[n - 1]) << 24),
     )
+}
+
+/// Payload of a complete single-packet C0 frame with the expected trailing type.
+pub fn message_payload(data: &[u8], expected_type: u32) -> Option<&[u8]> {
+    (message_type(data)? == expected_type).then_some(&data[2..data.len() - 4])
+}
+
+/// Known response frames and their optional field-4 result/status value.
+pub fn response_ack(data: &[u8]) -> Option<(u32, Option<u32>)> {
+    let msg = message_type(data)?;
+    if !matches!(
+        msg,
+        MSG_PRESET_SLOTS_RESPONSE
+            | MSG_SETTINGS_WRITE_RESPONSE
+            | MSG_CAB_LOAD_RESPONSE
+            | MSG_CAPTURE_LOAD_RESPONSE
+            | MSG_RENAME_PRESET_RESPONSE
+    ) {
+        return None;
+    }
+    let payload = message_payload(data, msg)?;
+    Some((msg, payload_varint_payload(payload, 4)))
+}
+
+fn payload_varint_payload(payload: &[u8], field: u32) -> Option<u32> {
+    let mut i = 0;
+    while i < payload.len() {
+        let (tag, next) = read_varint(payload, i)?;
+        i = next;
+        let num = tag >> 3;
+        match tag & 7 {
+            0 => {
+                let (val, next) = read_varint(payload, i)?;
+                if num == field {
+                    return Some(val);
+                }
+                i = next;
+            }
+            1 => {
+                i = i.checked_add(8)?;
+                if i > payload.len() {
+                    return None;
+                }
+            }
+            2 => {
+                let (len, next) = read_varint(payload, i)?;
+                i = next.checked_add(len as usize)?;
+                if i > payload.len() {
+                    return None;
+                }
+            }
+            5 => {
+                i = i.checked_add(4)?;
+                if i > payload.len() {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    None
 }
 
 /// Whether a framed message is a live control value suitable for an unacknowledged C304 write.
@@ -664,6 +743,32 @@ pub fn read_settings_payload(buf: &mut [u8]) -> usize {
     finish(&[0x08, 0x03], MSG_READ_SETTINGS, buf)
 }
 
+/// Type 95 `{1: 3, 3: 0, 4: cabSlot}`. `slot` is 0-based.
+pub fn read_cab_settings_payload(slot: u8, buf: &mut [u8]) -> usize {
+    if slot >= 5 {
+        return 0;
+    }
+    let mut p = Pay::new();
+    if !p.push(0x18) || !p.push(0x00) || !p.push(0x20) || !p.push(slot) {
+        return 0;
+    }
+    finish(p.bytes(), MSG_CAB_SETTINGS_REQUEST, buf)
+}
+
+/// Type 69. Clears the pedal's stored expression-pedal calibration.
+pub fn reset_expression_calibration_payload(buf: &mut [u8]) -> usize {
+    finish(&[], MSG_EXPRESSION_CALIBRATION_RESET, buf)
+}
+
+/// Type 71 `{3: minimum, 4: maximum}` from the expression-pedal sweep.
+pub fn save_expression_calibration_payload(min: u8, max: u8, buf: &mut [u8]) -> usize {
+    let mut p = Pay::new();
+    if !p.push(0x18) || !p.varint(u32::from(min)) || !p.push(0x20) || !p.varint(u32::from(max)) {
+        return 0;
+    }
+    finish(p.bytes(), MSG_EXPRESSION_CALIBRATION_SAVE, buf)
+}
+
 /// Type 67 fields 4 and 14 together, the way the phone app writes them.
 /// `brightness` is 0..=255. `usb_db` is the USB playback volume.
 pub fn write_led_usb_payload(brightness: u8, usb_db: f32, buf: &mut [u8]) -> usize {
@@ -681,6 +786,23 @@ pub fn write_led_usb_payload(brightness: u8, usb_db: f32, buf: &mut [u8]) -> usi
         return 0;
     }
     finish(p.bytes(), MSG_WRITE_SETTINGS, buf)
+}
+
+/// Type 67 field 14. Writes USB playback level without changing LED brightness.
+pub fn write_usb_playback_payload(usb_db: f32, buf: &mut [u8]) -> usize {
+    if !usb_db.is_finite() {
+        return 0;
+    }
+    let mut p = Pay::new();
+    if !p.push(0x75) || !p.f32(usb_db.clamp(-40.0, 0.0)) {
+        return 0;
+    }
+    finish(p.bytes(), MSG_WRITE_SETTINGS, buf)
+}
+
+/// Type 67 field 7. Selects MIDI or expression-pedal behavior for the EXP/MIDI jack.
+pub fn write_jack_mode_payload(mode: crate::types::JackMode, buf: &mut [u8]) -> usize {
+    finish(&[0x38, mode as u8], MSG_WRITE_SETTINGS, buf)
 }
 
 /// Type 67 mute. A zero is written out; it is the value that means unmuted.
@@ -751,6 +873,13 @@ mod tests {
         assert_eq!(buf[n - 6], 0x48);
         assert_eq!(buf[n - 5], 0x04);
         assert_eq!(&buf[n - 4..n], &[0x1D, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn preset_slots_frame_carries_the_index_in_field_4() {
+        let mut buf = [0u8; 80];
+        let n = select_preset_payload(13, 4, &mut buf);
+        assert_eq!(payload_varint(&buf[..n], 4), Some(13));
     }
 
     #[test]
@@ -847,6 +976,50 @@ mod tests {
             &buf[..n],
             &[0x0C, 0xC0, 0x08, 0x03, 0x18, 0x00, 0x20, 0x01, 0x28, 0x01, 0x01, 0x00, 0x00, 0x00]
         );
+    }
+
+    #[test]
+    fn cab_settings_and_expression_calibration_messages() {
+        let mut buf = [0u8; 32];
+        let n = read_cab_settings_payload(4, &mut buf);
+        assert_eq!(
+            &buf[..n],
+            &[0x08, 0xC0, 0x18, 0x00, 0x20, 0x04, 0x5F, 0x00, 0x00, 0x00]
+        );
+        assert_eq!(read_cab_settings_payload(5, &mut buf), 0);
+
+        let n = reset_expression_calibration_payload(&mut buf);
+        assert_eq!(&buf[..n], &[0x04, 0xC0, 0x45, 0x00, 0x00, 0x00]);
+
+        let n = save_expression_calibration_payload(3, 250, &mut buf);
+        assert_eq!(
+            &buf[..n],
+            &[0x09, 0xC0, 0x18, 0x03, 0x20, 0xFA, 0x01, 0x47, 0x00, 0x00, 0x00]
+        );
+    }
+
+    #[test]
+    fn write_device_settings_without_overwriting_other_fields() {
+        let mut buf = [0u8; 32];
+        let n = write_jack_mode_payload(crate::types::JackMode::Expression, &mut buf);
+        assert_eq!(&buf[..n], &[0x06, 0xC0, 0x38, 0x01, 0x43, 0, 0, 0]);
+
+        let n = write_usb_playback_payload(-12.0, &mut buf);
+        assert_eq!(message_type(&buf[..n]), Some(MSG_WRITE_SETTINGS));
+        assert_eq!(&buf[2..7], &[0x75, 0x00, 0x00, 0x40, 0xC1]);
+        assert_eq!(write_usb_playback_payload(1.0, &mut buf), 11);
+    }
+
+    #[test]
+    fn response_ack_reads_status_and_rejects_non_response_types() {
+        let mut buf = [0u8; 16];
+        let n = finish(&[0x20, 0x01], MSG_PRESET_SLOTS_RESPONSE, &mut buf);
+        assert_eq!(
+            response_ack(&buf[..n]),
+            Some((MSG_PRESET_SLOTS_RESPONSE, Some(1)))
+        );
+        let n = finish(&[], MSG_SETTINGS_RESPONSE, &mut buf);
+        assert_eq!(response_ack(&buf[..n]), None);
     }
 
     #[test]

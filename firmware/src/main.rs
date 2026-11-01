@@ -18,6 +18,7 @@ mod float;
 mod fx;
 mod link;
 mod memsafe;
+mod midi;
 mod panel;
 mod screen;
 mod settings;

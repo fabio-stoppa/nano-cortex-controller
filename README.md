@@ -11,6 +11,10 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - **BLE in Rust** — TrouBLE central on `esp-radio` (`firmware/src/ble.rs`)
 - **Preset, effects, and tuner** — the same behavior as the old ESP-IDF app, driven by Embassy deadlines (`firmware/src/state`, `firmware/src/fx`, `firmware/src/tuner`)
 - **800×480 LCD** — Slint UI drawn into the RGB panel (`firmware/src/ui.rs`)
+- **Bluetooth Tools page** — reads expression assignments and cab settings, shows live input/output/expression meters, and reads or changes the EXP/MIDI jack and USB playback level
+- **MIDI learn page** (Tools → MIDI) — tap Learn on an action, then press a footswitch (BLE MIDI note, CC, or program change). Every message toggles on/off actions. Bindings cover FX block on/off, gate, tuner, tap tempo, preset/capture step, save, and the first four knobs of each FX block via CC. Saved in flash
+- **Expression calibration** — guided reset, pedal sweep, and save flow; the screen shows the sampled range before saving
+- **Protocol responses** — handles Nano preset-change requests and surfaces supported write acknowledgements
 
 ## Prerequisites
 

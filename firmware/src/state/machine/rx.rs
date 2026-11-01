@@ -19,9 +19,9 @@ use super::api::{
     nano_state_tuner_watch_update,
 };
 use super::ctx::{
-    alloc_buf, amp_copy, amp_knob_get, amp_knob_set, ble_write_c304, c_bytes_to_string,
-    c_label, is_tuner_active, now_us, push_amp_ui, set_label, st, NANO_RX_CURRENT,
-    NANO_RX_IDLE, STATE_BUF_MAX, TAG,
+    alloc_buf, amp_copy, amp_knob_get, amp_knob_set, ble_write_c304, c_bytes_to_string, c_label,
+    is_tuner_active, now_us, push_amp_ui, set_label, st, NANO_RX_CURRENT, NANO_RX_IDLE,
+    STATE_BUF_MAX, TAG,
 };
 use super::timers::schedule_parse_in;
 
@@ -97,53 +97,41 @@ pub(super) fn finish_fe_capture() {
     s.fe_len = 0;
 }
 
+/*
+ * Field 13 is the 0-based current preset index. The pedal omits zero-valued
+ * fields, so absence means preset 1 — unless the dump was cut off before it.
+ */
 fn update_preset_label_locked(state: &[u8]) {
     let s = st();
-    let mut label = String::from("-");
-
-    if let Some(direct) = parsers::first_string(state, 2).filter(|n| !n.is_empty()) {
-        label = direct.chars().take(PRESET_NAME_MAX - 1).collect();
-    } else if let Some(slot) = parsers::field_varint(state, 1) {
-        let mut idx: u32 = 0;
-        if slot >= 1 && slot <= PRESET_COUNT as u32 {
-            idx = slot;
-        } else if slot < PRESET_COUNT as u32 {
-            idx = slot + 1;
-        }
-        if idx > 0 {
-            let name = &s.preset_catalog.names[(idx - 1) as usize];
-            if s.preset_catalog.valid && name[0] != 0 {
-                label = c_bytes_to_string(name);
-            } else {
-                label = format!("Preset {idx}");
-            }
-        }
+    let index = match parsers::field_varint(state, 13) {
+        Some(v) => v,
+        None if state_dump_truncated(state) => return,
+        None => 0,
+    };
+    if index >= PRESET_COUNT as u32 {
+        return;
     }
-
+    let slot = index as u8 + 1;
     let foot = [
-        parsers::field_varint(state, 14).map(|v| v as i16).unwrap_or(-1),
-        parsers::field_varint(state, 15).map(|v| v as i16).unwrap_or(-1),
-        parsers::field_varint(state, 38).map(|v| v as i16).unwrap_or(-1),
-        parsers::field_varint(state, 39).map(|v| v as i16).unwrap_or(-1),
+        parsers::field_varint(state, 14)
+            .map(|v| v as i16)
+            .unwrap_or(-1),
+        parsers::field_varint(state, 15)
+            .map(|v| v as i16)
+            .unwrap_or(-1),
+        parsers::field_varint(state, 38)
+            .map(|v| v as i16)
+            .unwrap_or(-1),
+        parsers::field_varint(state, 39)
+            .map(|v| v as i16)
+            .unwrap_or(-1),
     ];
-    let mut slot = 0u8;
-    if s.preset_catalog.valid && label != "-" {
-        for (i, name) in s.preset_catalog.names.iter().enumerate() {
-            if c_bytes_to_string(name) == label {
-                slot = (i + 1) as u8;
-                break;
-            }
-        }
-    }
-    if slot == 0 {
-        if let Some(v) = parsers::field_varint(state, 1) {
-            if (1..=PRESET_COUNT as u32).contains(&v) {
-                slot = v as u8;
-            } else if v < PRESET_COUNT as u32 {
-                slot = (v + 1) as u8;
-            }
-        }
-    }
+    let catalog_name = &s.preset_catalog.names[usize::from(slot - 1)];
+    let label = if s.preset_catalog.valid && catalog_name[0] != 0 {
+        c_bytes_to_string(catalog_name)
+    } else {
+        format!("Preset {slot}")
+    };
     super::editor::note_loaded_preset(&label, slot, foot);
     crate::screen::nano_ui_set_preset_name(&label);
 }
@@ -520,6 +508,7 @@ pub(super) fn parse_state_buffer() {
     crate::fx::nano_fx_sync_from_preset(buf);
 
     update_preset_label_locked(buf);
+    super::editor::sync_cab_settings(!state_dump_truncated(buf));
 
     if let Some(bpm) = parsers::parse_bpm(buf) {
         info!(target: TAG, "BPM {bpm} (field 56) [{label}]");
@@ -544,10 +533,7 @@ pub(super) fn parse_state_buffer() {
     // so REFRESH_MIN_INTERVAL cannot silently drop the retry.
     if !crate::fx::nano_fx_gate_ui_ready()
         && s.gate_retry_count < STATE_GATE_RETRY_MAX
-        && (label == "INITIAL"
-            || label == "ROUTINE"
-            || label == "PRESET"
-            || label == "GATE")
+        && (label == "INITIAL" || label == "ROUTINE" || label == "PRESET" || label == "GATE")
     {
         s.gate_retry_count += 1;
         set_label(&mut s.state_probe_label, "GATE");

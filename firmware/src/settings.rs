@@ -75,3 +75,52 @@ pub fn save_layout(mode: i32) {
         log::warn!("could not save layout");
     }
 }
+
+const MIDI_MAGIC: u32 = 0x4d49_4431;
+const MIDI_OFFSET: u32 = SECTOR;
+const MIDI_MAX: usize = 64;
+
+/// Saved MIDI bindings (second sector of `nvs`), if a valid record exists.
+pub fn load_midi(count: usize) -> Option<[u16; MIDI_MAX]> {
+    with_region(|region| {
+        if (region.partition_size() as u32) < 2 * SECTOR || count > MIDI_MAX {
+            return None;
+        }
+        let mut r = [0u8; 8 + MIDI_MAX * 2];
+        region.read(MIDI_OFFSET, &mut r).ok()?;
+        let magic = u32::from_le_bytes(r[..4].try_into().ok()?);
+        let stored = r[4] as usize;
+        let sum = r[8..].iter().fold(0u8, |a, b| a.wrapping_add(*b));
+        if magic != MIDI_MAGIC || stored > MIDI_MAX || r[5] != !sum {
+            return None;
+        }
+        let mut keys = [0u16; MIDI_MAX];
+        for (i, key) in keys.iter_mut().enumerate().take(stored.min(count)) {
+            *key = u16::from_le_bytes([r[8 + i * 2], r[9 + i * 2]]);
+        }
+        Some(keys)
+    })
+}
+
+pub fn save_midi(keys: &[u16]) {
+    if keys.len() > MIDI_MAX {
+        return;
+    }
+    let mut r = [0u8; 8 + MIDI_MAX * 2];
+    r[..4].copy_from_slice(&MIDI_MAGIC.to_le_bytes());
+    r[4] = keys.len() as u8;
+    for (i, key) in keys.iter().enumerate() {
+        r[8 + i * 2..10 + i * 2].copy_from_slice(&key.to_le_bytes());
+    }
+    r[5] = !r[8..].iter().fold(0u8, |a, b| a.wrapping_add(*b));
+    let saved = with_region(|region| {
+        if (region.partition_size() as u32) < 2 * SECTOR {
+            return None;
+        }
+        region.erase(MIDI_OFFSET, MIDI_OFFSET + SECTOR).map_err(|e| log::warn!("erase {e:?}")).ok()?;
+        region.write(MIDI_OFFSET, &r).map_err(|e| log::warn!("write {e:?}")).ok()
+    });
+    if saved.is_none() {
+        log::warn!("could not save MIDI bindings");
+    }
+}

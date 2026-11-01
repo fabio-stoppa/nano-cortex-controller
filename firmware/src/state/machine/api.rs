@@ -8,15 +8,17 @@ use log::{debug, error, info, warn};
 
 use nano_wire::builders;
 use nano_wire::parsers;
-use nano_wire::types::{Knob, LibraryCatalog, NanoAmpC, TunerSettings, BPM_MAX, BPM_MIN};
+use nano_wire::types::{
+    DeviceSettings, Knob, LibraryCatalog, MeteringKind, NanoAmpC, TunerSettings, BPM_MAX, BPM_MIN,
+};
 
 use super::amp_live::{reset_amp_sync, try_inline_amp_update};
 use super::classify::{is_fe_stream, is_state_stream_chunk, sniff_unknown_c305};
 use super::ctx::{
     alloc_buf, amp_copy, amp_knob_set, amp_publish, ble_write_c304, c_label, is_tuner_active,
-    now_us, preset_catalog_zero, push_amp_ui, set_label, st, AMP_SEQ, KNOB_NAMES,
-    LIBRARY_BUF_MAX, NANO_KNOB_LEVEL, NANO_KNOB_TREBLE, NANO_RX_CURRENT, NANO_RX_IDLE,
-    NANO_RX_METADATA, TAG, TAP_HISTORY_MAX,
+    now_us, preset_catalog_zero, push_amp_ui, set_label, st, AMP_SEQ, KNOB_NAMES, LIBRARY_BUF_MAX,
+    NANO_KNOB_LEVEL, NANO_KNOB_TREBLE, NANO_RX_CURRENT, NANO_RX_IDLE, NANO_RX_METADATA, TAG,
+    TAP_HISTORY_MAX,
 };
 use super::rx::{
     append_fe_payload, append_state_payload, check_state_rx_timeout, request_current_state_now,
@@ -49,9 +51,27 @@ pub fn nano_state_reset() {
     s.library_rx.clear();
     s.c305_rx.reset();
     s.tuner_settings = TunerSettings::default();
+    s.device_settings = nano_wire::types::DeviceSettings::default();
+    s.cab_settings = nano_wire::types::CabSettings::default();
+    s.cab_settings_slot = 0;
+    s.cab_settings_key = (u8::MAX, u8::MAX);
+    s.expression_assignments = nano_wire::editor::ExpressionAssignments::default();
+    s.expression_slot = 0;
+    s.meters = [None; 3];
+    s.calibration_active = false;
+    s.calibration_min = u8::MAX;
+    s.calibration_max = 0;
+    s.calibration_sampled = false;
+    s.protocol_status.clear();
     crate::screen::nano_ui_set_bpm(0, false);
     crate::screen::nano_ui_set_tempo_mode(false);
     crate::screen::nano_ui_set_tuner_settings(440.0, false);
+    crate::screen::nano_ui_set_device_settings(&s.device_settings);
+    crate::screen::nano_ui_set_cab_settings(0, &s.cab_settings);
+    crate::screen::nano_ui_set_expression_assignments(0, &s.expression_assignments);
+    crate::screen::nano_ui_clear_tool_meters();
+    crate::screen::nano_ui_set_calibration(false, None, None);
+    crate::screen::nano_ui_set_protocol_status("");
 }
 
 pub fn nano_state_library_snapshot() -> LibraryCatalog {
@@ -60,6 +80,34 @@ pub fn nano_state_library_snapshot() -> LibraryCatalog {
 
 pub fn nano_state_tuner_settings() -> TunerSettings {
     st().tuner_settings
+}
+
+pub fn nano_state_device_settings() -> DeviceSettings {
+    st().device_settings
+}
+
+pub fn nano_state_metering() -> [Option<u32>; 3] {
+    st().meters
+}
+
+pub fn nano_state_cab_settings_snapshot() -> (u8, nano_wire::types::CabSettings) {
+    let s = st();
+    (s.cab_settings_slot, s.cab_settings)
+}
+
+pub fn nano_state_expression_assignments_snapshot() -> (u8, nano_wire::editor::ExpressionAssignments)
+{
+    let s = st();
+    (s.expression_slot, s.expression_assignments.clone())
+}
+
+pub fn nano_state_calibration_snapshot() -> (bool, Option<u8>, Option<u8>) {
+    let s = st();
+    (
+        s.calibration_active,
+        s.calibration_sampled.then_some(s.calibration_min),
+        s.calibration_sampled.then_some(s.calibration_max),
+    )
 }
 
 pub fn nano_rx_mode_set(mode: u32) {
@@ -122,7 +170,128 @@ pub fn feed_c305_bytes(data: &[u8]) {
             }
         }
     }
+    if handle_editor_message(data) {
+        return;
+    }
     feed_c305(data);
+}
+
+fn handle_editor_message(data: &[u8]) -> bool {
+    let Some(message_type) = nano_wire::editor::message_type(data) else {
+        return false;
+    };
+    let Some(payload) = nano_wire::editor::message_payload(data, message_type) else {
+        return false;
+    };
+    let s = st();
+    match message_type {
+        nano_wire::editor::MSG_EXPRESSION_RESPONSE => {
+            match parsers::parse_expression_assignments(payload) {
+                Some(assignments) => {
+                    info!(
+                        target: TAG,
+                        "Expression assignments loaded for preset {} ({} ranges, {} switches)",
+                        s.expression_slot,
+                        assignments.ranges.len(),
+                        assignments.bypasses.len()
+                    );
+                    s.expression_assignments = assignments;
+                    crate::screen::nano_ui_set_expression_assignments(
+                        s.expression_slot,
+                        &s.expression_assignments,
+                    );
+                }
+                None => warn!(target: TAG, "Malformed expression-assignment response"),
+            }
+            return true;
+        }
+        nano_wire::editor::MSG_METERING => {
+            if let Some(meter) = parsers::parse_metering(payload) {
+                let index = meter.kind as usize;
+                s.meters[index] = Some(meter.value);
+                if meter.kind == MeteringKind::ExpressionPedal && s.calibration_active {
+                    let value = meter.value.min(u32::from(u8::MAX)) as u8;
+                    s.calibration_min = s.calibration_min.min(value);
+                    s.calibration_max = s.calibration_max.max(value);
+                    s.calibration_sampled = true;
+                    crate::screen::nano_ui_set_calibration(
+                        true,
+                        Some(s.calibration_min),
+                        Some(s.calibration_max),
+                    );
+                }
+                crate::screen::nano_ui_set_metering(meter);
+            } else {
+                warn!(target: TAG, "Malformed Nano metering message");
+            }
+            return true;
+        }
+        nano_wire::editor::MSG_SETTINGS_RESPONSE => {
+            match parsers::parse_device_settings(payload) {
+                Some(settings) => {
+                    s.device_settings = settings;
+                    crate::screen::nano_ui_set_device_settings(&settings);
+                }
+                None => warn!(target: TAG, "Settings response had no supported fields"),
+            }
+            return true;
+        }
+        nano_wire::editor::MSG_CAB_SETTINGS_RESPONSE => {
+            match parsers::parse_cab_settings(payload) {
+                Some(settings) => {
+                    s.cab_settings = settings;
+                    crate::screen::nano_ui_set_cab_settings(s.cab_settings_slot, &settings);
+                }
+                None => warn!(
+                    target: TAG,
+                    "Cab settings reply without the values ({} bytes): {:02x?}",
+                    payload.len(),
+                    &payload[..payload.len().min(64)]
+                ),
+            }
+            return true;
+        }
+        nano_wire::editor::MSG_PRESET_SLOTS => {
+            let mut ack = [0u8; 16];
+            let n = builders::preset_change_ack(&mut ack);
+            if n > 0 && ble_write_c304(&c_label("Preset change acknowledgment"), &ack[..n]) {
+                info!(target: TAG, "Acknowledged Nano preset change");
+            } else {
+                warn!(target: TAG, "Could not acknowledge Nano preset change");
+            }
+            // Field 4 is the 0-based index of the preset the pedal just loaded.
+            if let Some(index) = nano_wire::editor::payload_varint(data, 4).filter(|i| *i < 64) {
+                super::editor::note_preset_selected(index as u8 + 1);
+            }
+            set_label(&mut s.state_probe_label, "PRESET");
+            if s.mode == NANO_RX_IDLE {
+                request_current_state_now("Pedal preset change");
+            }
+            return true;
+        }
+        _ => {}
+    }
+
+    if let Some((response, status)) = nano_wire::editor::response_ack(data) {
+        let label = match response {
+            nano_wire::editor::MSG_PRESET_SLOTS_RESPONSE => "Preset change",
+            nano_wire::editor::MSG_SETTINGS_WRITE_RESPONSE => "Settings write",
+            nano_wire::editor::MSG_CAB_LOAD_RESPONSE => "Cab load",
+            nano_wire::editor::MSG_CAPTURE_LOAD_RESPONSE => "Capture load",
+            nano_wire::editor::MSG_RENAME_PRESET_RESPONSE => "Preset rename",
+            _ => "Bluetooth request",
+        };
+        let text = match status {
+            Some(1) => alloc::format!("{label}: OK"),
+            Some(code) => alloc::format!("{label}: rejected ({code})"),
+            None => alloc::format!("{label}: acknowledged"),
+        };
+        info!(target: TAG, "{text}");
+        s.protocol_status = text.clone();
+        crate::screen::nano_ui_set_protocol_status(&text);
+        return true;
+    }
+    false
 }
 
 fn feed_library_chunk(data: &[u8]) -> bool {
@@ -166,6 +335,10 @@ fn feed_library_chunk(data: &[u8]) -> bool {
                     catalog.cabs.len()
                 );
                 s.library_catalog = catalog;
+                crate::screen::nano_ui_library_updated();
+                if s.amp.valid {
+                    push_amp_ui();
+                }
             }
             None => error!(target: TAG, "Malformed Nano library response"),
         }
@@ -262,6 +435,10 @@ fn feed_library_chunk(data: &[u8]) -> bool {
                 catalog.cabs.len()
             );
             s.library_catalog = catalog;
+            crate::screen::nano_ui_library_updated();
+            if s.amp.valid {
+                push_amp_ui();
+            }
         }
         None => error!(target: TAG, "Malformed Nano library response"),
     }
@@ -609,7 +786,6 @@ pub fn nano_state_tuner_watch_update(tuner_active: bool) {
     ensure_timers();
     let s = st();
 
-
     if tuner_active {
         // Tuner live: route/mode come from C305 only — do not poll preset state.
         if s.tuner_watch_running {
@@ -654,7 +830,11 @@ fn request_preset_refresh(label: &str) {
 
 /// Re-read preset state (e.g. after FX block toggle).
 pub fn nano_state_request_preset_refresh(label: &str) {
-    let label = if label.is_empty() { "Preset refresh" } else { label };
+    let label = if label.is_empty() {
+        "Preset refresh"
+    } else {
+        label
+    };
     request_preset_refresh(label);
 }
 

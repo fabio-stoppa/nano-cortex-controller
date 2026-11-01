@@ -13,20 +13,19 @@ component ParamCell inherits Rectangle {
     in property <bool> slider: false;
     callback changed(float);
     callback tapped();
-    height: 116px;
+    height: 100px;
     min-width: 0px;
     preferred-width: 0px;
     horizontal-stretch: 1;
     vertical-stretch: 0;
-    background: #1a1a1a;
-    border-color: #404040;
-    border-width: 1px;
-    border-radius: 4px;
+    background: #1e1e1e;
+    border-width: 0px;
+    border-radius: 12px;
     VerticalLayout {
         height: 100%;
         alignment: center;
-        padding: root.slider ? 12px : 8px;
-        spacing: 6px;
+        padding: root.slider ? 8px : 6px;
+        spacing: 4px;
         Text {
             text: name;
             color: #909090;
@@ -56,10 +55,34 @@ component ParamCell inherits Rectangle {
             horizontal-alignment: center;
         }
     }
+    property <bool> armed: false;
+    property <bool> pressed: false;
+    property <length> down-x: 0px;
+    property <length> down-y: 0px;
+    Timer {
+        interval: 200ms;
+        running: root.pressed && !root.armed;
+        triggered => { root.armed = true; }
+    }
     if root.slider: TouchArea {
         pointer-event(event) => {
-            if (event.kind == PointerEventKind.down || event.kind == PointerEventKind.move) {
+            if (event.kind == PointerEventKind.down) {
+                root.pressed = true;
+                root.armed = false;
+                root.down-x = self.mouse-x;
+                root.down-y = self.mouse-y;
+            }
+            if (event.kind == PointerEventKind.move && root.pressed && !root.armed) {
+                if (abs(self.mouse-x - root.down-x) > 14px && abs(self.mouse-x - root.down-x) > 2 * abs(self.mouse-y - root.down-y)) {
+                    root.armed = true;
+                }
+            }
+            if ((event.kind == PointerEventKind.down || event.kind == PointerEventKind.move) && root.armed) {
                 root.changed(clamp((self.mouse-x - 12px) / max(self.width - 24px, 1px), 0, 1));
+            }
+            if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                root.pressed = false;
+                root.armed = false;
             }
         }
     }
@@ -75,12 +98,14 @@ component ChainTab inherits Rectangle {
     in property <bool> selected: false;
     callback tapped();
     callback held();
+    callback double-tapped();
     property <bool> pressed: false;
     property <bool> held-sent: false;
-    background: active ? accent : transparent;
-    border-width: selected ? 2px : 1px;
-    border-color: selected ? #ffffff : accent;
-    border-radius: 6px;
+    property <bool> tap-pending: false;
+    background: active ? accent : #1e1e1e;
+    border-width: selected ? 2px : 0px;
+    border-color: #ffffff;
+    border-radius: 12px;
     Text {
         text: label;
         color: active ? #ffffff : accent;
@@ -97,6 +122,11 @@ component ChainTab inherits Rectangle {
             root.held();
         }
     }
+    Timer {
+        interval: 350ms;
+        running: root.tap-pending;
+        triggered => { root.tap-pending = false; }
+    }
     TouchArea {
         pointer-event(event) => {
             if (event.kind == PointerEventKind.down) {
@@ -105,7 +135,13 @@ component ChainTab inherits Rectangle {
             }
             if (event.kind == PointerEventKind.up) {
                 if (!root.held-sent) {
-                    root.tapped();
+                    if (root.tap-pending) {
+                        root.tap-pending = false;
+                        root.double-tapped();
+                    } else {
+                        root.tap-pending = true;
+                        root.tapped();
+                    }
                 }
                 root.pressed = false;
             }
@@ -132,6 +168,7 @@ component ChainRail inherits Rectangle {
     in property <bool> on-5;
     callback chain-tapped(int);
     callback chain-held(int);
+    callback chain-double(int);
     background: transparent;
 
     if !root.horizontal: VerticalLayout {
@@ -146,6 +183,7 @@ component ChainRail inherits Rectangle {
             vertical-stretch: 1;
             tapped => { root.chain-tapped(0); }
             held => { root.chain-held(0); }
+            double-tapped => { root.chain-double(0); }
         }
         ChainTab {
             label: tab-1;
@@ -155,6 +193,7 @@ component ChainRail inherits Rectangle {
             vertical-stretch: 1;
             tapped => { root.chain-tapped(1); }
             held => { root.chain-held(1); }
+            double-tapped => { root.chain-double(1); }
         }
         ChainTab {
             label: "AMP";
@@ -164,6 +203,7 @@ component ChainRail inherits Rectangle {
             vertical-stretch: 1;
             tapped => { root.chain-tapped(2); }
             held => { root.chain-held(2); }
+            double-tapped => { root.chain-double(2); }
         }
         ChainTab {
             label: tab-3;
@@ -173,6 +213,7 @@ component ChainRail inherits Rectangle {
             vertical-stretch: 1;
             tapped => { root.chain-tapped(3); }
             held => { root.chain-held(3); }
+            double-tapped => { root.chain-double(3); }
         }
         ChainTab {
             label: tab-4;
@@ -182,6 +223,7 @@ component ChainRail inherits Rectangle {
             vertical-stretch: 1;
             tapped => { root.chain-tapped(4); }
             held => { root.chain-held(4); }
+            double-tapped => { root.chain-double(4); }
         }
         ChainTab {
             label: tab-5;
@@ -191,6 +233,7 @@ component ChainRail inherits Rectangle {
             vertical-stretch: 1;
             tapped => { root.chain-tapped(5); }
             held => { root.chain-held(5); }
+            double-tapped => { root.chain-double(5); }
         }
     }
 
@@ -204,6 +247,7 @@ component ChainRail inherits Rectangle {
             horizontal-stretch: 1;
             tapped => { root.chain-tapped(0); }
             held => { root.chain-held(0); }
+            double-tapped => { root.chain-double(0); }
         }
         ChainTab {
             label: tab-1;
@@ -213,6 +257,7 @@ component ChainRail inherits Rectangle {
             horizontal-stretch: 1;
             tapped => { root.chain-tapped(1); }
             held => { root.chain-held(1); }
+            double-tapped => { root.chain-double(1); }
         }
         ChainTab {
             label: "AMP";
@@ -222,6 +267,7 @@ component ChainRail inherits Rectangle {
             horizontal-stretch: 1;
             tapped => { root.chain-tapped(2); }
             held => { root.chain-held(2); }
+            double-tapped => { root.chain-double(2); }
         }
         ChainTab {
             label: tab-3;
@@ -231,6 +277,7 @@ component ChainRail inherits Rectangle {
             horizontal-stretch: 1;
             tapped => { root.chain-tapped(3); }
             held => { root.chain-held(3); }
+            double-tapped => { root.chain-double(3); }
         }
         ChainTab {
             label: tab-4;
@@ -240,6 +287,7 @@ component ChainRail inherits Rectangle {
             horizontal-stretch: 1;
             tapped => { root.chain-tapped(4); }
             held => { root.chain-held(4); }
+            double-tapped => { root.chain-double(4); }
         }
         ChainTab {
             label: tab-5;
@@ -249,6 +297,7 @@ component ChainRail inherits Rectangle {
             horizontal-stretch: 1;
             tapped => { root.chain-tapped(5); }
             held => { root.chain-held(5); }
+            double-tapped => { root.chain-double(5); }
         }
     }
 }
@@ -261,7 +310,7 @@ component HeaderButton inherits Rectangle {
     width: button-width;
     height: 28px;
     background: hot ? #2fb648 : #1a1a1a;
-    border-radius: 6px;
+    border-radius: 8px;
     Text {
         text: label;
         color: #c8c8c8;
@@ -274,25 +323,233 @@ component HeaderButton inherits Rectangle {
     }
 }
 
+export struct MidiRow {
+    name: string,
+    assigned: string,
+    learning: bool,
+}
+
+export struct BtDevice {
+    name: string,
+    kind: string,
+    // 0 nearby, 1 connecting, 2 connected
+    state: int,
+}
+
+// Rune-style Bluetooth mark that glows blue while connected and pulses while connecting.
+component BluetoothButton inherits Rectangle {
+    in property <bool> connected;
+    in property <bool> busy;
+    in property <bool> open;
+    callback tapped();
+    property <bool> lit: connected || busy;
+    property <float> pulse: 1;
+    property <color> ink: connected ? #80c0ff : (busy ? #4a80b8 : #606060);
+    width: 36px;
+    height: 36px;
+    background: lit ? #14304a : transparent;
+    border-width: 1px;
+    border-color: lit ? #80c0ff : (open ? #8090a0 : #404040);
+    border-radius: 8px;
+    init => { root.pulse = 0; }
+    animate pulse {
+        duration: 700ms;
+        iteration-count: -1;
+        direction: alternate;
+    }
+    // Glow halo behind the button; it breathes while connecting.
+    Rectangle {
+        x: -4px; y: -4px; width: 44px; height: 44px;
+        border-radius: 12px;
+        background: connected ? #80c0ff50 : (busy ? #80c0ff.with-alpha(0.08 + 0.3 * pulse) : transparent);
+    }
+    Image {
+        x: 4px; y: 4px; width: 28px; height: 28px;
+        source: @image-url("icons/bluetooth.png");
+        colorize: ink;
+    }
+    TouchArea { clicked => { root.tapped(); } }
+}
+
+component BluetoothPicker inherits Rectangle {
+    in property <[BtDevice]> devices;
+    callback picked(int);
+    callback closed();
+    background: #000000b0;
+    TouchArea { clicked => { root.closed(); } }
+    Rectangle {
+        width: min(root.width - 24px, 460px);
+        height: min(root.height - 24px, 360px);
+        background: #1e1e1e;
+        border-radius: 14px;
+        TouchArea {}
+        VerticalLayout {
+            padding: 14px;
+            spacing: 8px;
+            HorizontalLayout {
+                height: 34px;
+                Text {
+                    text: "Bluetooth devices";
+                    color: #e0e0e0;
+                    font-size: 21px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Rectangle {
+                    width: 44px;
+                    TouchArea { clicked => { root.closed(); } }
+                    Text {
+                        text: "X";
+                        color: #c8c8c8;
+                        font-size: 24px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            if root.devices.length == 0: Text {
+                text: "Searching for Nano Cortex or FootCtrl / Chocolate...";
+                color: #909090;
+                font-size: 17px;
+                wrap: word-wrap;
+                vertical-alignment: center;
+                vertical-stretch: 1;
+            }
+            for device[index] in root.devices: Rectangle {
+                height: 52px;
+                background: device.state == 2 ? #14304a : #2a2a2a;
+                border-color: device.state > 0 ? #80c0ff : #3a3a3a;
+                border-width: 1px;
+                border-radius: 10px;
+                TouchArea { clicked => { root.picked(index); } }
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 8px;
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: device.name;
+                            color: #ececec;
+                            font-size: 19px;
+                            overflow: elide;
+                        }
+                        Text { text: device.kind; color: #909090; font-size: 14px; }
+                    }
+                    Text {
+                        text: device.state == 2 ? "Connected" : (device.state == 1 ? "Connecting..." : "Tap to connect");
+                        color: device.state > 0 ? #80c0ff : #909090;
+                        font-size: 15px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}
+
+export struct ModelItem {
+    name: string,
+    header: bool,
+    index: int,
+    col: int,
+    y: float,
+}
+
+component ModelPicker inherits Rectangle {
+    in property <string> title;
+    in property <[ModelItem]> items;
+    in property <int> columns: 3;
+    in property <float> content-height: 0;
+    in property <int> current;
+    callback picked(int);
+    callback closed();
+    property <length> gap: 8px;
+    background: #000000b0;
+    TouchArea { clicked => { root.closed(); } }
+    Rectangle {
+        width: root.width - 24px;
+        height: root.height - 24px;
+        background: #1e1e1e;
+        border-radius: 14px;
+        TouchArea {}
+        VerticalLayout {
+            padding: 14px;
+            spacing: 8px;
+            HorizontalLayout {
+                height: 34px;
+                Text {
+                    text: root.title;
+                    color: #e0e0e0;
+                    font-size: 21px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Rectangle {
+                    width: 44px;
+                    TouchArea { clicked => { root.closed(); } }
+                    Text {
+                        text: "X";
+                        color: #c8c8c8;
+                        font-size: 24px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            Flickable {
+                viewport-height: root.content-height * 1px;
+                for item in root.items: Rectangle {
+                    property <length> cell: (parent.width - (root.columns - 1) * root.gap) / root.columns;
+                    x: item.header ? 0px : item.col * (cell + root.gap);
+                    y: item.y * 1px;
+                    width: item.header ? parent.width : cell;
+                    height: item.header ? 30px : 42px;
+                    background: item.header ? transparent : (item.index == root.current ? #14304a : #2a2a2a);
+                    border-radius: 10px;
+                    if !item.header: TouchArea { clicked => { root.picked(item.index); } }
+                    Text {
+                        x: item.header ? 2px : 10px;
+                        width: parent.width - 20px;
+                        text: item.name;
+                        color: item.header ? #909090 : (item.index == root.current ? #80c0ff : #ececec);
+                        font-size: item.header ? 17px : 18px;
+                        font-weight: item.header ? 700 : 400;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+}
+
 component HeaderBar inherits Rectangle {
     in property <bool> portrait;
     in property <int> page;
     in property <string> preset;
-    in property <string> model;
     in property <bool> model-enabled;
     in property <string> bpm-text;
     in property <bool> ble-on;
+    in property <bool> bt-busy;
+    in property <bool> bt-open;
     in property <bool> tuner-on;
     in property <bool> save-dirty: false;
     callback tempo-tapped();
     callback tempo-opened();
+    callback bt-tapped();
     callback tuner-tapped();
-    callback preset-stepped(int);
-    callback capture-stepped(int);
-    callback model-stepped(int);
+    callback preset-list-tapped();
     callback save-tapped();
     callback copy-tapped();
     callback library-tapped();
+    callback tools-tapped();
     background: transparent;
     HorizontalLayout {
         alignment: space-between;
@@ -302,24 +559,6 @@ component HeaderBar inherits Rectangle {
         HorizontalLayout {
             alignment: start;
             spacing: 4px;
-            Text {
-                text: preset;
-                color: #909090;
-                font-size: 15px;
-                vertical-alignment: center;
-                overflow: elide;
-                width: portrait ? 56px : 110px;
-            }
-            HeaderButton {
-                label: "<";
-                button-width: 28px;
-                tapped => { root.preset-stepped(-1); }
-            }
-            HeaderButton {
-                label: ">";
-                button-width: 28px;
-                tapped => { root.preset-stepped(1); }
-            }
             HeaderButton {
                 label: "Save";
                 hot: save-dirty;
@@ -336,54 +575,24 @@ component HeaderBar inherits Rectangle {
                 button-width: portrait ? 36px : 40px;
                 tapped => { root.library-tapped(); }
             }
+            HeaderButton {
+                label: "Tools";
+                button-width: portrait ? 42px : 48px;
+                tapped => { root.tools-tapped(); }
+            }
         }
-        Rectangle {
+        TouchArea {
             horizontal-stretch: 1;
             height: 44px;
-            background: #000000;
-            border-radius: 4px;
-            HorizontalLayout {
-                padding-left: 2px;
-                padding-right: 2px;
-                if root.page == 0 || root.page == 1: TouchArea {
-                    width: 32px;
-                    height: 44px;
-                    clicked => {
-                        if (root.page == 0) { root.capture-stepped(-1); }
-                        if (root.page == 1) { root.model-stepped(-1); }
-                    }
-                    Text {
-                        text: "<";
-                        color: #c8c8c8;
-                        font-size: 17px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-                Text {
-                    text: model;
-                    color: model-enabled ? #ececec : #606060;
-                    font-size: 19px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    horizontal-stretch: 1;
-                }
-                if root.page == 0 || root.page == 1: TouchArea {
-                    width: 32px;
-                    height: 44px;
-                    clicked => {
-                        if (root.page == 0) { root.capture-stepped(1); }
-                        if (root.page == 1) { root.model-stepped(1); }
-                    }
-                    Text {
-                        text: ">";
-                        color: #c8c8c8;
-                        font-size: 17px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
+            clicked => { root.preset-list-tapped(); }
+            Text {
+                text: preset;
+                color: model-enabled ? #ececec : #606060;
+                font-size: 26px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
             }
         }
         HorizontalLayout {
@@ -401,11 +610,11 @@ component HeaderBar inherits Rectangle {
                     vertical-alignment: center;
                 }
             }
-            Text {
-                text: "BT";
-                color: ble-on ? #80c0ff : #505050;
-                font-size: 15px;
-                vertical-alignment: center;
+            BluetoothButton {
+                connected: ble-on;
+                busy: bt-busy;
+                open: bt-open;
+                tapped => { root.bt-tapped(); }
             }
             Rectangle {
                 width: 36px;
@@ -433,8 +642,87 @@ component HeaderBar inherits Rectangle {
     }
 }
 
+component SourceCard inherits Rectangle {
+    in property <string> title;
+    in property <string> value;
+    in property <string> slot;
+    in property <bool> active: false;
+    in property <bool> cab-icon: false;
+    callback tapped();
+    height: 72px;
+    min-width: 0px;
+    preferred-width: 0px;
+    horizontal-stretch: 1;
+    background: #101314;
+    border-color: #292d30;
+    border-width: 1px;
+    border-radius: 12px;
+    HorizontalLayout {
+        width: 100%;
+        height: 100%;
+        padding-left: 9px;
+        padding-right: 9px;
+        spacing: 10px;
+        VerticalLayout {
+            width: 36px;
+            height: 100%;
+            alignment: center;
+            Image {
+                width: 36px;
+                height: 36px;
+                source: root.cab-icon ? @image-url("icons/cab.png") : @image-url("icons/capture.png");
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
+            alignment: center;
+            spacing: 0px;
+            HorizontalLayout {
+                width: 100%;
+                padding-right: 44px;
+                Text {
+                    text: root.title;
+                    color: #858b90;
+                    font-size: 12px;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+            }
+            Text {
+                text: value;
+                color: active ? #ececec : #74797d;
+                font-size: 19px;
+                font-weight: 700;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+        }
+    }
+    Text {
+        x: root.width - 56px;
+        y: 8px;
+        width: 46px;
+        text: root.slot;
+        color: #858b90;
+        font-size: 14px;
+        horizontal-alignment: right;
+    }
+    TouchArea {
+        clicked => { root.tapped(); }
+    }
+}
+
 component AmpPanel inherits Rectangle {
     in property <bool> portrait;
+    in property <string> capture-title;
+    in property <string> capture-value;
+    in property <string> capture-slot;
+    in property <bool> capture-active;
+    in property <string> cab-value;
+    in property <string> cab-slot;
+    in property <bool> cab-active;
     in property <string> gate-text;
     in property <float> gate-amount;
     in property <string> gate-amnt-text;
@@ -451,15 +739,47 @@ component AmpPanel inherits Rectangle {
     in property <float> mid-amount;
     in property <string> treble-text;
     in property <float> treble-amount;
+    in property <string> cab-output-text;
+    in property <float> cab-output-amount;
+    in property <string> cab-high-pass-text;
+    in property <float> cab-high-pass-amount;
+    in property <string> cab-low-pass-text;
+    in property <float> cab-low-pass-amount;
     callback slider-moved(int, float);
     callback gate-tapped();
+    callback capture-tapped();
+    callback cab-tapped();
     background: transparent;
+    HorizontalLayout {
+        x: 2px;
+        y: 2px;
+        width: parent.width - 4px;
+        height: 72px;
+        spacing: 4px;
+        SourceCard {
+            title: root.capture-title;
+            value: root.capture-value;
+            slot: root.capture-slot;
+            active: root.capture-active;
+            tapped => { root.capture-tapped(); }
+        }
+        SourceCard {
+            title: "CAB / IR";
+            value: root.cab-value;
+            slot: root.cab-slot;
+            active: root.cab-active;
+            cab-icon: true;
+            tapped => { root.cab-tapped(); }
+        }
+    }
     VerticalLayout {
+        y: 78px;
         alignment: start;
         padding: 2px;
         spacing: 4px;
         if !root.portrait: HorizontalLayout {
             width: 100%;
+            height: 100px;
             spacing: 4px;
             ParamCell {
                 horizontal-stretch: 1;
@@ -495,6 +815,7 @@ component AmpPanel inherits Rectangle {
         }
         if !root.portrait: HorizontalLayout {
             width: 100%;
+            height: 100px;
             spacing: 4px;
             ParamCell {
                 horizontal-stretch: 1;
@@ -531,6 +852,7 @@ component AmpPanel inherits Rectangle {
         }
         if root.portrait: HorizontalLayout {
             width: 100%;
+            height: 100px;
             spacing: 4px;
             ParamCell {
                 horizontal-stretch: 1;
@@ -558,6 +880,7 @@ component AmpPanel inherits Rectangle {
         }
         if root.portrait: HorizontalLayout {
             width: 100%;
+            height: 100px;
             spacing: 4px;
             ParamCell {
                 horizontal-stretch: 1;
@@ -586,6 +909,7 @@ component AmpPanel inherits Rectangle {
         }
         if root.portrait: HorizontalLayout {
             width: 100%;
+            height: 100px;
             spacing: 4px;
             ParamCell {
                 horizontal-stretch: 1;
@@ -604,6 +928,34 @@ component AmpPanel inherits Rectangle {
                 changed(v) => { root.slider-moved(4, v); }
             }
             Rectangle {
+                min-width: 0px;
+                preferred-width: 0px;
+                horizontal-stretch: 1;
+            }
+        }
+        HorizontalLayout {
+            width: 100%;
+            height: 100px;
+            spacing: 4px;
+            ParamCell {
+                horizontal-stretch: 1;
+                name: "Cab Output";
+                value: root.cab-output-text;
+                amount: root.cab-output-amount;
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                name: "High Pass";
+                value: root.cab-high-pass-text;
+                amount: root.cab-high-pass-amount;
+            }
+            ParamCell {
+                horizontal-stretch: 1;
+                name: "Low Pass";
+                value: root.cab-low-pass-text;
+                amount: root.cab-low-pass-amount;
+            }
+            if !root.portrait: Rectangle {
                 min-width: 0px;
                 preferred-width: 0px;
                 horizontal-stretch: 1;
@@ -685,6 +1037,10 @@ component FxPanel inherits Rectangle {
     in property <string> n23;
     in property <string> v23;
     in property <float> a23;
+    in property <string> model-name: "-";
+    in property <bool> model-enabled: false;
+    callback model-list-tapped();
+    callback model-stepped(int);
     callback param-changed(int, float);
     property <length> cell-width: (root.width - 4px - 12px) / 4;
     background: transparent;
@@ -842,7 +1198,7 @@ component TunerPanel inherits Rectangle {
     callback reference-set(int);
     callback mute-tapped();
     property <color> note-color: !has-pitch ? #9a9a9a : (in-tune ? #45f862 : #ffffff);
-    background: #000000;
+    background: #2e2e2e;
     TouchArea {}
 
     // fixed centre markers
@@ -955,7 +1311,7 @@ component TunerPanel inherits Rectangle {
             height: 44px;
             y: (parent.height - self.height) / 2;
             background: #3a3d40;
-            border-radius: 8px;
+            border-radius: 12px;
             Text {
                 text: "-";
                 color: #f2f2f2;
@@ -1068,7 +1424,7 @@ component TempoPanel inherits Rectangle {
             width: 220px;
             height: 72px;
             background: #1a1a1a;
-            border-radius: 8px;
+            border-radius: 12px;
             Text {
                 text: "TAP";
                 color: #909090;
@@ -1083,6 +1439,288 @@ component TempoPanel inherits Rectangle {
     }
 }
 
+component MeterReadout inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <float> amount;
+    background: #1e1e1e;
+    border-radius: 10px;
+    VerticalLayout {
+        padding: 8px;
+        spacing: 5px;
+        Text {
+            text: root.label;
+            color: #909090;
+            font-size: 15px;
+            horizontal-alignment: center;
+        }
+        Rectangle {
+            height: 12px;
+            background: #101010;
+            border-radius: 6px;
+            Rectangle {
+                width: parent.width * root.amount;
+                height: 100%;
+                background: #55b8ff;
+                border-radius: 6px;
+            }
+        }
+        Text {
+            text: root.value;
+            color: #ececec;
+            font-size: 17px;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+component MidiPanel inherits Rectangle {
+    in property <[MidiRow]> rows;
+    in property <string> last;
+    callback back();
+    callback learn(int);
+    callback clear(int);
+    background: transparent;
+    VerticalLayout {
+        padding: 10px;
+        spacing: 6px;
+        HorizontalLayout {
+            height: 38px;
+            spacing: 8px;
+            HeaderButton {
+                label: "Back";
+                button-width: 52px;
+                tapped => { root.back(); }
+            }
+            Text {
+                text: "MIDI learn";
+                color: #ececec;
+                font-size: 22px;
+                font-weight: 700;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.last == "" ? "Last: none" : "Last: " + root.last;
+                color: #80c0ff;
+                font-size: 14px;
+                vertical-alignment: center;
+            }
+        }
+        Text {
+            text: "Tap Learn, then press a footswitch. On/off actions toggle; CC sets knobs.";
+            color: #909090;
+            font-size: 13px;
+            height: 18px;
+            overflow: elide;
+        }
+        Flickable {
+            vertical-stretch: 1;
+            viewport-height: root.rows.length * 44px;
+            for row[i] in root.rows: Rectangle {
+                y: i * 44px;
+                height: 40px;
+                background: row.learning ? #26435e : #1e1e1e;
+                border-radius: 6px;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 6px;
+                    padding-top: 6px;
+                    padding-bottom: 6px;
+                    spacing: 8px;
+                    Text {
+                        text: row.name;
+                        color: #ececec;
+                        font-size: 16px;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: row.learning ? "Waiting..." : (row.assigned == "" ? "-" : row.assigned);
+                        color: row.learning ? #ffd060 : #a8c8a8;
+                        font-size: 15px;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        width: 130px;
+                    }
+                    HeaderButton {
+                        label: row.learning ? "Cancel" : "Learn";
+                        button-width: 62px;
+                        hot: row.learning;
+                        tapped => { root.learn(i); }
+                    }
+                    HeaderButton {
+                        label: "Clear";
+                        button-width: 52px;
+                        tapped => { root.clear(i); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component ToolsPanel inherits Rectangle {
+    in property <string> jack-mode;
+    in property <bool> jack-expression;
+    in property <string> usb-level;
+    in property <string> cab-settings;
+    in property <string> expression-summary;
+    in property <string> calibration-status;
+    in property <string> protocol-status;
+    in property <string> meter-input;
+    in property <string> meter-output;
+    in property <string> meter-expression;
+    in property <float> meter-input-amount;
+    in property <float> meter-output-amount;
+    in property <float> meter-expression-amount;
+    callback refresh();
+    callback midi();
+    callback jack-selected(bool);
+    callback usb-step(int);
+    callback calibration-start();
+    callback calibration-save();
+    background: transparent;
+    VerticalLayout {
+        padding: 10px;
+        spacing: 7px;
+        HorizontalLayout {
+            height: 38px;
+            Text {
+                text: "Bluetooth tools";
+                color: #ececec;
+                font-size: 22px;
+                font-weight: 700;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            HeaderButton {
+                label: "MIDI";
+                button-width: 52px;
+                tapped => { root.midi(); }
+            }
+            Rectangle { width: 6px; background: transparent; }
+            HeaderButton {
+                label: "Refresh";
+                button-width: 62px;
+                tapped => { root.refresh(); }
+            }
+        }
+        HorizontalLayout {
+            height: 48px;
+            spacing: 8px;
+            Text {
+                text: "EXP/MIDI: " + root.jack-mode;
+                color: #d0d0d0;
+                font-size: 16px;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            HeaderButton {
+                label: root.jack-expression ? "Use MIDI" : "Use EXP";
+                button-width: 82px;
+                tapped => { root.jack-selected(!root.jack-expression); }
+            }
+            Text {
+                text: "USB " + root.usb-level;
+                color: #d0d0d0;
+                font-size: 16px;
+                vertical-alignment: center;
+            }
+            HeaderButton {
+                label: "-";
+                button-width: 32px;
+                tapped => { root.usb-step(-1); }
+            }
+            HeaderButton {
+                label: "+";
+                button-width: 32px;
+                tapped => { root.usb-step(1); }
+            }
+        }
+        HorizontalLayout {
+            height: 34px;
+            Text {
+                text: "Cab: " + root.cab-settings;
+                color: #d0d0d0;
+                font-size: 15px;
+                vertical-alignment: center;
+            }
+        }
+        Text {
+            text: "Expression: " + root.expression-summary;
+            color: #d0d0d0;
+            font-size: 14px;
+            height: 54px;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            overflow: elide;
+        }
+        HorizontalLayout {
+            height: 80px;
+            spacing: 8px;
+            MeterReadout {
+                label: "Capture in";
+                value: root.meter-input;
+                amount: root.meter-input-amount;
+                horizontal-stretch: 1;
+            }
+            MeterReadout {
+                label: "Capture out";
+                value: root.meter-output;
+                amount: root.meter-output-amount;
+                horizontal-stretch: 1;
+            }
+            MeterReadout {
+                label: "Expression";
+                value: root.meter-expression;
+                amount: root.meter-expression-amount;
+                horizontal-stretch: 1;
+            }
+        }
+        HorizontalLayout {
+            height: 48px;
+            spacing: 8px;
+            Text {
+                text: "Calibration: " + root.calibration-status;
+                color: #d0d0d0;
+                font-size: 15px;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            HeaderButton {
+                label: "Start sweep";
+                button-width: 82px;
+                tapped => { root.calibration-start(); }
+            }
+            HeaderButton {
+                label: "Save range";
+                button-width: 82px;
+                tapped => { root.calibration-save(); }
+            }
+        }
+        Text {
+            text: "Start clears the saved range. Sweep heel-to-toe, then save.";
+            color: #909090;
+            font-size: 13px;
+            height: 18px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.protocol-status;
+            color: #80c0ff;
+            font-size: 14px;
+            height: 24px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Rectangle { vertical-stretch: 1; background: transparent; }
+    }
+}
+
 component LayoutChoice inherits Rectangle {
     in property <string> label;
     in property <bool> chosen;
@@ -1092,7 +1730,7 @@ component LayoutChoice inherits Rectangle {
     background: chosen ? #243044 : #1a1a1a;
     border-width: 1px;
     border-color: chosen ? #80c0ff : #404040;
-    border-radius: 6px;
+    border-radius: 10px;
     Text {
         text: label;
         color: chosen ? #e0e0e0 : #c0c0c0;
@@ -1108,7 +1746,7 @@ component LayoutChoice inherits Rectangle {
 component ConnectingOverlay inherits Rectangle {
     in property <int> layout-mode;
     callback layout-tapped(int);
-    background: #000000;
+    background: #2e2e2e;
     TouchArea {}
     VerticalLayout {
         alignment: center;
@@ -1195,6 +1833,13 @@ export component AppWindow inherits Window {
     in-out property <string> preset: "-";
     in-out property <string> model: "Amp";
     in-out property <bool> model-enabled: false;
+    in-out property <string> capture-title: "CAPTURE";
+    in-out property <string> capture-value: "-";
+    in-out property <string> capture-slot: "-";
+    in-out property <bool> capture-active: false;
+    in-out property <string> cab-value: "-";
+    in-out property <string> cab-slot: "-";
+    in-out property <bool> cab-active: false;
     in-out property <string> bpm-text: "- BPM";
     in-out property <string> tempo-bpm: "-";
     in-out property <string> tuner-note: "-";
@@ -1207,6 +1852,15 @@ export component AppWindow inherits Window {
     in-out property <bool> tuner-muted: false;
     in-out property <bool> save-dirty: false;
     in-out property <bool> ble-on: false;
+    in-out property <bool> bt-busy: false;
+    in-out property <bool> bt-open: false;
+    in-out property <bool> model-open: false;
+    in-out property <int> list-kind: 0;
+    in-out property <string> model-list-title: "";
+    in-out property <[ModelItem]> model-list: [];
+    in-out property <float> model-list-height: 0;
+    in-out property <int> model-list-current: -1;
+    in-out property <[BtDevice]> bt-devices;
     in-out property <string> gate-text: "-";
     in-out property <float> gate-amount: 0;
     in-out property <string> gate-amnt-text: "-";
@@ -1223,6 +1877,12 @@ export component AppWindow inherits Window {
     in-out property <float> mid-amount: 0;
     in-out property <string> treble-text: "-";
     in-out property <float> treble-amount: 0;
+    in-out property <string> cab-output-text: "-- dB";
+    in-out property <float> cab-output-amount: 0;
+    in-out property <string> cab-high-pass-text: "-- Hz";
+    in-out property <float> cab-high-pass-amount: 0;
+    in-out property <string> cab-low-pass-text: "-- Hz";
+    in-out property <float> cab-low-pass-amount: 0;
     in-out property <string> fx-n0: "-";
     in-out property <string> fx-v0: "-";
     in-out property <float> fx-a0: 0;
@@ -1306,9 +1966,23 @@ export component AppWindow inherits Window {
     in-out property <bool> on-4: false;
     in-out property <bool> on-5: false;
     in-out property <bool> tuner-active: false;
+    in-out property <string> tools-jack-mode: "Unknown";
+    in-out property <bool> tools-jack-expression: false;
+    in-out property <string> tools-usb-level: "-";
+    in-out property <string> tools-cab-settings: "Not loaded";
+    in-out property <string> tools-expression-summary: "Not loaded";
+    in-out property <string> tools-calibration-status: "Idle";
+    in-out property <string> tools-protocol-status: "";
+    in-out property <string> tools-meter-input: "-";
+    in-out property <string> tools-meter-output: "-";
+    in-out property <string> tools-meter-expression: "-";
+    in-out property <float> tools-meter-input-amount: 0;
+    in-out property <float> tools-meter-output-amount: 0;
+    in-out property <float> tools-meter-expression-amount: 0;
 
     callback chain-tapped(int);
     callback chain-held(int);
+    callback chain-double(int);
     callback tuner-tapped();
     callback tuner-reference-set(int);
     callback tuner-mute-tapped();
@@ -1318,17 +1992,34 @@ export component AppWindow inherits Window {
     callback slider-moved(int, float);
     callback gate-tapped();
     callback param-changed(int, float);
-    callback preset-stepped(int);
+    callback preset-list-tapped();
     callback capture-stepped(int);
     callback model-stepped(int);
     callback save-tapped();
     callback copy-tapped();
     callback library-tapped();
+    callback bt-picked(int);
+    callback model-list-tapped();
+    callback capture-list-tapped();
+    callback cab-list-tapped();
+    callback model-chosen(int);
+    callback tools-opened();
+    callback tools-refresh();
+    in-out property <[MidiRow]> midi-rows: [];
+    in-out property <string> midi-last: "";
+    callback midi-opened();
+    callback midi-closed();
+    callback midi-learn(int);
+    callback midi-clear(int);
+    callback tools-jack-selected(bool);
+    callback tools-usb-step(int);
+    callback tools-calibration-start();
+    callback tools-calibration-save();
 
     // 4.3B panel size; the firmware overrides it with set_size().
     preferred-width: 800px;
     preferred-height: 480px;
-    background: #000000;
+    background: #2e2e2e;
     default-font-family: "IBM Plex Sans";
     default-font-size: 17px;
 
@@ -1339,20 +2030,21 @@ export component AppWindow inherits Window {
             portrait: root.portrait;
             page: root.page;
             preset: root.preset;
-            model: root.model;
             model-enabled: root.model-enabled;
             bpm-text: root.bpm-text;
             ble-on: root.ble-on;
+            bt-busy: root.bt-busy;
+            bt-open: root.bt-open;
+            bt-tapped => { root.bt-open = !root.bt-open; }
             tuner-on: root.page == 2;
             save-dirty: root.save-dirty;
             tempo-opened => { root.tempo-opened(); }
             tuner-tapped => { root.tuner-tapped(); }
-            preset-stepped(delta) => { root.preset-stepped(delta); }
-            capture-stepped(delta) => { root.capture-stepped(delta); }
-            model-stepped(delta) => { root.model-stepped(delta); }
+            preset-list-tapped => { root.preset-list-tapped(); }
             save-tapped => { root.save-tapped(); }
             copy-tapped => { root.copy-tapped(); }
             library-tapped => { root.library-tapped(); }
+            tools-tapped => { root.tools-opened(); }
         }
         if !root.portrait: HorizontalLayout {
             spacing: 4px;
@@ -1372,13 +2064,23 @@ export component AppWindow inherits Window {
                 on-5: root.on-5;
                 chain-tapped(index) => { root.chain-tapped(index); }
                 chain-held(index) => { root.chain-held(index); }
+                chain-double(index) => { root.chain-double(index); }
             }
             Rectangle {
                 horizontal-stretch: 1;
                 background: transparent;
                 clip: true;
                 if root.page == 0: AmpPanel {
+                    capture-tapped => { root.capture-list-tapped(); }
+                    cab-tapped => { root.cab-list-tapped(); }
                     portrait: root.portrait;
+                    capture-title: root.capture-title;
+                    capture-value: root.capture-value;
+                    capture-slot: root.capture-slot;
+                    capture-active: root.capture-active;
+                    cab-value: root.cab-value;
+                    cab-slot: root.cab-slot;
+                    cab-active: root.cab-active;
                     gate-text: root.gate-text;
                     gate-amount: root.gate-amount;
                     gate-amnt-text: root.gate-amnt-text;
@@ -1395,10 +2097,20 @@ export component AppWindow inherits Window {
                     mid-amount: root.mid-amount;
                     treble-text: root.treble-text;
                     treble-amount: root.treble-amount;
+                    cab-output-text: root.cab-output-text;
+                    cab-output-amount: root.cab-output-amount;
+                    cab-high-pass-text: root.cab-high-pass-text;
+                    cab-high-pass-amount: root.cab-high-pass-amount;
+                    cab-low-pass-text: root.cab-low-pass-text;
+                    cab-low-pass-amount: root.cab-low-pass-amount;
                     slider-moved(id, amount) => { root.slider-moved(id, amount); }
                     gate-tapped => { root.gate-tapped(); }
                 }
                 if root.page == 1: FxPanel {
+                    model-name: root.model;
+                    model-enabled: root.model-enabled;
+                    model-list-tapped => { root.model-list-tapped(); }
+                    model-stepped(delta) => { root.model-stepped(delta); }
                     n0: root.fx-n0; v0: root.fx-v0; a0: root.fx-a0;
                     n1: root.fx-n1; v1: root.fx-v1; a1: root.fx-a1;
                     n2: root.fx-n2; v2: root.fx-v2; a2: root.fx-a2;
@@ -1428,6 +2140,34 @@ export component AppWindow inherits Window {
                 if root.page == 3: TempoPanel {
                     bpm: root.tempo-bpm;
                     tempo-tapped => { root.tempo-tapped(); }
+                }
+                if root.page == 4: ToolsPanel {
+                    jack-mode: root.tools-jack-mode;
+                    jack-expression: root.tools-jack-expression;
+                    usb-level: root.tools-usb-level;
+                    cab-settings: root.tools-cab-settings;
+                    expression-summary: root.tools-expression-summary;
+                    calibration-status: root.tools-calibration-status;
+                    protocol-status: root.tools-protocol-status;
+                    meter-input: root.tools-meter-input;
+                    meter-output: root.tools-meter-output;
+                    meter-expression: root.tools-meter-expression;
+                    meter-input-amount: root.tools-meter-input-amount;
+                    meter-output-amount: root.tools-meter-output-amount;
+                    meter-expression-amount: root.tools-meter-expression-amount;
+                    refresh => { root.tools-refresh(); }
+                    midi => { root.midi-opened(); }
+                    jack-selected(expression) => { root.tools-jack-selected(expression); }
+                    usb-step(delta) => { root.tools-usb-step(delta); }
+                    calibration-start => { root.tools-calibration-start(); }
+                    calibration-save => { root.tools-calibration-save(); }
+                }
+                if root.page == 5: MidiPanel {
+                    rows: root.midi-rows;
+                    last: root.midi-last;
+                    back => { root.midi-closed(); }
+                    learn(index) => { root.midi-learn(index); }
+                    clear(index) => { root.midi-clear(index); }
                 }
             }
         }
@@ -1449,13 +2189,23 @@ export component AppWindow inherits Window {
                 on-5: root.on-5;
                 chain-tapped(index) => { root.chain-tapped(index); }
                 chain-held(index) => { root.chain-held(index); }
+                chain-double(index) => { root.chain-double(index); }
             }
             Rectangle {
                 vertical-stretch: 1;
                 background: transparent;
                 clip: true;
                 if root.page == 0: AmpPanel {
+                    capture-tapped => { root.capture-list-tapped(); }
+                    cab-tapped => { root.cab-list-tapped(); }
                     portrait: root.portrait;
+                    capture-title: root.capture-title;
+                    capture-value: root.capture-value;
+                    capture-slot: root.capture-slot;
+                    capture-active: root.capture-active;
+                    cab-value: root.cab-value;
+                    cab-slot: root.cab-slot;
+                    cab-active: root.cab-active;
                     gate-text: root.gate-text;
                     gate-amount: root.gate-amount;
                     gate-amnt-text: root.gate-amnt-text;
@@ -1472,10 +2222,20 @@ export component AppWindow inherits Window {
                     mid-amount: root.mid-amount;
                     treble-text: root.treble-text;
                     treble-amount: root.treble-amount;
+                    cab-output-text: root.cab-output-text;
+                    cab-output-amount: root.cab-output-amount;
+                    cab-high-pass-text: root.cab-high-pass-text;
+                    cab-high-pass-amount: root.cab-high-pass-amount;
+                    cab-low-pass-text: root.cab-low-pass-text;
+                    cab-low-pass-amount: root.cab-low-pass-amount;
                     slider-moved(id, amount) => { root.slider-moved(id, amount); }
                     gate-tapped => { root.gate-tapped(); }
                 }
                 if root.page == 1: FxPanel {
+                    model-name: root.model;
+                    model-enabled: root.model-enabled;
+                    model-list-tapped => { root.model-list-tapped(); }
+                    model-stepped(delta) => { root.model-stepped(delta); }
                     n0: root.fx-n0; v0: root.fx-v0; a0: root.fx-a0;
                     n1: root.fx-n1; v1: root.fx-v1; a1: root.fx-a1;
                     n2: root.fx-n2; v2: root.fx-v2; a2: root.fx-a2;
@@ -1506,6 +2266,34 @@ export component AppWindow inherits Window {
                     bpm: root.tempo-bpm;
                     tempo-tapped => { root.tempo-tapped(); }
                 }
+                if root.page == 4: ToolsPanel {
+                    jack-mode: root.tools-jack-mode;
+                    jack-expression: root.tools-jack-expression;
+                    usb-level: root.tools-usb-level;
+                    cab-settings: root.tools-cab-settings;
+                    expression-summary: root.tools-expression-summary;
+                    calibration-status: root.tools-calibration-status;
+                    protocol-status: root.tools-protocol-status;
+                    meter-input: root.tools-meter-input;
+                    meter-output: root.tools-meter-output;
+                    meter-expression: root.tools-meter-expression;
+                    meter-input-amount: root.tools-meter-input-amount;
+                    meter-output-amount: root.tools-meter-output-amount;
+                    meter-expression-amount: root.tools-meter-expression-amount;
+                    refresh => { root.tools-refresh(); }
+                    midi => { root.midi-opened(); }
+                    jack-selected(expression) => { root.tools-jack-selected(expression); }
+                    usb-step(delta) => { root.tools-usb-step(delta); }
+                    calibration-start => { root.tools-calibration-start(); }
+                    calibration-save => { root.tools-calibration-save(); }
+                }
+                if root.page == 5: MidiPanel {
+                    rows: root.midi-rows;
+                    last: root.midi-last;
+                    back => { root.midi-closed(); }
+                    learn(index) => { root.midi-learn(index); }
+                    clear(index) => { root.midi-clear(index); }
+                }
             }
         }
     }
@@ -1526,8 +2314,39 @@ export component AppWindow inherits Window {
             mute-tapped => { root.tuner-mute-tapped(); }
         }
 
+    if root.model-open: ModelPicker {
+        x: 0px; y: 0px; width: root.width; height: root.height;
+        title: root.model-list-title;
+        items: root.model-list;
+        columns: root.portrait ? 2 : 3;
+        content-height: root.model-list-height;
+        current: root.model-list-current;
+        picked(index) => {
+            root.model-chosen(index);
+            root.model-open = false;
+        }
+        closed => { root.model-open = false; }
+    }
+
     if root.connecting: ConnectingOverlay {
         layout-mode: root.layout-mode;
         layout-tapped(mode) => { root.layout-tapped(mode); }
+    }
+
+    // The overlay covers the header, so it carries its own Bluetooth button.
+    if root.connecting: BluetoothButton {
+        x: root.width - 48px;
+        y: 8px;
+        connected: root.ble-on;
+        busy: root.bt-busy;
+        open: root.bt-open;
+        tapped => { root.bt-open = !root.bt-open; }
+    }
+
+    if root.bt-open: BluetoothPicker {
+        x: 0px; y: 0px; width: root.width; height: root.height;
+        devices: root.bt-devices;
+        picked(index) => { root.bt-picked(index); }
+        closed => { root.bt-open = false; }
     }
 }

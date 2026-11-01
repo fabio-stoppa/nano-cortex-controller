@@ -14,6 +14,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 
+use nano_wire::types::JackMode;
+
 static UP: AtomicBool = AtomicBool::new(false);
 
 static OUT: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<Vec<u8>>>> =
@@ -32,14 +34,36 @@ pub enum Cmd {
     TempoEnter,
     TempoExit,
     Focus(u8),
-    Block { slot: u8, on: bool },
+    Block {
+        slot: u8,
+        on: bool,
+    },
     /// Step the catalog model loaded in an effect block.
-    Model { block: u8, delta: i8 },
+    Model {
+        block: u8,
+        delta: i8,
+    },
+    /// Load the Nth allowed catalog model into an effect block.
+    ModelAt {
+        block: u8,
+        index: u8,
+    },
     Save,
     Copy,
     Library,
+    #[allow(dead_code)] // reserved for MIDI-controller stepping
     Preset(i8),
     Capture(i8),
+    /// Select factory capture slot 1..=25.
+    CaptureAt(u8),
+    PresetAt(u8),
+    /// Load the Nth library IR into the active cab slot.
+    CabAt(u16),
+    ToolsOpen,
+    JackMode(JackMode),
+    UsbPlaybackStep(i8),
+    ExpressionCalibrationStart,
+    ExpressionCalibrationSave,
 }
 
 #[derive(Clone, Copy)]

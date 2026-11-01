@@ -1,15 +1,15 @@
 //! Shared state, buffers and low-level helpers used by every `machine` submodule.
 
-use core::ffi::CStr;
-use core::ptr;
 use alloc::alloc::{alloc_zeroed, Layout};
 use alloc::ffi::CString;
 use alloc::string::String;
+use core::ffi::CStr;
+use core::ptr;
 
-
+use nano_wire::editor::ExpressionAssignments;
 use nano_wire::types::{
-    LibraryCatalog, NanoAmpC, NanoPresetCatalogC, TunerSettings, AMP_CAPTURE_NAME_MAX,
-    PRESET_COUNT, PRESET_NAME_MAX,
+    CabSettings, DeviceSettings, LibraryCatalog, NanoAmpC, NanoPresetCatalogC, TunerSettings,
+    AMP_CAB_NAME_MAX, AMP_CAPTURE_NAME_MAX, PRESET_COUNT, PRESET_NAME_MAX,
 };
 
 use crate::syncutil::{SeqLock, Shared};
@@ -26,9 +26,13 @@ pub(super) const fn amp_zero() -> NanoAmpC {
         capture_volume: 0,
         capture_slot: 0,
         capture_name: [0; AMP_CAPTURE_NAME_MAX],
+        cab_slot: 0,
+        cab_name: [0; AMP_CAB_NAME_MAX],
         have_capture_slot: false,
         have_capture_name: false,
         have_capture_volume: false,
+        have_cab_slot: false,
+        have_cab_name: false,
         valid: false,
     }
 }
@@ -43,9 +47,13 @@ pub(super) fn amp_copy(a: &NanoAmpC) -> NanoAmpC {
         capture_volume: a.capture_volume,
         capture_slot: a.capture_slot,
         capture_name: a.capture_name,
+        cab_slot: a.cab_slot,
+        cab_name: a.cab_name,
         have_capture_slot: a.have_capture_slot,
         have_capture_name: a.have_capture_name,
         have_capture_volume: a.have_capture_volume,
+        have_cab_slot: a.have_cab_slot,
+        have_cab_name: a.have_cab_name,
         valid: a.valid,
     }
 }
@@ -118,6 +126,18 @@ pub(super) struct State {
     pub(super) library_rx: alloc::vec::Vec<u8>,
     pub(super) c305_rx: nano_wire::c305::C305FragmentReassembler,
     pub(super) tuner_settings: TunerSettings,
+    pub(super) device_settings: DeviceSettings,
+    pub(super) cab_settings: CabSettings,
+    pub(super) cab_settings_slot: u8,
+    pub(super) cab_settings_key: (u8, u8),
+    pub(super) expression_assignments: ExpressionAssignments,
+    pub(super) expression_slot: u8,
+    pub(super) meters: [Option<u32>; 3],
+    pub(super) calibration_active: bool,
+    pub(super) calibration_min: u8,
+    pub(super) calibration_max: u8,
+    pub(super) calibration_sampled: bool,
+    pub(super) protocol_status: String,
     pub(super) parse_timer: crate::deadline::Deadline,
     pub(super) sync_timer: crate::deadline::Deadline,
     pub(super) refresh_timer: crate::deadline::Deadline,
@@ -182,6 +202,28 @@ impl State {
                 reference_hz: None,
                 muted: None,
             },
+            device_settings: DeviceSettings {
+                jack_mode: None,
+                usb_playback_db: None,
+            },
+            cab_settings: CabSettings {
+                output: None,
+                high_pass: None,
+                low_pass: None,
+            },
+            cab_settings_slot: 0,
+            cab_settings_key: (u8::MAX, u8::MAX),
+            expression_assignments: ExpressionAssignments {
+                ranges: alloc::vec::Vec::new(),
+                bypasses: alloc::vec::Vec::new(),
+            },
+            expression_slot: 0,
+            meters: [None; 3],
+            calibration_active: false,
+            calibration_min: u8::MAX,
+            calibration_max: 0,
+            calibration_sampled: false,
+            protocol_status: String::new(),
             parse_timer: crate::deadline::Deadline::new(),
             sync_timer: crate::deadline::Deadline::new(),
             refresh_timer: crate::deadline::Deadline::new(),
@@ -229,7 +271,15 @@ pub(super) fn amp_publish() {
 
 pub(super) fn push_amp_ui() {
     amp_publish();
-    crate::screen::nano_ui_set_amp(Some(&st().amp));
+    let s = st();
+    let capture_name = crate::amp::nano_amp_capture_header_text(&s.amp);
+    let capture_category = s
+        .library_catalog
+        .captures
+        .iter()
+        .find(|capture| capture.name.eq_ignore_ascii_case(&capture_name))
+        .map(|capture| capture.category);
+    crate::screen::nano_ui_set_amp(Some(&s.amp), capture_category);
 }
 
 /// The reassembly buffers live for the whole session, exactly like the C `malloc`.
