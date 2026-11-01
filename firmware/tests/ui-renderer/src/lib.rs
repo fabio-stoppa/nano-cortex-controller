@@ -124,7 +124,7 @@ mod tests {
             app.set_model_open(false);
             window.request_redraw();
             render(window, &mut pixels, RenderingRotation::NoRotation, true);
-            for (x, y) in [(207.0, 104.0), (215.0, 125.0), (267.0, 167.0)] {
+            for (x, y) in [(203.0, 92.0), (210.0, 113.0), (263.0, 155.0)] {
                 app.set_model_open(true);
                 app.set_preset_menu_index(-1);
                 window.request_redraw();
@@ -191,7 +191,7 @@ mod tests {
                 ..Default::default()
             },
             ModelItem {
-                name: "Clean capture with a long descriptive name and extra words".into(),
+                name: "Clean capture with a long descriptive name and extra words to wrap".into(),
                 index: 1,
                 ..Default::default()
             },
@@ -204,7 +204,8 @@ mod tests {
             render(window, &mut pixels, RenderingRotation::NoRotation, true);
             let mut lines = 0;
             let mut previous_ink = false;
-            for y in 104..168 {
+            let expected = if kind >= 3 { 3 } else { 2 };
+            for y in 104..196 {
                 let ink = (26..270).any(|x| pixels[y * 800 + x].0 == 0xef7d);
                 if ink && !previous_ink {
                     lines += 1;
@@ -212,8 +213,8 @@ mod tests {
                 previous_ink = ink;
             }
             assert_eq!(
-                lines, 2,
-                "popup kind {kind} did not show exactly two text lines"
+                lines, expected,
+                "popup kind {kind} did not show exactly {expected} text lines"
             );
             app.set_model_open(false);
             window.request_redraw();
@@ -232,7 +233,7 @@ mod tests {
         let mut px = vec![Rgb565Pixel(0); 800 * 480];
         window.request_redraw();
         render(window, &mut px, RenderingRotation::NoRotation, true);
-        let backspace = LogicalPosition::new(720.0, 348.0);
+        let backspace = LogicalPosition::new(750.0, 380.0);
         let mut hold = |text: &str, ms: u64| {
             app.set_kbd_text(text.into());
             window.dispatch_event(WindowEvent::PointerPressed {
@@ -397,6 +398,236 @@ mod tests {
         counted.pixels
     }
 
+    fn check_fullscreen_popups(app: &AppWindow, window: &MinimalSoftwareWindow) {
+        app.set_portrait(false);
+        window.set_size(PhysicalSize::new(800, 480));
+        app.set_page(0);
+        app.set_chain(2);
+        app.set_on_0(true);
+        app.set_category_0(9);
+        let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
+        let gray = ((30u16 >> 3) << 11) | ((30u16 >> 2) << 5) | (30u16 >> 3);
+        for popup in 0..4 {
+            app.set_model_open(popup == 0);
+            app.set_settings_open(popup == 1);
+            app.set_confirm_open(popup == 2);
+            app.set_kbd_open(popup == 3);
+            window.request_redraw();
+            render(window, &mut pixels, RenderingRotation::NoRotation, true);
+            // Edge pixels, including where the first FX tab sits, show only the popup surface.
+            // The confirmation is a card: same gray in the middle, dimmed content around it.
+            for (x, y) in [(5, 5), (5, 100), (5, 470), (795, 240), (400, 476)] {
+                let pixel = pixels[y * 800 + x].0;
+                if popup == 2 {
+                    assert!(pixel >> 11 < gray >> 11, "confirm backdrop not dimmed at {x},{y}");
+                } else {
+                    assert_eq!(pixel, gray, "popup {popup} not fullscreen at {x},{y}");
+                }
+            }
+            if popup == 2 {
+                assert_eq!(pixels[240 * 800 + 400].0, gray, "confirm card not main gray");
+            }
+            let position = LogicalPosition::new(5.0, 470.0);
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+            assert!(
+                app.get_model_open()
+                    || app.get_settings_open()
+                    || app.get_confirm_open()
+                    || app.get_kbd_open(),
+                "edge tap dismissed popup {popup}"
+            );
+        }
+        app.set_kbd_open(false);
+        app.set_on_0(false);
+        app.set_category_0(0);
+
+        app.set_bt_devices(slint::ModelRc::new(slint::VecModel::from(vec![BtDevice {
+            name: "Nano Cortex".into(),
+            kind: "Amp".into(),
+            state: 2,
+        }])));
+        app.set_settings_open(true);
+        app.set_settings_tab(0);
+        assert!(!app.get_bt_open());
+        app.set_settings_tab(4);
+        assert!(app.get_bt_open(), "Bluetooth tab not reported as open");
+        window.request_redraw();
+        render(window, &mut pixels, RenderingRotation::NoRotation, true);
+        let blue = ((0x1au16 >> 3) << 11) | ((0x3au16 >> 2) << 5) | (0xf8u16 >> 3);
+        assert!(
+            pixels.iter().filter(|p| p.0 == blue).count() > 10_000,
+            "connected device row missing from the Bluetooth tab"
+        );
+        app.set_settings_open(false);
+        app.set_settings_tab(0);
+        assert!(!app.get_bt_open());
+    }
+
+    fn check_fx_cell_contrast(app: &AppWindow, window: &MinimalSoftwareWindow) {
+        app.set_page(1);
+        app.set_fx_n0("Mix".into());
+        let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
+        for portrait in [false, true] {
+            app.set_portrait(portrait);
+            let width = if portrait { 480 } else { 800 };
+            window.set_size(PhysicalSize::new(width, if portrait { 800 } else { 480 }));
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                renderer.render(&mut pixels, width as usize);
+                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            });
+            let (x, y) = if portrait { (30, 125) } else { (150, 75) };
+            let cell = ((38u16 >> 3) << 11) | ((38u16 >> 2) << 5) | (38u16 >> 3);
+            assert_eq!(pixels[y * width as usize + x].0, cell);
+            assert_ne!(pixels[y * width as usize + x].0, pixels[0].0);
+            if !portrait {
+                app.set_page(0);
+                window.request_redraw();
+                window.draw_if_needed(|renderer| {
+                    renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                    renderer.render(&mut pixels, width as usize);
+                    renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+                });
+                // Inside the INPUT GATE cell, left of its label.
+                assert_eq!(pixels[215 * 800 + 175].0, cell, "amp cell not lightened");
+                app.set_page(1);
+            }
+        }
+        app.set_fx_n0("-".into());
+        app.set_page(0);
+        app.set_portrait(false);
+        window.set_size(PhysicalSize::new(800, 480));
+    }
+
+    fn check_source_card_names(app: &AppWindow, window: &MinimalSoftwareWindow) {
+        app.set_page(0);
+        app.set_capture_active(true);
+        app.set_capture_value("Rew D20 Clean NF53 with a long capture name".into());
+        let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
+        window.request_redraw();
+        render(window, &mut pixels, RenderingRotation::NoRotation, true);
+        // Card spans x 130..452: no outline means its edge is plain black.
+        assert_eq!(pixels[85 * 800 + 130].0, 0, "capture card still has an outline");
+        assert_eq!(pixels[85 * 800 + 452].0, 0, "capture card still has an outline");
+        let mut lines = 0;
+        let mut previous_ink = false;
+        for y in 64..136 {
+            let ink = (176..453).any(|x| pixels[y * 800 + x].0 == 0xef7d);
+            if ink && !previous_ink {
+                lines += 1;
+            }
+            previous_ink = ink;
+            assert!(
+                (453..461).all(|x| pixels[y * 800 + x].0 != 0xef7d),
+                "capture name spilled past its card"
+            );
+        }
+        assert_eq!(lines, 2, "capture name did not wrap to two lines");
+        app.set_capture_value("-".into());
+        app.set_capture_active(false);
+    }
+
+    fn check_fx_category_colors(app: &AppWindow, window: &MinimalSoftwareWindow) {
+        let palette = [
+            (248u8, 138u8, 26u8),
+            (248, 193, 26),
+            (248, 240, 26),
+            (240, 26, 248),
+            (136, 248, 26),
+            (26, 248, 88),
+            (248, 26, 138),
+            (136, 26, 248),
+            (26, 193, 248),
+            (26, 58, 248),
+        ];
+        let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
+        app.set_page(0);
+        app.set_chain(2);
+        for portrait in [false, true] {
+            app.set_portrait(portrait);
+            let width = if portrait { 480 } else { 800 };
+            window.set_size(PhysicalSize::new(width, if portrait { 800 } else { 480 }));
+            for category in 0..=10 {
+                app.set_category_0(category);
+                app.set_category_1(category);
+                app.set_category_3(category);
+                app.set_category_4(category);
+                app.set_category_5(category);
+                let (r, g, b) = if category == 0 {
+                    (144, 144, 144)
+                } else {
+                    let rgb = palette[category as usize - 1];
+                    // Equal RGB extrema give identical HSV/HSL saturation and brightness.
+                    assert_eq!(rgb.0.min(rgb.1).min(rgb.2), 26);
+                    assert_eq!(rgb.0.max(rgb.1).max(rgb.2), 248);
+                    rgb
+                };
+                let expected = ((r as u16 >> 3) << 11)
+                    | ((g as u16 >> 2) << 5)
+                    | (b as u16 >> 3);
+                for active in [true, false] {
+                    app.set_on_0(active);
+                    app.set_on_1(active);
+                    app.set_on_3(active);
+                    app.set_on_4(active);
+                    app.set_on_5(active);
+                    window.request_redraw();
+                    window.draw_if_needed(|renderer| {
+                        renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                        renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                        renderer.render(&mut pixels, width as usize);
+                        renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+                    });
+                    for slot in [0, 1, 3, 4, 5] {
+                        // Portrait tabs are 69px wide; the selected AMP tab is wider.
+                        let tab_x = [14, 87, 160, 251, 324, 397][slot];
+                        let (x, y) = if portrait {
+                            (tab_x + 11, 744)
+                        } else {
+                            (20, 70 + 67 * slot)
+                        };
+                        assert_eq!(
+                            pixels[y * width as usize + x].0,
+                            if active { expected } else { 0 },
+                            "category {category}, slot {slot}, portrait {portrait}, active {active}"
+                        );
+                        if !active {
+                            let (left, right, top, bottom) = if portrait {
+                                (tab_x + 1, tab_x + 68, 734, 786)
+                            } else {
+                                (14, 125, 64 + 68 * slot, 119 + 68 * slot)
+                            };
+                            assert!(
+                                (top..bottom).any(|row| {
+                                    (left..right).any(|col| {
+                                        pixels[row * width as usize + col].0 == expected
+                                    })
+                                }),
+                                "bypassed category {category} lost its colored label in slot {slot}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        app.set_portrait(false);
+        window.set_size(PhysicalSize::new(800, 480));
+        app.set_category_0(0);
+        app.set_category_1(0);
+        app.set_category_3(0);
+        app.set_category_4(0);
+        app.set_category_5(0);
+    }
+
     #[test]
     fn flipped_partial_spans_preserve_pixel_order_and_untouched_pixels() {
         use crate::bounce::{HEIGHT, WIDTH};
@@ -463,6 +694,10 @@ mod tests {
         check_backspace_repeat(&app, &window, &time);
         check_preset_menu_hit_target(&app, &window);
         check_two_line_popup_names(&app, &window);
+        check_source_card_names(&app, &window);
+        check_fx_category_colors(&app, &window);
+        check_fullscreen_popups(&app, &window);
+        check_fx_cell_contrast(&app, &window);
         let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
 
         for (width, height, rotation, portrait) in [

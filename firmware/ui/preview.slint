@@ -25,11 +25,11 @@ export component Preview inherits AppWindow {
     in-out property <string> popup: "none";
     in-out property <bool> tap-mode: false;
     property <[ModelItem]> preset-items: [
-        { name: "1-12", header: true, index: -1, col: 0, y: 0, section: 0, height: 152 },
+        { name: "1-12", header: true, index: -1, col: 0, y: 0, section: 0, height: 204 },
         { name: "Clean", header: false, index: 1, col: 0, y: 0, section: 0, height: 0 },
         { name: "Summer Drive", header: false, index: 2, col: 1, y: 0, section: 0, height: 0 },
         { name: "Heavy Lead 1", header: false, index: 3, col: 2, y: 0, section: 0, height: 0 },
-        { name: "Ambient", header: false, index: 4, col: 0, y: 76, section: 0, height: 0 },
+        { name: "Ambient", header: false, index: 4, col: 0, y: 102, section: 0, height: 0 },
     ];
     property <[ModelItem]> model-items: [
         { name: "Clean", header: true, index: -1, col: 0, y: 0, section: 0, height: 152 },
@@ -51,8 +51,7 @@ export component Preview inherits AppWindow {
     load-status: "Loading presets...";
     app-version: "0.1.0";
     conn-foot: 0;
-    settings-open: root.popup == "settings";
-    bt-open: root.popup == "bluetooth";
+    settings-open: root.popup == "settings" || root.popup == "bluetooth";
     model-open: root.popup == "preset" || root.popup == "preset-menu" || root.popup == "model" || root.popup == "capture"
         || root.popup == "cab" || root.popup == "library";
     list-kind: root.popup == "preset" || root.popup == "preset-menu" ? 3 : 0;
@@ -121,6 +120,11 @@ export component Preview inherits AppWindow {
     tab-3: "CHO";
     tab-4: "COMP";
     tab-5: "EQ";
+    category-0: 9;
+    category-1: 10;
+    category-3: 8;
+    category-4: 3;
+    category-5: 5;
     on-0: true;
     on-1: true;
     on-4: true;
@@ -190,7 +194,6 @@ export component Preview inherits AppWindow {
             root.confirm-open = true;
         }
     }
-    name-error(text) => { return ""; }
     kbd-key(key) => { }
     kbd-accepted => { root.popup = "none"; }
     changed kbd-open => { if !root.kbd-open && root.popup == "rename" { root.popup = "none"; } }
@@ -202,8 +205,8 @@ export component Preview inherits AppWindow {
         root.layout-mode = mode;
         root.popup = "none";
     }
-    // Pickers also close themselves through bt-open / model-open, so mirror that here.
-    changed bt-open => { if !root.bt-open && root.popup == "bluetooth" { root.popup = "none"; } }
+    // Pickers also close themselves through settings-open / model-open, so mirror that here.
+    changed settings-open => { if !root.settings-open && (root.popup == "settings" || root.popup == "bluetooth") { root.popup = "none"; } }
     changed model-open => { if !root.model-open && root.popup != "connecting" && root.popup != "bluetooth" && root.popup != "rename" { root.popup = "none"; } }
 
     // Dev bar: jump straight to any screen or popup.
@@ -239,6 +242,9 @@ export component Preview inherits AppWindow {
             active: root.popup == p.v;
             clicked => {
                 root.popup = root.popup == p.v ? "none" : p.v;
+                // BT opens Settings on its Bluetooth tab.
+                if p.v == "bluetooth" { root.settings-tab = 4; }
+                if p.v == "settings" { root.settings-tab = 0; }
             }
         }
     }

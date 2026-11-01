@@ -11,13 +11,21 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - **BLE in Rust** — TrouBLE central on `esp-radio` (`firmware/src/ble.rs`)
 - **Preset, effects, and tuner** — the same behavior as the old ESP-IDF app, driven by Embassy deadlines (`firmware/src/state`, `firmware/src/fx`, `firmware/src/tuner`)
 - **800×480 LCD** — Slint UI drawn into the RGB panel (`firmware/src/ui.rs`)
+- **Category-colored FX tabs** — guitar OD orange, bass OD amber, compressor yellow, pitch magenta, filter lime, wah green, utility pink, modulation purple, delay cyan, and reverb blue. Colors match the saturation and brightness of the blue and amp-red accents in both orientations; bypassed FX retain black backgrounds with category-colored labels.
+- Popups (Settings, preset/model/capture/cab lists, rename keyboard) fill the screen with the main gray background, and the screen behind them is hidden instead of redrawn. Close them with their close button.
+- Delete/overwrite confirmations are centered cards over a dimmed preset list; answer with Cancel or the action button (outside taps are ignored).
+- **Bluetooth devices** live in Settings → Bluetooth: tap a device to connect, or use its button to connect or forget it.
+- Parameter cells (amp and FX) use the settings-row gray to stand out from the main background.
 - **Bluetooth Tools page** — reads and edits per-preset expression sweeps and bypass assignments, calibrates the pedal, reads cab settings, shows live input/output/expression meters, and reads or changes the EXP/MIDI jack and USB playback level
 - **MIDI learn page** (Tools → MIDI) — tap Learn on an action, then send a BLE-MIDI note, CC, or program change. Bindings cover FX block on/off, gate, tuner, tap tempo, preset/capture step, save, all five amp controls, capture volume, cab level/high-pass/low-pass, and the first four knobs of each FX block via CC. Saved in flash
 - **Preset manager** — browse presets in 12-slot tabs and use the three-dot menu to rename (on-screen keyboard; 4–64 ASCII letters, digits, spaces, `-`, `_`, unique), delete, move, or copy to any slot. Overwriting an occupied slot asks for confirmation
 - Open preset lists update in place when the refreshed catalog arrives after a rename, delete, move, or copy.
+- Refresh and Save live in Settings → General → Tools next to Tuner (Save is highlighted with unsaved changes); the header only keeps the settings gear.
+- In portrait the FX chain sits at the bottom of the screen, below the page content.
 - Preset three-dot menus have a 64px-wide, full-row-height touch target separate from preset selection.
 - Selecting a preset keeps the preset list open and moves its highlight, so presets can be auditioned back to back.
-- Preset, capture, and cab popup names wrap to two lines; the rename keyboard has a blinking cursor, keys light up while pressed, holding backspace repeats (400ms delay, then every 60ms), and long names keep their end visible.
+- The main screen has the same 14px edge padding as Settings; the Amp page's capture and cab cards have no outline, center their icon, slot and name, and wrap names to two lines before truncating with "…".
+- Preset popup names wrap to three lines on taller cards, and capture and cab names wrap to two; the rename keyboard has a blinking cursor, keys light up while pressed, holding backspace repeats (400ms delay, then every 60ms), and long names keep their end visible.
 - While the rename keyboard is open, touch is polled every 10ms instead of 50ms; duplicate-name validation scans the stored catalog without allocating copies.
 - The software renderer has no occlusion culling, so screens covered by the keyboard or a full-screen panel are hidden rather than redrawn underneath it. The header title elides long preset names.
 - **Expression calibration** — guided reset, pedal sweep, and save flow; the screen shows the sampled range before saving

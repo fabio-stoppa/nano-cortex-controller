@@ -11,6 +11,27 @@ global Radius {
     out property <length> default: 12px;
 }
 
+global Surface {
+    out property <color> background: #1e1e1e;
+}
+
+global FxPalette {
+    // Category IDs match NANO_FX_CAT_*; RGB extrema match blue and amp red.
+    public pure function category-color(category: int) -> color {
+        if category == 1 { return #f88a1a; } // Guitar overdrive
+        if category == 2 { return #f8c11a; } // Bass overdrive
+        if category == 3 { return #f8f01a; } // Compressor
+        if category == 4 { return #f01af8; } // Pitch
+        if category == 5 { return #88f81a; } // Filter
+        if category == 6 { return #1af858; } // Wah
+        if category == 7 { return #f81a8a; } // Utility
+        if category == 8 { return #881af8; } // Modulation
+        if category == 9 { return #1ac1f8; } // Delay
+        if category == 10 { return #1a3af8; } // Reverb
+        return #909090;
+    }
+}
+
 component ParamCell inherits Rectangle {
     in property <string> name;
     in property <string> value: "-";
@@ -26,7 +47,7 @@ component ParamCell inherits Rectangle {
     preferred-width: 0px;
     horizontal-stretch: 1;
     vertical-stretch: 0;
-    background: root.bare ? transparent : #1e1e1e;
+    background: root.bare ? transparent : #262626;
     border-width: 0px;
     border-radius: Radius.default;
     VerticalLayout {
@@ -44,7 +65,7 @@ component ParamCell inherits Rectangle {
             horizontal-alignment: center;
         }
         if !root.bare: Text {
-            text: name.to-uppercase();
+            text: name;
             color: #909090;
             font-size: 17px;
             font-weight: 700;
@@ -184,6 +205,11 @@ component ChainRail inherits Rectangle {
     in property <string> tab-3;
     in property <string> tab-4;
     in property <string> tab-5;
+    in property <int> category-0;
+    in property <int> category-1;
+    in property <int> category-3;
+    in property <int> category-4;
+    in property <int> category-5;
     in property <bool> on-0;
     in property <bool> on-1;
     in property <bool> on-3;
@@ -200,7 +226,7 @@ component ChainRail inherits Rectangle {
         padding-bottom: 4px;
         ChainTab {
             label: tab-0;
-            accent: #909090;
+            accent: FxPalette.category-color(root.category-0);
             active: on-0;
             selected: (root.page == 0 || root.page == 1) && root.chain == 0;
             vertical-stretch: 1;
@@ -210,7 +236,7 @@ component ChainRail inherits Rectangle {
         }
         ChainTab {
             label: tab-1;
-            accent: #909090;
+            accent: FxPalette.category-color(root.category-1);
             active: on-1;
             selected: (root.page == 0 || root.page == 1) && root.chain == 1;
             vertical-stretch: 1;
@@ -230,7 +256,7 @@ component ChainRail inherits Rectangle {
         }
         ChainTab {
             label: tab-3;
-            accent: #909090;
+            accent: FxPalette.category-color(root.category-3);
             active: on-3;
             selected: (root.page == 0 || root.page == 1) && root.chain == 3;
             vertical-stretch: 1;
@@ -240,7 +266,7 @@ component ChainRail inherits Rectangle {
         }
         ChainTab {
             label: tab-4;
-            accent: #909090;
+            accent: FxPalette.category-color(root.category-4);
             active: on-4;
             selected: (root.page == 0 || root.page == 1) && root.chain == 4;
             vertical-stretch: 1;
@@ -250,7 +276,7 @@ component ChainRail inherits Rectangle {
         }
         ChainTab {
             label: tab-5;
-            accent: #909090;
+            accent: FxPalette.category-color(root.category-5);
             active: on-5;
             selected: (root.page == 0 || root.page == 1) && root.chain == 5;
             vertical-stretch: 1;
@@ -264,7 +290,7 @@ component ChainRail inherits Rectangle {
         spacing: 4px;
         ChainTab {
             label: tab-0;
-            accent: #909090;
+            accent: FxPalette.category-color(root.category-0);
             active: on-0;
             selected: (root.page == 0 || root.page == 1) && root.chain == 0;
             horizontal-stretch: 1;
@@ -274,7 +300,7 @@ component ChainRail inherits Rectangle {
         }
         ChainTab {
             label: tab-1;
-            accent: #909090;
+            accent: FxPalette.category-color(root.category-1);
             active: on-1;
             selected: (root.page == 0 || root.page == 1) && root.chain == 1;
             horizontal-stretch: 1;
@@ -294,7 +320,7 @@ component ChainRail inherits Rectangle {
         }
         ChainTab {
             label: tab-3;
-            accent: #909090;
+            accent: FxPalette.category-color(root.category-3);
             active: on-3;
             selected: (root.page == 0 || root.page == 1) && root.chain == 3;
             horizontal-stretch: 1;
@@ -304,7 +330,7 @@ component ChainRail inherits Rectangle {
         }
         ChainTab {
             label: tab-4;
-            accent: #909090;
+            accent: FxPalette.category-color(root.category-4);
             active: on-4;
             selected: (root.page == 0 || root.page == 1) && root.chain == 4;
             horizontal-stretch: 1;
@@ -314,7 +340,7 @@ component ChainRail inherits Rectangle {
         }
         ChainTab {
             label: tab-5;
-            accent: #909090;
+            accent: FxPalette.category-color(root.category-5);
             active: on-5;
             selected: (root.page == 0 || root.page == 1) && root.chain == 5;
             horizontal-stretch: 1;
@@ -463,26 +489,6 @@ export struct BtDevice {
 }
 
 // Rune-style Bluetooth mark; the icon color shows connected / connecting / off.
-component BluetoothButton inherits Rectangle {
-    in property <bool> connected;
-    in property <bool> busy;
-    in property <bool> open;
-    callback tapped();
-    property <bool> lit: connected || busy;
-    property <color> ink: connected ? #ffffff : (busy ? #1229a8 : #606060);
-    width: 36px;
-    height: 36px;
-    background: #000000;
-    border-radius: Radius.default;
-    Image {
-        x: 4px; y: 4px; width: 28px; height: 28px;
-        source: @image-url("icons/bluetooth.png");
-        colorize: ink;
-    }
-    TouchArea { clicked => { root.tapped(); } }
-}
-
-// Centers its child vertically so row items never need hand-tuned y offsets.
 component VCenter inherits VerticalLayout {
     alignment: center;
 }
@@ -566,72 +572,52 @@ component PopupTab inherits Rectangle {
             vertical-alignment: center;
         }
         Rectangle {
-            y: parent.height - 4px;
-            height: 4px;
+            y: parent.height - 6px;
+            height: 6px;
             background: root.active ? #1a3af8 : transparent;
         }
         if root.shown: TouchArea { clicked => { root.tapped(); } }
     }
 }
 
-component BluetoothPicker inherits Rectangle {
+component BluetoothList inherits VerticalLayout {
     in property <[BtDevice]> devices;
     callback picked(int);
     callback forget(int);
-    callback closed();
-    background: #000000b0;
-    TouchArea { clicked => { root.closed(); } }
-    Rectangle {
-        width: min(root.width - 24px, 460px);
-        height: min(root.height - 24px, 420px);
-        background: #1e1e1e;
-        border-radius: Radius.default;
-        TouchArea {}
-        VerticalLayout {
-            padding: 14px;
-            spacing: 8px;
-            PopupHeader {
-                title: "Bluetooth devices";
-                closed => { root.closed(); }
-            }
-            Rectangle { height: 2px; }
-            if root.devices.length == 0: Text {
-                text: "Searching for Nano Cortex or FootCtrl / Chocolate...";
-                color: #909090;
-                font-size: 17px;
-                wrap: word-wrap;
-                vertical-alignment: center;
-                vertical-stretch: 1;
-            }
-            for device[index] in root.devices: Rectangle {
-                height: 68px;
-                TouchArea { clicked => { root.picked(index); } }
-                OptionRow {
-                    width: parent.width;
-                    label: device.name;
-                    value: device.state == 2 ? "Connected" : (device.state == 1 ? "Connecting" : device.kind);
-                    highlight: device.state == 2;
-                    // Matches the 8px above and below the 52px button.
-                    pad-right: 8px;
-                    VCenter {
-                        Rectangle {
-                            width: 52px;
-                            height: 52px;
-                            background: #000000;
-                            border-radius: Radius.default;
-                            Image {
-                                width: 22px;
-                                height: 22px;
-                                source: device.state == 2 ? @image-url("icons/unlink.png") : (device.state == 1 ? @image-url("icons/refresh.png") : @image-url("icons/link.png"));
-                                colorize: #e0e0e0;
-                                rotation-angle: device.state == 1 ? mod(animation-tick() / 900ms, 1) * 360deg : 0deg;
-                            }
-                            TouchArea { clicked => { if (device.state > 0) { root.forget(index); } else { root.picked(index); } } }
-                        }
+    spacing: 8px;
+    if root.devices.length == 0: Text {
+        // No word-wrap: wrapped height would loop with the Settings scroll width.
+        text: "Searching for Nano Cortex or FootCtrl / Chocolate...";
+        color: #909090;
+        font-size: 17px;
+        overflow: elide;
+    }
+    for device[index] in root.devices: Rectangle {
+        height: 68px;
+        TouchArea { clicked => { root.picked(index); } }
+        OptionRow {
+            width: parent.width;
+            label: device.name;
+            value: device.state == 2 ? "Connected" : (device.state == 1 ? "Connecting" : device.kind);
+            highlight: device.state == 2;
+            // Matches the 8px above and below the 52px button.
+            pad-right: 8px;
+            VCenter {
+                Rectangle {
+                    width: 52px;
+                    height: 52px;
+                    background: #000000;
+                    border-radius: Radius.default;
+                    Image {
+                        width: 22px;
+                        height: 22px;
+                        source: device.state == 2 ? @image-url("icons/unlink.png") : (device.state == 1 ? @image-url("icons/refresh.png") : @image-url("icons/link.png"));
+                        colorize: #e0e0e0;
+                        rotation-angle: device.state == 1 ? mod(animation-tick() / 900ms, 1) * 360deg : 0deg;
                     }
+                    TouchArea { clicked => { if (device.state > 0) { root.forget(index); } else { root.picked(index); } } }
                 }
             }
-            Rectangle { vertical-stretch: 1; }
         }
     }
 }
@@ -659,6 +645,10 @@ component ModelPicker inherits Rectangle {
     in property <bool> show-preset-actions: false;
     in property <bool> show-preset-numbers: false;
     in property <bool> two-line-names: false;
+    // Preset lists wrap names to three lines, so their cards are taller.
+    in property <bool> three-line-names: false;
+    property <length> card-height: root.three-line-names ? 94px : 68px;
+    property <length> name-height: root.three-line-names ? 78px : 52px;
     callback picked(int);
     callback preset-action-chosen(int, int);
     callback closed();
@@ -667,13 +657,12 @@ component ModelPicker inherits Rectangle {
     in-out property <int> menu-index: -1;
     property <length> menu-x: 0px;
     property <length> menu-y: 0px;
-    background: #000000b0;
-    TouchArea { clicked => { root.closed(); } }
+    background: Surface.background;
+    TouchArea {}
     Rectangle {
-        width: root.width - 24px;
-        height: root.height - 24px;
-        background: #1e1e1e;
-        border-radius: Radius.default;
+        width: root.width;
+        height: root.height;
+        background: Surface.background;
         TouchArea {}
         VerticalLayout {
             padding: 14px;
@@ -730,7 +719,7 @@ component ModelPicker inherits Rectangle {
                             x: item.col * (cell + root.gap);
                             y: item.y * 1px;
                             width: cell;
-                            height: 68px;
+                            height: root.card-height;
                             visible: !item.header && item.section == hdr.section;
                             background: item.index == root.current ? #1a3af8 : #2a2a2a;
                             border-radius: Radius.default;
@@ -742,7 +731,7 @@ component ModelPicker inherits Rectangle {
                             Text {
                                 x: root.show-preset-numbers ? 48px : 12px;
                                 y: root.two-line-names ? 8px : 0px;
-                                height: root.two-line-names ? 52px : parent.height;
+                                height: root.two-line-names ? root.name-height : parent.height;
                                 width: parent.width - (root.show-preset-actions ? root.action-width + 60px : (root.show-preset-numbers ? 60px : 24px));
                                 text: item.header ? "" : item.name;
                                 color: item.index == root.current ? #ffffff : #ececec;
@@ -813,7 +802,7 @@ component ModelPicker inherits Rectangle {
                         x: item.col * (cell + root.gap);
                         y: item.y * 1px;
                         width: cell;
-                        height: 68px;
+                        height: root.card-height;
                         visible: !item.header;
                         background: item.index == root.current ? #1a3af8 : #2a2a2a;
                         border-radius: Radius.default;
@@ -825,7 +814,7 @@ component ModelPicker inherits Rectangle {
                         Text {
                             x: root.show-preset-numbers ? 48px : 12px;
                             y: root.two-line-names ? 8px : 0px;
-                            height: root.two-line-names ? 52px : parent.height;
+                            height: root.two-line-names ? root.name-height : parent.height;
                             width: parent.width - (root.show-preset-actions ? root.action-width + 60px : (root.show-preset-numbers ? 60px : 24px));
                             text: item.header ? "" : item.name;
                             color: item.index == root.current ? #ffffff : #ececec;
@@ -928,22 +917,6 @@ component ModelPicker inherits Rectangle {
 }
 
 // Gear mark.
-component RefreshButton inherits Rectangle {
-    in property <bool> spinning;
-    callback tapped();
-    width: 36px;
-    height: 36px;
-    background: #000000;
-    border-radius: Radius.default;
-    Image {
-        x: 4px; y: 4px; width: 28px; height: 28px;
-        source: @image-url("icons/refresh.png");
-        colorize: root.spinning ? #ffffff : #b0b8c0;
-        rotation-angle: root.spinning ? mod(animation-tick() / 900ms, 1) * 360deg : 0deg;
-    }
-    TouchArea { clicked => { root.tapped(); } }
-}
-
 component SettingsButton inherits Rectangle {
     in property <bool> open;
     callback tapped();
@@ -951,9 +924,9 @@ component SettingsButton inherits Rectangle {
     height: 36px;
     background: #000000;
     border-radius: Radius.default;
-    property <color> ink: open ? #e0e8f0 : #b0b8c0;
+    property <color> ink: #ffffff;
     Image {
-        x: 4px; y: 4px; width: 28px; height: 28px;
+        x: 7px; y: 7px; width: 22px; height: 22px;
         source: @image-url("icons/gear.png");
         colorize: root.ink;
     }
@@ -966,9 +939,6 @@ component HeaderBar inherits Rectangle {
     in property <string> preset;
     in property <bool> model-enabled;
     in property <string> bpm-text;
-    in property <bool> ble-on;
-    in property <bool> bt-busy;
-    in property <bool> bt-open;
     in property <bool> settings-shown;
     in property <bool> save-dirty: false;
     in property <bool> tempo-active: false;
@@ -977,11 +947,8 @@ component HeaderBar inherits Rectangle {
     // Beat flash: jumps to 1 on every beat and fades back out.
     property <float> beat-glow: 0;
     callback tempo-tapped();
-    callback bt-tapped();
     callback preset-list-tapped();
     callback settings-tapped();
-    callback refresh-tapped();
-    in property <bool> refreshing;
     background: transparent;
     beat := Timer {
         interval: root.bpm-value > 0 ? 60000ms / root.bpm-value : 1000ms;
@@ -1069,16 +1036,6 @@ component HeaderBar inherits Rectangle {
             alignment: end;
             spacing: portrait ? 8px : 14px;
             width: portrait ? 134px : 214px;
-            VCenter { BluetoothButton {
-                connected: ble-on;
-                busy: bt-busy;
-                open: bt-open;
-                tapped => { root.bt-tapped(); }
-            } }
-            VCenter { RefreshButton {
-                spinning: root.refreshing;
-                tapped => { root.refresh-tapped(); }
-            } }
             VCenter { SettingsButton {
                 open: root.settings-shown;
                 tapped => { root.settings-tapped(); }
@@ -1093,13 +1050,11 @@ component SourceCard inherits Rectangle {
     in property <bool> active: false;
     in property <bool> cab-icon: false;
     callback tapped();
-    height: 72px;
+    height: 84px;
     min-width: 0px;
     preferred-width: 0px;
     horizontal-stretch: 1;
     background: #000000;
-    border-color: #292d30;
-    border-width: 1px;
     border-radius: Radius.default;
     HorizontalLayout {
         width: 100%;
@@ -1115,15 +1070,16 @@ component SourceCard inherits Rectangle {
                 width: 36px;
                 height: 36px;
                 source: root.cab-icon ? @image-url("icons/cab.png") : @image-url("icons/capture.png");
+                colorize: #ffffff;
             }
         }
         VerticalLayout {
             horizontal-stretch: 1;
             vertical-stretch: 1;
+            min-width: 0px;
             alignment: center;
             spacing: 0px;
             HorizontalLayout {
-                width: 100%;
                 Text {
                     text: root.slot;
                     color: #858b90;
@@ -1134,12 +1090,17 @@ component SourceCard inherits Rectangle {
                     vertical-alignment: center;
                 }
             }
+            // Grows with the name up to two lines, so slot and name stay centered as a group.
             Text {
                 text: value;
                 color: active ? #ececec : #74797d;
                 font-size: 19px;
                 font-weight: 700;
+                height: min(self.preferred-height, 50px);
+                min-width: 0px;
+                preferred-width: 0px;
                 overflow: elide;
+                wrap: word-wrap;
                 vertical-alignment: center;
             }
         }
@@ -1185,13 +1146,15 @@ component AmpPanel inherits Rectangle {
     callback gate-tapped();
     callback capture-tapped();
     callback cab-tapped();
+    // Landscape rows shrink slightly so three rows with 8px gaps fit on screen.
+    property <length> row-h: root.portrait ? 100px : 98px;
     background: transparent;
     HorizontalLayout {
         x: 2px;
         y: 2px;
         width: parent.width - 4px;
-        height: 72px;
-        spacing: 4px;
+        height: 84px;
+        spacing: 8px;
         SourceCard {
             value: root.capture-value;
             slot: root.capture-slot;
@@ -1207,15 +1170,17 @@ component AmpPanel inherits Rectangle {
         }
     }
     VerticalLayout {
-        y: 78px;
+        // 8px below the capture/cab cards (y 2..86), matching the grid gaps.
+        y: 92px;
         alignment: start;
         padding: 2px;
-        spacing: 4px;
+        spacing: 8px;
         if !root.portrait: HorizontalLayout {
             width: 100%;
-            height: 100px;
-            spacing: 4px;
+            height: root.row-h;
+            spacing: 8px;
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 name: "Input Gate";
                 value: gate-text;
@@ -1223,6 +1188,7 @@ component AmpPanel inherits Rectangle {
                 tapped => { root.gate-tapped(); }
             }
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: true;
                 name: "Gate Amnt";
@@ -1231,6 +1197,7 @@ component AmpPanel inherits Rectangle {
                 changed(v) => { root.slider-moved(6, v); }
             }
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: true;
                 name: "Gain";
@@ -1239,6 +1206,7 @@ component AmpPanel inherits Rectangle {
                 changed(v) => { root.slider-moved(0, v); }
             }
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: true;
                 name: "Capture Lv";
@@ -1249,9 +1217,10 @@ component AmpPanel inherits Rectangle {
         }
         if !root.portrait: HorizontalLayout {
             width: 100%;
-            height: 100px;
-            spacing: 4px;
+            height: root.row-h;
+            spacing: 8px;
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: true;
                 name: "Master Lv";
@@ -1260,6 +1229,7 @@ component AmpPanel inherits Rectangle {
                 changed(v) => { root.slider-moved(1, v); }
             }
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: true;
                 name: "Bass";
@@ -1268,6 +1238,7 @@ component AmpPanel inherits Rectangle {
                 changed(v) => { root.slider-moved(2, v); }
             }
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: true;
                 name: "Mid";
@@ -1276,6 +1247,7 @@ component AmpPanel inherits Rectangle {
                 changed(v) => { root.slider-moved(3, v); }
             }
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: true;
                 name: "Treble";
@@ -1286,9 +1258,10 @@ component AmpPanel inherits Rectangle {
         }
         if root.portrait: HorizontalLayout {
             width: 100%;
-            height: 100px;
-            spacing: 4px;
+            height: root.row-h;
+            spacing: 8px;
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 name: "Input Gate";
                 value: gate-text;
@@ -1296,6 +1269,7 @@ component AmpPanel inherits Rectangle {
                 tapped => { root.gate-tapped(); }
             }
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: true;
                 name: "Gate Amnt";
@@ -1304,6 +1278,7 @@ component AmpPanel inherits Rectangle {
                 changed(v) => { root.slider-moved(6, v); }
             }
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: true;
                 name: "Gain";
@@ -1314,9 +1289,10 @@ component AmpPanel inherits Rectangle {
         }
         if root.portrait: HorizontalLayout {
             width: 100%;
-            height: 100px;
-            spacing: 4px;
+            height: root.row-h;
+            spacing: 8px;
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: true;
                 name: "Capture Lv";
@@ -1325,6 +1301,7 @@ component AmpPanel inherits Rectangle {
                 changed(v) => { root.slider-moved(5, v); }
             }
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: true;
                 name: "Master Lv";
@@ -1333,6 +1310,7 @@ component AmpPanel inherits Rectangle {
                 changed(v) => { root.slider-moved(1, v); }
             }
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: true;
                 name: "Bass";
@@ -1343,9 +1321,10 @@ component AmpPanel inherits Rectangle {
         }
         if root.portrait: HorizontalLayout {
             width: 100%;
-            height: 100px;
-            spacing: 4px;
+            height: root.row-h;
+            spacing: 8px;
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: true;
                 name: "Mid";
@@ -1354,6 +1333,7 @@ component AmpPanel inherits Rectangle {
                 changed(v) => { root.slider-moved(3, v); }
             }
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: true;
                 name: "Treble";
@@ -1369,9 +1349,10 @@ component AmpPanel inherits Rectangle {
         }
         HorizontalLayout {
             width: 100%;
-            height: 100px;
-            spacing: 4px;
+            height: root.row-h;
+            spacing: 8px;
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: root.cab-active;
                 name: "Cab Output";
@@ -1380,6 +1361,7 @@ component AmpPanel inherits Rectangle {
                 changed(v) => { root.cab-slider-moved(0, v); }
             }
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: root.cab-active;
                 name: "High Pass";
@@ -1388,6 +1370,7 @@ component AmpPanel inherits Rectangle {
                 changed(v) => { root.cab-slider-moved(1, v); }
             }
             ParamCell {
+                height: root.row-h;
                 horizontal-stretch: 1;
                 slider: root.cab-active;
                 name: "Low Pass";
@@ -1482,7 +1465,7 @@ component FxPanel inherits Rectangle {
     callback model-list-tapped();
     callback model-stepped(int);
     callback param-changed(int, float);
-    property <length> cell-width: (root.width - 4px - 12px) / 4;
+    property <length> cell-width: (root.width - 4px - 24px) / 4;
     background: transparent;
     clip: true;
     Flickable {
@@ -1493,10 +1476,10 @@ component FxPanel inherits Rectangle {
             width: parent.width;
             alignment: start;
             padding: 2px;
-            spacing: 4px;
+            spacing: 8px;
             if root.n0 != "-" || root.n1 != "-" || root.n2 != "-" || root.n3 != "-": HorizontalLayout {
                 width: 100%;
-                spacing: 4px;
+                spacing: 8px;
                 alignment: start;
                 if root.n0 != "-": ParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n0; value: root.v0; amount: root.a0;
@@ -1517,7 +1500,7 @@ component FxPanel inherits Rectangle {
             }
             if root.n4 != "-" || root.n5 != "-" || root.n6 != "-" || root.n7 != "-": HorizontalLayout {
                 width: 100%;
-                spacing: 4px;
+                spacing: 8px;
                 alignment: start;
                 if root.n4 != "-": ParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n4; value: root.v4; amount: root.a4;
@@ -1538,7 +1521,7 @@ component FxPanel inherits Rectangle {
             }
             if root.n8 != "-" || root.n9 != "-" || root.n10 != "-" || root.n11 != "-": HorizontalLayout {
                 width: 100%;
-                spacing: 4px;
+                spacing: 8px;
                 alignment: start;
                 if root.n8 != "-": ParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n8; value: root.v8; amount: root.a8;
@@ -1559,7 +1542,7 @@ component FxPanel inherits Rectangle {
             }
             if root.n12 != "-" || root.n13 != "-" || root.n14 != "-" || root.n15 != "-": HorizontalLayout {
                 width: 100%;
-                spacing: 4px;
+                spacing: 8px;
                 alignment: start;
                 if root.n12 != "-": ParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n12; value: root.v12; amount: root.a12;
@@ -1580,7 +1563,7 @@ component FxPanel inherits Rectangle {
             }
             if root.n16 != "-" || root.n17 != "-" || root.n18 != "-" || root.n19 != "-": HorizontalLayout {
                 width: 100%;
-                spacing: 4px;
+                spacing: 8px;
                 alignment: start;
                 if root.n16 != "-": ParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n16; value: root.v16; amount: root.a16;
@@ -1601,7 +1584,7 @@ component FxPanel inherits Rectangle {
             }
             if root.n20 != "-" || root.n21 != "-" || root.n22 != "-" || root.n23 != "-": HorizontalLayout {
                 width: 100%;
-                spacing: 4px;
+                spacing: 8px;
                 alignment: start;
                 if root.n20 != "-": ParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n20; value: root.v20; amount: root.a20;
@@ -1942,6 +1925,9 @@ component ToolsPanel inherits Rectangle {
     in property <float> meter-expression-amount;
     callback closed();
     in-out property <int> tab: 0;
+    in property <[BtDevice]> bt-devices;
+    callback bt-picked(int);
+    callback bt-forget(int);
     in property <int> layout-mode;
     callback layout-tapped(int);
     in property <[MidiRow]> midi-rows;
@@ -1950,8 +1936,7 @@ component ToolsPanel inherits Rectangle {
     callback midi-clear(int);
     in property <bool> save-dirty;
     callback save();
-    callback copy();
-    callback library();
+    callback refresh();
     callback tuner();
     callback jack-selected(bool);
     callback calibration-start();
@@ -1961,13 +1946,12 @@ component ToolsPanel inherits Rectangle {
     callback expression-bypass-toggle(int);
     callback expression-bypass-adjust(int, int);
     callback expression-save();
-    background: #000000b0;
-    TouchArea { clicked => { root.closed(); } }
+    background: Surface.background;
+    TouchArea {}
     Rectangle {
-        width: min(root.width - 24px, 760px);
-        height: root.height - 24px;
-        background: #1e1e1e;
-        border-radius: Radius.default;
+        width: root.width;
+        height: root.height;
+        background: Surface.background;
         TouchArea {}
         VerticalLayout {
             padding: 14px;
@@ -1986,7 +1970,7 @@ component ToolsPanel inherits Rectangle {
                         width: max(settings-flick.width, self.preferred-width);
                         alignment: end;
                         spacing: 0px;
-                        for name[i] in ["General", "Pedal", "Audio", "MIDI"]: PopupTab {
+                        for name[i] in ["General", "Pedal", "Audio", "MIDI", "Bluetooth"]: PopupTab {
                             label: name;
                             active: i == root.tab;
                             tapped => { root.tab = i; }
@@ -2009,7 +1993,7 @@ component ToolsPanel inherits Rectangle {
                 }
             }
             Rectangle { height: 2px; }
-            if root.tab < 3: settings-scroll := Flickable {
+            if root.tab != 3: settings-scroll := Flickable {
                 vertical-stretch: 1;
                 viewport-width: self.width;
                 viewport-height: settings-body.preferred-height;
@@ -2017,6 +2001,11 @@ component ToolsPanel inherits Rectangle {
                     x: 0px;
                     y: 0px;
                     width: settings-scroll.width - (settings-body.preferred-height > settings-scroll.height ? 16px : 0px);
+                    if root.tab == 4: BluetoothList {
+                        devices: root.bt-devices;
+                        picked(index) => { root.bt-picked(index); }
+                        forget(index) => { root.bt-forget(index); }
+                    }
                     if root.tab == 0: VerticalLayout {
                         spacing: 8px;
                         OptionRow {
@@ -2041,12 +2030,6 @@ component ToolsPanel inherits Rectangle {
                             }
                         }
                         OptionRow {
-                            label: "Preset";
-                            VCenter { HeaderButton { label: "Save"; hot: root.save-dirty; tapped => { root.save(); } } }
-                            VCenter { HeaderButton { label: "Copy"; tapped => { root.copy(); } } }
-                            VCenter { HeaderButton { label: "Lib"; tapped => { root.library(); } } }
-                        }
-                        OptionRow {
                             label: "Screen";
                             VCenter { HeaderButton { label: "Land"; choice: true; hot: root.layout-mode == 0; tapped => { root.layout-tapped(0); } } }
                             VCenter { HeaderButton { label: "Land flip"; choice: true; hot: root.layout-mode == 3; tapped => { root.layout-tapped(3); } } }
@@ -2056,6 +2039,8 @@ component ToolsPanel inherits Rectangle {
                         OptionRow {
                             label: "Tools";
                             VCenter { HeaderButton { label: "Tuner"; tapped => { root.tuner(); } } }
+                            VCenter { HeaderButton { label: "Refresh"; tapped => { root.refresh(); } } }
+                            VCenter { HeaderButton { label: "Save"; hot: root.save-dirty; tapped => { root.save(); } } }
                         }
                     }
                     if root.tab == 1: VerticalLayout {
@@ -2179,13 +2164,20 @@ component ToolsPanel inherits Rectangle {
                             preview-text(a) => { return round(-40 + a * 40) + " dB"; }
                             released(a) => { root.usb-set(a); }
                         }
-                        OptionRow {
-                            label: "Mute input";
-                            VCenter { SwitchToggle { on <=> root.mute-input; toggled(m) => { root.mute-set(true, m); } } }
-                        }
-                        OptionRow {
-                            label: "Mute output";
-                            VCenter { SwitchToggle { on <=> root.mute-output; toggled(m) => { root.mute-set(false, m); } } }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            OptionRow {
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                                label: "Mute input";
+                                VCenter { SwitchToggle { on <=> root.mute-input; toggled(m) => { root.mute-set(true, m); } } }
+                            }
+                            OptionRow {
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                                label: "Mute output";
+                                VCenter { SwitchToggle { on <=> root.mute-output; toggled(m) => { root.mute-set(false, m); } } }
+                            }
                         }
                         MeterRow {
                             label-width: 170px;
@@ -2354,16 +2346,17 @@ component ConnectingOverlay inherits Rectangle {
     }
 }
 
-// Centered card over a dimmed backdrop; taps outside close it.
+// Centered card over a dimmed backdrop. Outside taps are swallowed, not dismissals.
+// The dim is one full-screen blend on open/close; it only covers the static preset list.
 component DialogCard inherits Rectangle {
     in property <length> card-width: 440px;
     callback closed();
     background: #000000b0;
-    TouchArea { clicked => { root.closed(); } }
+    TouchArea {}
     Rectangle {
         width: min(root.card-width, root.width - 24px);
         height: card-content.preferred-height + 36px;
-        background: #1e1e1e;
+        background: Surface.background;
         border-radius: Radius.default;
         TouchArea {}
         card-content := VerticalLayout {
@@ -2472,16 +2465,16 @@ component NameKeyboard inherits Rectangle {
         triggered => { root.cursor-visible = !root.cursor-visible; }
     }
     changed text => { root.cursor-visible = true; }
-    property <length> key-height: min(52px, max(40px, (root.height - 180px) / 5));
-    // Padding, header, error line and row gaps around the five key rows.
-    property <length> card-height: 156px + 5 * root.key-height;
-    background: #090909;
-    TouchArea { clicked => { root.closed(); } }
+    // Square keys: a number-row key's width (14px padding, nine 6px gaps), capped
+    // so five rows fit: padding 28, header 58, error 22, six 8px layout gaps.
+    property <length> key-width: (root.width - 28px - 54px) / 10;
+    property <length> key-height: min(root.key-width, (root.height - 164px) / 5);
+    background: Surface.background;
+    TouchArea {}
     Rectangle {
-        width: root.width - 24px;
-        height: root.card-height;
-        background: #1e1e1e;
-        border-radius: Radius.default;
+        width: root.width;
+        height: root.height;
+        background: Surface.background;
         TouchArea {}
         VerticalLayout {
             padding: 14px;
@@ -2529,13 +2522,15 @@ component NameKeyboard inherits Rectangle {
                 color: #ff8a80;
                 font-size: 15px;
             }
+            // Header stays on top like the other popups; keys sit at the bottom.
+            Rectangle { vertical-stretch: 1; }
             HorizontalLayout {
-                vertical-stretch: 1;
+                vertical-stretch: 0;
                 spacing: 6px;
                 for k in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]: KeyCap { label: k; key-height: root.key-height; tapped => { root.key(k); } }
             }
             HorizontalLayout {
-                vertical-stretch: 1;
+                vertical-stretch: 0;
                 spacing: 6px;
                 for k in ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"]: KeyCap {
                     label: root.shift ? k.to-uppercase() : k;
@@ -2544,7 +2539,7 @@ component NameKeyboard inherits Rectangle {
                 }
             }
             HorizontalLayout {
-                vertical-stretch: 1;
+                vertical-stretch: 0;
                 spacing: 6px;
                 Rectangle { horizontal-stretch: 0.5; }
                 for k in ["a", "s", "d", "f", "g", "h", "j", "k", "l"]: KeyCap {
@@ -2555,7 +2550,7 @@ component NameKeyboard inherits Rectangle {
                 Rectangle { horizontal-stretch: 0.5; }
             }
             HorizontalLayout {
-                vertical-stretch: 1;
+                vertical-stretch: 0;
                 spacing: 6px;
                 KeyCap { label: "Aa"; hot: root.shift; key-height: root.key-height; horizontal-stretch: 1.5; tapped => { root.shift = !root.shift; } }
                 for k in ["z", "x", "c", "v", "b", "n", "m"]: KeyCap {
@@ -2566,7 +2561,7 @@ component NameKeyboard inherits Rectangle {
                 KeyCap { label: "<-"; repeat: true; key-height: root.key-height; horizontal-stretch: 1.5; tapped => { root.key("\u{8}"); } }
             }
             HorizontalLayout {
-                vertical-stretch: 1;
+                vertical-stretch: 0;
                 spacing: 6px;
                 KeyCap { label: "-"; key-height: root.key-height; tapped => { root.key("-"); } }
                 KeyCap { label: "_"; key-height: root.key-height; tapped => { root.key("_"); } }
@@ -2578,12 +2573,6 @@ component NameKeyboard inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
-    in-out property <bool> refreshing: false;
-    Timer {
-        running: root.refreshing;
-        interval: 1500ms;
-        triggered => { root.refreshing = false; }
-    }
     in-out property <bool> connecting: true;
     in-out property <bool> portrait: false;
     in-out property <int> layout-mode: 0;
@@ -2616,7 +2605,9 @@ export component AppWindow inherits Window {
     in-out property <bool> save-dirty: false;
     in-out property <bool> ble-on: false;
     in-out property <bool> bt-busy: false;
-    in-out property <bool> bt-open: false;
+    in-out property <int> settings-tab: 0;
+    // Firmware polls this to refresh the device rows only while they are visible.
+    in-out property <bool> bt-open: root.settings-open && root.settings-tab == 4;
     in-out property <bool> settings-open: false;
     in-out property <bool> model-open: false;
     in-out property <int> list-kind: 0;
@@ -2734,6 +2725,11 @@ export component AppWindow inherits Window {
     in-out property <string> fx-v23: "-";
     in-out property <float> fx-a23: 0;
     in-out property <string> tab-0: "FX";
+    in-out property <int> category-0: 0;
+    in-out property <int> category-1: 0;
+    in-out property <int> category-3: 0;
+    in-out property <int> category-4: 0;
+    in-out property <int> category-5: 0;
     in-out property <string> tab-1: "FX";
     in-out property <string> tab-3: "FX";
     in-out property <string> tab-4: "FX";
@@ -2816,17 +2812,20 @@ export component AppWindow inherits Window {
     // 4.3B panel size; the firmware overrides it with set_size().
     preferred-width: 800px;
     preferred-height: 480px;
-    background: #1e1e1e;
+    background: Surface.background;
     default-font-family: "IBM Plex Sans";
     default-font-size: 17px;
     // The software renderer draws everything under an overlay, so hide what an
     // opaque or full-screen layer covers.
-    property <bool> main-covered: root.kbd-open || root.model-open || root.page == 2 || root.connecting;
+    // Confirmations are cards over whatever is open, so they do not hide it.
+    property <bool> popup-open: root.kbd-open || root.model-open || root.settings-open;
+    property <bool> main-covered: root.popup-open || root.page == 2 || root.connecting;
 
     Rectangle {
         visible: !root.main-covered;
         VerticalLayout {
-            padding: 1px;
+            // Same edge padding as the Settings screen.
+            padding: 14px;
             HeaderBar {
                 height: 48px;
                 portrait: root.portrait;
@@ -2834,10 +2833,6 @@ export component AppWindow inherits Window {
                 preset: root.preset;
                 model-enabled: root.model-enabled;
                 bpm-text: root.bpm-text;
-                ble-on: root.ble-on;
-                bt-busy: root.bt-busy;
-                bt-open: root.bt-open;
-                bt-tapped => { root.bt-open = !root.bt-open; }
                 save-dirty: root.save-dirty;
                 tempo-active: root.tempo-active;
                 tempo-global: root.tempo-global;
@@ -2846,19 +2841,20 @@ export component AppWindow inherits Window {
                 preset-list-tapped => { root.preset-list-tapped(); }
                 settings-shown: root.settings-open;
                 settings-tapped => { root.tools-opened(); }
-                refreshing: root.refreshing;
-                refresh-tapped => {
-                    root.refreshing = true;
-                    root.tools-refresh();
-                }
             }
             if !root.portrait: HorizontalLayout {
-                spacing: 4px;
+                // With the panels' 2px inset this is the 8px gap used between chain tabs.
+                spacing: 6px;
                 ChainRail {
-                    width: 112px;
+                    width: 108px;
                     page: root.page;
                     chain: root.chain;
                     tab-0: root.tab-0;
+                    category-0: root.category-0;
+                    category-1: root.category-1;
+                    category-3: root.category-3;
+                    category-4: root.category-4;
+                    category-5: root.category-5;
                     on-0: root.on-0;
                     tab-1: root.tab-1;
                     on-1: root.on-1;
@@ -2946,26 +2942,9 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+            // Portrait keeps the chain at the bottom, under the page content.
             if root.portrait: VerticalLayout {
-                ChainRail {
-                    height: 52px;
-                    horizontal: true;
-                    page: root.page;
-                    chain: root.chain;
-                    tab-0: root.tab-0;
-                    on-0: root.on-0;
-                    tab-1: root.tab-1;
-                    on-1: root.on-1;
-                    tab-3: root.tab-3;
-                    on-3: root.on-3;
-                    tab-4: root.tab-4;
-                    on-4: root.on-4;
-                    tab-5: root.tab-5;
-                    on-5: root.on-5;
-                    chain-tapped(index) => { root.chain-tapped(index); }
-                    chain-held(index) => { root.chain-held(index); }
-                    chain-double(index) => { root.chain-double(index); }
-                }
+                spacing: 8px;
                 Rectangle {
                     vertical-stretch: 1;
                     background: transparent;
@@ -3039,6 +3018,30 @@ export component AppWindow inherits Window {
                         param-changed(cell, amount) => { root.param-changed(cell, amount); }
                     }
                 }
+                ChainRail {
+                    height: 52px;
+                    horizontal: true;
+                    page: root.page;
+                    chain: root.chain;
+                    tab-0: root.tab-0;
+                    category-0: root.category-0;
+                    category-1: root.category-1;
+                    category-3: root.category-3;
+                    category-4: root.category-4;
+                    category-5: root.category-5;
+                    on-0: root.on-0;
+                    tab-1: root.tab-1;
+                    on-1: root.on-1;
+                    tab-3: root.tab-3;
+                    on-3: root.on-3;
+                    tab-4: root.tab-4;
+                    on-4: root.on-4;
+                    tab-5: root.tab-5;
+                    on-5: root.on-5;
+                    chain-tapped(index) => { root.chain-tapped(index); }
+                    chain-held(index) => { root.chain-held(index); }
+                    chain-double(index) => { root.chain-double(index); }
+                }
             }
         }
     }
@@ -3089,8 +3092,7 @@ export component AppWindow inherits Window {
         tuner => { root.settings-open = false; root.tuner-tapped(); }
         save-dirty: root.save-dirty;
         save => { root.save-tapped(); }
-        copy => { root.copy-tapped(); }
-        library => { root.library-tapped(); }
+        refresh => { root.tools-refresh(); }
         jack-selected(expression) => { root.tools-jack-selected(expression); }
         calibration-start => { root.tools-calibration-start(); }
         calibration-save => { root.tools-calibration-save(); }
@@ -3104,6 +3106,10 @@ export component AppWindow inherits Window {
         }
         expression-save => { root.tools-expression-save(); }
         tempo-global <=> root.tempo-global;
+        tab <=> root.settings-tab;
+        bt-devices: root.bt-devices;
+        bt-picked(index) => { root.bt-picked(index); }
+        bt-forget(index) => { root.bt-forget(index); }
         x: 0px; y: 0px; width: root.width; height: root.height;
         closed => { root.settings-open = false; }
         layout-mode: root.layout-mode;
@@ -3123,6 +3129,7 @@ export component AppWindow inherits Window {
         show-preset-numbers: root.list-kind == 3 || root.list-kind == 4 || root.list-kind == 5;
         show-preset-actions: root.list-kind == 3;
         two-line-names: root.list-kind >= 1 && root.list-kind <= 5;
+        three-line-names: root.list-kind >= 3 && root.list-kind <= 5;
         picked(index) => {
             root.model-chosen(index);
             if root.list-kind == 3 {
@@ -3167,13 +3174,5 @@ export component AppWindow inherits Window {
         foot-state: root.conn-foot;
         loading: root.load-status;
         version: root.app-version;
-    }
-
-    if root.bt-open: BluetoothPicker {
-        x: 0px; y: 0px; width: root.width; height: root.height;
-        devices: root.bt-devices;
-        picked(index) => { root.bt-picked(index); }
-        forget(index) => { root.bt-forget(index); }
-        closed => { root.bt-open = false; }
     }
 }

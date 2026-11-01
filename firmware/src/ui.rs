@@ -570,12 +570,15 @@ fn ensure() {
 
 /// Vertical pitch of picker options: the 68px option height in app.slint plus an 8px gap.
 const ROW_STEP: f32 = 76.0;
+/// Preset cards are 94px tall in app.slint to fit three-line names.
+const PRESET_ROW_STEP: f32 = 102.0;
 
 /// Rows for the picker. Each header starts a tab; its items fill columns and
 /// are positioned from the top of that tab's content.
 struct ListRows {
     items: alloc::vec::Vec<ModelItem>,
     columns: usize,
+    step: f32,
     slot: usize,
     y: f32,
     section: i32,
@@ -584,9 +587,14 @@ struct ListRows {
 
 impl ListRows {
     fn new(columns: usize) -> Self {
+        Self::with_step(columns, ROW_STEP)
+    }
+
+    fn with_step(columns: usize, step: f32) -> Self {
         Self {
             items: alloc::vec::Vec::new(),
             columns,
+            step,
             slot: 0,
             y: 0.0,
             section: -1,
@@ -597,7 +605,7 @@ impl ListRows {
     /// Closes the open tab by recording its content height on its header.
     fn close_section(&mut self) {
         if self.slot % self.columns != 0 {
-            self.y += ROW_STEP;
+            self.y += self.step;
         }
         if let Some(at) = self.header_at.take() {
             self.items[at].height = self.y;
@@ -633,7 +641,7 @@ impl ListRows {
         });
         self.slot += 1;
         if self.slot % self.columns == 0 {
-            self.y += ROW_STEP;
+            self.y += self.step;
         }
     }
 
@@ -691,7 +699,7 @@ fn open_capture_list(app: &AppWindow) {
 
 fn open_preset_list(app: &AppWindow) {
     let names = crate::state::nano_state_preset_names();
-    let mut rows = ListRows::new(list_columns(app));
+    let mut rows = ListRows::with_step(list_columns(app), PRESET_ROW_STEP);
     if names.is_empty() {
         rows.header("Loading presets...");
     }
@@ -774,7 +782,7 @@ fn preset_action(app: &AppWindow, action: i32) {
 /// Every slot, empty ones included, as the destination for a move or copy.
 fn open_target_list(app: &AppWindow, kind: u8) {
     let names = crate::state::nano_state_preset_names();
-    let mut rows = ListRows::new(list_columns(app));
+    let mut rows = ListRows::with_step(list_columns(app), PRESET_ROW_STEP);
     const PER_TAB: usize = 12;
     for position in 0..64usize {
         if position % PER_TAB == 0 {
@@ -1885,26 +1893,37 @@ fn paint_chain(ui: &mut State) {
             String::from("FX")
         };
         let on = ui.fx_valid && block.valid && block.on;
+        let category = if ui.fx_valid && block.valid {
+            crate::fx::models::model_ref(block.model)
+                .map_or(0, |model| crate::fx::models::model_category(model) as i32)
+        } else {
+            0
+        };
         match chain {
             0 => {
                 ui.app.set_tab_0(label.as_str().into());
                 ui.app.set_on_0(on);
+                ui.app.set_category_0(category);
             }
             1 => {
                 ui.app.set_tab_1(label.as_str().into());
                 ui.app.set_on_1(on);
+                ui.app.set_category_1(category);
             }
             3 => {
                 ui.app.set_tab_3(label.as_str().into());
                 ui.app.set_on_3(on);
+                ui.app.set_category_3(category);
             }
             4 => {
                 ui.app.set_tab_4(label.as_str().into());
                 ui.app.set_on_4(on);
+                ui.app.set_category_4(category);
             }
             5 => {
                 ui.app.set_tab_5(label.as_str().into());
                 ui.app.set_on_5(on);
+                ui.app.set_category_5(category);
             }
             _ => {}
         }
