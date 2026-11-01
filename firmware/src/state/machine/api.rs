@@ -310,8 +310,9 @@ fn feed_library_chunk(data: &[u8]) -> bool {
     if data.len() < 2 {
         return false;
     }
+    // Flag bits: 0x40 starts a stream, 0x80 ends it. Other bits can be set too.
     if s.library_rx_dropping {
-        if data[1] == 0x80 {
+        if data[1] & 0x80 != 0 {
             s.library_rx_dropping = false;
         }
         return true;
@@ -345,14 +346,12 @@ fn feed_library_chunk(data: &[u8]) -> bool {
         return true;
     }
 
-    match data[1] {
-        0x40 => {
-            s.library_rx.clear();
-            s.library_rx_active = true;
-            s.library_rx_dropping = false;
-        }
-        0x00 | 0x80 if s.library_rx_active => {}
-        _ => return false,
+    if data[1] & 0x40 != 0 {
+        s.library_rx.clear();
+        s.library_rx_active = true;
+        s.library_rx_dropping = false;
+    } else if !s.library_rx_active {
+        return false;
     }
     let frame_size = data.len().saturating_add(2);
     if data.len() > u16::MAX as usize
@@ -368,13 +367,13 @@ fn feed_library_chunk(data: &[u8]) -> bool {
         s.library_rx_active = false;
         s.library_pending = false;
         s.library_request_us = 0;
-        s.library_rx_dropping = data[1] != 0x80;
+        s.library_rx_dropping = data[1] & 0x80 == 0;
         return true;
     }
     s.library_rx
         .extend_from_slice(&(data.len() as u16).to_le_bytes());
     s.library_rx.extend_from_slice(data);
-    if data[1] != 0x80 {
+    if data[1] & 0x80 == 0 {
         return true;
     }
 

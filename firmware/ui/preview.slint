@@ -1,0 +1,221 @@
+// Desktop-only wrapper around AppWindow: sample data, screen navigation and popup toggles.
+// Not part of the firmware build. Run with ./firmware/preview.sh
+import { AppWindow, ModelItem, BtDevice, MidiRow } from "app.slint";
+
+component DevChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback clicked();
+    height: 24px;
+    width: t.preferred-width + 16px;
+    border-radius: 12px;
+    background: root.active ? #1a3af8 : #000000c0;
+    t := Text {
+        text: root.label;
+        color: white;
+        font-size: 12px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    TouchArea { clicked => { root.clicked(); } }
+}
+
+export component Preview inherits AppWindow {
+    // Which popup is showing: none, bluetooth, preset, model, capture, cab, library, connecting.
+    in-out property <string> popup: "none";
+    in-out property <bool> tap-mode: false;
+
+    connecting: root.popup == "connecting";
+    conn-amp: 2;
+    load-status: "Loading presets...";
+    app-version: "0.1.0";
+    conn-foot: 0;
+    settings-open: root.popup == "settings";
+    bt-open: root.popup == "bluetooth";
+    model-open: root.popup == "preset" || root.popup == "model" || root.popup == "capture"
+        || root.popup == "cab" || root.popup == "library";
+
+    preset: "Summer Drive";
+    ble-on: true;
+    model: root.chain == 2 ? "Rew D20 Clean NF53" : "Analog Delay";
+    model-enabled: true;
+    capture-title: "CAPTURE · AMP HEAD";
+    capture-value: "Rew D20 Clean NF53";
+    capture-slot: "BANK 1 OF 5 · SLOT 3";
+    capture-active: true;
+    cab-value: "810 Amped VT Aln 70s";
+    cab-slot: "BANK 2 OF 5";
+    cab-active: true;
+    save-dirty: true;
+    gate-text: "OFF";
+    gate-amnt-text: "0";
+    gain-text: "5.0";
+    gain-amount: 0.5;
+    cap-text: "0.0 dB";
+    cap-amount: 0.5;
+    master-text: "7.0";
+    master-amount: 0.7;
+    bass-text: "4.0";
+    bass-amount: 0.4;
+    mid-text: "6.0";
+    mid-amount: 0.6;
+    treble-text: "5.0";
+    treble-amount: 0.5;
+    cab-output-text: "0.0 dB";
+    cab-output-amount: 0.66;
+    cab-high-pass-text: "80 Hz";
+    cab-high-pass-amount: 0.08;
+    cab-low-pass-text: "9.5 kHz";
+    cab-low-pass-amount: 0.45;
+    fx-n0: "Mix";
+    fx-v0: "32%";
+    fx-a0: 0.32;
+    fx-n1: "Feedback";
+    fx-v1: "48%";
+    fx-a1: 0.48;
+    fx-n2: "High Pass";
+    fx-v2: "120 Hz";
+    fx-a2: 0.18;
+    fx-n3: "Low Pass";
+    fx-v3: "6.2 kHz";
+    fx-a3: 0.72;
+    fx-n4: "Ping Pong";
+    fx-v4: "Off";
+    fx-n5: "Delay Time";
+    fx-v5: "420 ms";
+    fx-a5: 0.38;
+    fx-n6: "Mod Rate";
+    fx-v6: "0.8 Hz";
+    fx-a6: 0.24;
+    fx-n7: "Mod Depth";
+    fx-v7: "21%";
+    fx-a7: 0.21;
+    tab-0: "DLY";
+    tab-1: "REV";
+    tab-3: "CHO";
+    tab-4: "COMP";
+    tab-5: "EQ";
+    on-0: true;
+    on-1: true;
+    on-4: true;
+    tuner-active: root.page == 2;
+    tuner-has-pitch: true;
+    tuner-note: "E";
+    tuner-cents: "+12.0 ct";
+    tuner-pos: 0.62;
+    bpm-text: "120 BPM";
+    tempo-bpm-value: 120;
+    tempo-active: root.tap-mode;
+    tools-jack-mode: "Expression";
+    tools-jack-expression: true;
+    tools-usb-level: "-6 dB";
+    tools-usb-amount: 0.85;
+    tools-cab-settings: "Cab on · IR 2 · Output 0.0 dB";
+    tools-expression-summary: "EXP 1 → Gain · EXP 2 → Master";
+    tools-calibration-status: "Idle";
+    tools-protocol-status: "Connected";
+    tools-meter-input: "-18 dB";
+    tools-meter-output: "-12 dB";
+    tools-meter-expression: "64%";
+    tools-meter-input-amount: 0.55;
+    tools-meter-output-amount: 0.7;
+    tools-meter-expression-amount: 0.64;
+    bt-devices: [
+        { name: "Nano Cortex", kind: "Amp", state: 2 },
+        { name: "Nano Cortex 2", kind: "Amp", state: 1 },
+        { name: "FootCtrl BLE", kind: "MIDI", state: 0 },
+    ];
+    midi-rows: [
+        { name: "FX 1 on/off", assigned: "Note 60", learning: false },
+        { name: "Tuner", assigned: "CC 20", learning: false },
+        { name: "Tap tempo", assigned: "Press a footswitch…", learning: true },
+        { name: "Preset up", assigned: "Not assigned", learning: false },
+        { name: "Preset down", assigned: "Not assigned", learning: false },
+    ];
+    midi-last: "CC 20 = 127";
+    model-list-title: root.popup == "preset" ? "Presets"
+        : root.popup == "capture" ? "Captures"
+        : root.popup == "cab" ? "Cabs"
+        : root.popup == "library" ? "Library" : "Models";
+    model-list-height: 152;
+    model-list-current: 1;
+    model-list-section: 0;
+    model-list: [
+        { name: "Clean", header: true, index: -1, col: 0, y: 0, section: 0, height: 152 },
+        { name: "Rew D20 Clean", header: false, index: 0, col: 0, y: 0, section: 0, height: 0 },
+        { name: "Rew D20 Clean NF53", header: false, index: 1, col: 1, y: 0, section: 0, height: 0 },
+        { name: "Twin Reverb", header: false, index: 2, col: 2, y: 0, section: 0, height: 0 },
+        { name: "Deluxe", header: false, index: 3, col: 0, y: 76, section: 0, height: 0 },
+        { name: "Crunch", header: true, index: -1, col: 0, y: 0, section: 1, height: 152 },
+        { name: "Plexi 100", header: false, index: 4, col: 0, y: 0, section: 1, height: 0 },
+        { name: "JCM800", header: false, index: 5, col: 1, y: 0, section: 1, height: 0 },
+        { name: "AC30 Top Boost", header: false, index: 6, col: 2, y: 0, section: 1, height: 0 },
+        { name: "Bluesbreaker", header: false, index: 7, col: 0, y: 76, section: 1, height: 0 },
+        { name: "High Gain", header: true, index: -1, col: 0, y: 0, section: 2, height: 76 },
+        { name: "5150", header: false, index: 8, col: 0, y: 0, section: 2, height: 0 },
+    ];
+
+    chain-tapped(index) => {
+        root.popup = "none";
+        root.chain = index;
+        root.page = index == 2 ? 0 : 1;
+    }
+    tuner-tapped => { root.page = root.page == 2 ? (root.chain == 2 ? 0 : 1) : 2; }
+    tempo-tapped => { root.tap-mode = !root.tap-mode; }
+    tools-opened => { root.popup = root.popup == "settings" ? "none" : "settings"; }
+    preset-list-tapped => { root.popup = "preset"; }
+    model-list-tapped => { root.popup = "model"; }
+    capture-list-tapped => { root.popup = "capture"; }
+    cab-list-tapped => { root.popup = "cab"; }
+    library-tapped => { root.popup = "library"; }
+    layout-tapped(mode) => {
+        root.layout-mode = mode;
+        root.popup = "none";
+    }
+    // Pickers also close themselves through bt-open / model-open, so mirror that here.
+    changed bt-open => { if !root.bt-open && root.popup == "bluetooth" { root.popup = "none"; } }
+    changed model-open => { if !root.model-open && root.popup != "connecting" && root.popup != "bluetooth" { root.popup = "none"; } }
+
+    // Dev bar: jump straight to any screen or popup.
+    HorizontalLayout {
+        x: (root.width - self.preferred-width) / 2;
+        y: root.height - 30px;
+        spacing: 4px;
+        for p[i] in [
+            { l: "Amp", page: 0, chain: 2 },
+            { l: "FX", page: 1, chain: 0 },
+            { l: "Tuner", page: 2, chain: 2 },
+        ]: DevChip {
+            label: p.l;
+            active: root.popup == "none" && root.page == p.page;
+            clicked => {
+                root.popup = "none";
+                root.chain = p.chain;
+                root.page = p.page;
+            }
+        }
+        for p in [
+            { l: "BT", v: "bluetooth" },
+            { l: "Presets", v: "preset" },
+            { l: "Models", v: "model" },
+            { l: "Captures", v: "capture" },
+            { l: "Cabs", v: "cab" },
+            { l: "Welcome", v: "connecting" },
+            { l: "Settings", v: "settings" },
+        ]: DevChip {
+            label: p.l;
+            active: root.popup == p.v;
+            clicked => {
+                root.popup = root.popup == p.v ? "none" : p.v;
+            }
+        }
+    }
+}
+
+// Same preview on the 480x800 portrait panel.
+export component PreviewPortrait inherits Preview {
+    portrait: true;
+    layout-mode: 1;
+    preferred-width: 480px;
+    preferred-height: 800px;
+}

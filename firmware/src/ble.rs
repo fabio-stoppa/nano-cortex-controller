@@ -498,6 +498,13 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
         while let Some(cmd) = crate::link::pop_cmd() {
             apply_cmd(cmd);
         }
+        if LIBRARY_WANTED.load(core::sync::atomic::Ordering::Relaxed)
+            && crate::state::nano_rx_mode_get() == 0
+        {
+            LIBRARY_WANTED.store(false, core::sync::atomic::Ordering::Relaxed);
+            let sent = crate::state::nano_state_request_library();
+            log::info!("Library request sent={sent}");
+        }
         if let Some(param) = crate::link::take_param() {
             let _ = crate::fx::nano_fx_write_param_normalized(
                 u32::from(param.block),
@@ -509,6 +516,9 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
         flush_writes(client, c304.handle, c304_no_rsp).await;
     }
 }
+
+/// Set by the picker; the request goes out once no state transfer is running.
+pub static LIBRARY_WANTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 fn apply_cmd(cmd: crate::link::Cmd) {
     match cmd {
@@ -530,12 +540,6 @@ fn apply_cmd(cmd: crate::link::Cmd) {
         crate::link::Cmd::Tempo => {
             let _ = crate::state::nano_state_tempo_tap();
         }
-        crate::link::Cmd::TempoEnter => {
-            let _ = crate::state::nano_state_tempo_enter();
-        }
-        crate::link::Cmd::TempoExit => {
-            let _ = crate::state::nano_state_tempo_exit();
-        }
         crate::link::Cmd::Focus(slot) => crate::fx::nano_fx_focus_from_ui(slot),
         crate::link::Cmd::Block { slot, on } => {
             let _ = crate::fx::nano_fx_write_block_enabled(u32::from(slot), on);
@@ -555,7 +559,8 @@ fn apply_cmd(cmd: crate::link::Cmd) {
             let _ = crate::state::nano_state_copy_current();
         }
         crate::link::Cmd::Library => {
-            let _ = crate::state::nano_state_request_library();
+            // Wait for any state transfer to finish so the two streams don't mix.
+            LIBRARY_WANTED.store(true, core::sync::atomic::Ordering::Relaxed);
         }
         crate::link::Cmd::Preset(delta) => {
             let _ = crate::state::nano_state_step_preset(delta);
@@ -576,17 +581,18 @@ fn apply_cmd(cmd: crate::link::Cmd) {
             };
             let mut amp = nano_wire::types::NanoAmpC::from(&nano_wire::types::Amp::default());
             crate::state::nano_state_snapshot_amp(&mut amp);
-            let slot = if (1..=5).contains(&amp.cab_slot) {
-                amp.cab_slot
-            } else {
-                1
-            };
+            let slot = amp.active_cab_slot().unwrap_or(1);
             let kind = if cab.user {
                 nano_wire::editor::LibraryKind::User
             } else {
                 nano_wire::editor::LibraryKind::Factory
             };
             let _ = crate::state::nano_state_load_library_cab(slot, kind, cab.index, &cab.name);
+        }
+        crate::link::Cmd::CabParam { which, normalized } => {
+            if !crate::state::nano_state_write_cab_float(which, normalized) {
+                log::warn!("Cab parameter write failed");
+            }
         }
         crate::link::Cmd::ToolsOpen => {
             if !crate::state::nano_state_tools_open() {
@@ -598,15 +604,19 @@ fn apply_cmd(cmd: crate::link::Cmd) {
                 log::warn!("EXP/MIDI jack setting write failed");
             }
         }
-        crate::link::Cmd::UsbPlaybackStep(delta) => {
-            let settings = crate::state::nano_state_device_settings();
-            if let Some(db) = settings.usb_playback_db {
-                let next = (db + f32::from(delta)).clamp(-40.0, 0.0);
-                if !crate::state::nano_state_write_usb_playback(next) {
-                    log::warn!("USB playback setting write failed");
-                }
+        crate::link::Cmd::UsbPlayback(db) => {
+            if !crate::state::nano_state_write_usb_playback(libm::roundf(db).clamp(-40.0, 0.0)) {
+                log::warn!("USB playback setting write failed");
+            }
+        }
+        crate::link::Cmd::Mute { input, muted } => {
+            let which = if input {
+                nano_wire::editor::MuteTarget::Input
             } else {
-                log::warn!("USB playback setting is not known yet");
+                nano_wire::editor::MuteTarget::Output
+            };
+            if !crate::state::nano_state_write_mute(which, muted) {
+                log::warn!("Mute setting write failed");
             }
         }
         crate::link::Cmd::ExpressionCalibrationStart => {
@@ -897,6 +907,7 @@ async fn touch_loop(board: &mut Board<'_>) {
             crate::ui::refresh_bluetooth(&devices());
         }
         crate::ui::refresh_midi();
+        crate::ui::refresh_loading();
         #[cfg(feature = "scan-diag")]
         {
             tick = tick.wrapping_add(1);

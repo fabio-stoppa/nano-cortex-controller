@@ -1743,6 +1743,22 @@ mod tests {
         assert_eq!(amp.cab_slot, 0);
         assert!(amp.have_capture_slot);
         assert!(amp.have_cab_slot);
+        assert_eq!(
+            crate::types::NanoAmpC::from(&amp).active_cab_slot(),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_amp_named_cab_without_slot_defaults_to_first_slot() {
+        let mut data = field_varint_bytes(3, 100);
+        let cab_name = field_bytes(2, b"810 Amped VT Aln 70s");
+        data.extend(field_bytes(33, &cab_name));
+
+        let amp = crate::types::NanoAmpC::from(&parse_amp(&data).unwrap());
+        assert!(!amp.have_cab_slot);
+        assert!(amp.have_cab_name);
+        assert_eq!(amp.active_cab_slot(), Some(1));
     }
 
     #[test]

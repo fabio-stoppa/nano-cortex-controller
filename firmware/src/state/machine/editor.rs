@@ -280,12 +280,10 @@ pub fn nano_state_write_usb_playback(db: f32) -> bool {
 pub(super) fn sync_cab_settings(complete_dump: bool) {
     let s = st();
     // The Nano omits zero fields, so a complete dump without field 12 means no cab.
-    let cab_slot = if s.amp.have_cab_slot {
-        s.amp.cab_slot
-    } else if complete_dump {
-        0
-    } else {
-        return;
+    let cab_slot = match s.amp.active_cab_slot() {
+        Some(slot) => slot,
+        None if complete_dump => 0,
+        None => return,
     };
     let key = (s.preset_slot, cab_slot);
     if key == s.cab_settings_key {
@@ -306,11 +304,7 @@ pub fn nano_state_tools_open() -> bool {
     let mut success = nano_state_read_settings();
     let s = st();
     let preset = s.preset_slot;
-    let cab_slot = if s.amp.have_cab_slot {
-        s.amp.cab_slot
-    } else {
-        0
-    };
+    let cab_slot = s.amp.active_cab_slot().unwrap_or(0);
     if preset > 0 {
         success &= nano_state_read_expression(preset);
     }

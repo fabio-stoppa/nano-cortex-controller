@@ -1,7 +1,7 @@
 //! Slint screens for the 800×480 panel.
 //!
-//! The layout follows the LVGL UI: header, chain rail, amp / effect / tuner /
-//! tempo pages, and the connecting overlay. Landscape is the panel's scan.
+//! The layout follows the LVGL UI: header (with the tap-tempo readout), chain
+//! rail, amp / effect / tuner pages, and the connecting overlay. Landscape is the panel's scan.
 //! Portrait is a taller layout rotated into that same framebuffer.
 
 extern crate alloc;
@@ -22,6 +22,8 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_time::{Duration, Instant};
 use slint::{LogicalPosition, PhysicalSize};
+
+use nano_wire::editor::CabFloat;
 
 use crate::bounce::{Framebuffer, HEIGHT, WIDTH};
 use crate::fx::types::NanoFxState;
@@ -116,6 +118,7 @@ fn ensure() {
     .expect("slint platform");
 
     let app = AppWindow::new().expect("slint ui");
+    app.set_app_version(env!("CARGO_PKG_VERSION").into());
     if let Some(mode) = crate::settings::load_layout() {
         app.set_layout_mode(mode);
     }
@@ -184,9 +187,6 @@ fn ensure() {
                 crate::link::push_cmd(Cmd::Tuner(false));
                 show_home(&app);
             } else {
-                if app.get_page() == 3 {
-                    crate::link::push_cmd(Cmd::TempoExit);
-                }
                 app.set_page(2);
                 app.set_model("Tuner".into());
                 app.set_tuner_active(true);
@@ -220,66 +220,27 @@ fn ensure() {
             crate::link::push_cmd(Cmd::TunerOutputMute(muted));
         }
     });
-    app.on_tempo_opened({
-        let weak = weak.clone();
-        move || {
-            let Some(app) = weak.upgrade() else {
-                return;
-            };
-            if app.get_page() == 3 {
-                crate::link::push_cmd(Cmd::TempoExit);
-                show_home(&app);
-            } else {
-                if app.get_page() == 2 {
-                    app.set_tuner_active(false);
-                    crate::link::push_cmd(Cmd::Tuner(false));
-                }
-                app.set_page(3);
-                app.set_model("Tempo".into());
-                crate::link::push_cmd(Cmd::TempoEnter);
-            }
-        }
-    });
     app.on_tools_opened({
         let weak = weak.clone();
         move || {
             let Some(app) = weak.upgrade() else {
                 return;
             };
-            if app.get_page() == 4 {
-                show_home(&app);
+            if app.get_settings_open() {
+                app.set_settings_open(false);
                 return;
             }
-            leave_tools(&app);
-            app.set_page(4);
-            app.set_model("Tools".into());
+            if app.get_page() == 2 {
+                leave_tools(&app);
+                show_home(&app);
+            }
+            MIDI_SHOWN.store(0, core::sync::atomic::Ordering::Relaxed);
+            app.set_settings_open(true);
             crate::link::push_cmd(Cmd::ToolsOpen);
         }
     });
     app.on_tools_refresh(move || crate::link::push_cmd(Cmd::ToolsOpen));
-    app.on_midi_opened({
-        let weak = weak.clone();
-        move || {
-            let Some(app) = weak.upgrade() else {
-                return;
-            };
-            app.set_page(5);
-            app.set_model("MIDI".into());
-            MIDI_SHOWN.store(0, core::sync::atomic::Ordering::Relaxed);
-        }
-    });
-    app.on_midi_closed({
-        let weak = weak.clone();
-        move || {
-            let Some(app) = weak.upgrade() else {
-                return;
-            };
-            crate::midi::cancel_learn();
-            app.set_page(4);
-            app.set_model("Tools".into());
-            crate::link::push_cmd(Cmd::ToolsOpen);
-        }
-    });
+    app.on_midi_closed(|| crate::midi::cancel_learn());
     app.on_midi_learn(|index| crate::midi::toggle_learn(index.max(0) as usize));
     app.on_midi_clear(|index| crate::midi::clear(index.max(0) as usize));
     app.on_tools_jack_selected(move |expression| {
@@ -289,8 +250,12 @@ fn ensure() {
             nano_wire::types::JackMode::Midi
         }));
     });
-    app.on_tools_usb_step(move |delta| {
-        crate::link::push_cmd(Cmd::UsbPlaybackStep(delta.clamp(-1, 1) as i8));
+    app.on_tools_usb_set(move |amount| {
+        let db = -40.0 + amount.clamp(0.0, 1.0) * 40.0;
+        crate::link::push_cmd(Cmd::UsbPlayback(db));
+    });
+    app.on_tools_mute_set(move |input, muted| {
+        crate::link::push_cmd(Cmd::Mute { input, muted });
     });
     app.on_tools_calibration_start(move || {
         crate::link::push_cmd(Cmd::ExpressionCalibrationStart);
@@ -352,17 +317,15 @@ fn ensure() {
                 return;
             }
             let current = fx.blocks[block as usize].model;
-            let columns = if app.get_portrait() { 2 } else { 3 };
             let count = crate::fx::nano_fx_allowed_model_count(block);
-            let mut items: alloc::vec::Vec<ModelItem> = alloc::vec::Vec::new();
+            let mut rows = ListRows::new(list_columns(&app));
             let mut selected = -1;
-            let mut y = 0.0f32;
             for category in 0..32u32 {
                 let label = crate::fx::models::nano_fx_category_label(category);
                 if label == "-" {
                     continue;
                 }
-                let mut slot = 0;
+                let mut started = false;
                 for index in 0..count {
                     let Some(model) = crate::fx::nano_fx_get_allowed_model(block, index) else {
                         continue;
@@ -370,41 +333,17 @@ fn ensure() {
                     if crate::fx::models::model_category(model) != category {
                         continue;
                     }
-                    if slot == 0 {
-                        items.push(ModelItem {
-                            name: label.into(),
-                            header: true,
-                            index: -1,
-                            col: 0,
-                            y,
-                        });
-                        y += 34.0;
+                    if !started {
+                        rows.header(label);
+                        started = true;
                     }
                     if core::ptr::eq(model as *const _, current) {
                         selected = index as i32;
                     }
-                    items.push(ModelItem {
-                        name: crate::fx::models::model_name(model).into(),
-                        header: false,
-                        index: index as i32,
-                        col: slot % columns,
-                        y,
-                    });
-                    slot += 1;
-                    if slot % columns == 0 {
-                        y += 46.0;
-                    }
-                }
-                if slot % columns != 0 {
-                    y += 46.0;
+                    rows.item(crate::fx::models::model_name(model), index as i32);
                 }
             }
-            app.set_model_list_height(y);
-            app.set_model_list(slint::ModelRc::new(slint::VecModel::from(items)));
-            app.set_model_list_current(selected);
-            app.set_model_list_title(crate::fx::models::block_label(block).into());
-            app.set_list_kind(0);
-            app.set_model_open(true);
+            rows.show(&app, 0, crate::fx::models::block_label(block), selected);
         }
     });
     app.on_capture_list_tapped({
@@ -421,6 +360,7 @@ fn ensure() {
             let Some(app) = weak.upgrade() else {
                 return;
             };
+            log::info!("Cab list tapped");
             if crate::state::nano_state_library_snapshot().cabs.is_empty() {
                 crate::link::push_cmd(Cmd::Library);
             }
@@ -474,6 +414,43 @@ fn ensure() {
     app.on_slider_moved(move |id, amount| {
         send_slider(id, amount);
     });
+    app.on_cab_slider_moved(move |id, amount| {
+        let Some(which) = (match id {
+            0 => Some(CabFloat::Level),
+            1 => Some(CabFloat::HighPass),
+            2 => Some(CabFloat::LowPass),
+            _ => None,
+        }) else {
+            return;
+        };
+        let Some(ui) = state().as_mut() else {
+            return;
+        };
+        if !ui.app.get_cab_active() {
+            return;
+        }
+        let amount = amount.clamp(0.0, 1.0);
+        let text = cab_float_display(which, amount);
+        match which {
+            CabFloat::Level => {
+                ui.app.set_cab_output_amount(amount);
+                ui.app.set_cab_output_text(text.into());
+            }
+            CabFloat::HighPass => {
+                ui.app.set_cab_high_pass_amount(amount);
+                ui.app.set_cab_high_pass_text(text.into());
+            }
+            CabFloat::LowPass => {
+                ui.app.set_cab_low_pass_amount(amount);
+                ui.app.set_cab_low_pass_text(text.into());
+            }
+        }
+        ui.window.request_redraw();
+        crate::link::push_cmd(Cmd::CabParam {
+            which,
+            normalized: amount,
+        });
+    });
     app.on_gate_tapped(move || {
         let on = state()
             .as_ref()
@@ -497,12 +474,18 @@ fn ensure() {
     });
 }
 
-/// Rows for the picker: category headers span the width, items fill columns.
+/// Vertical pitch of picker options: the 68px option height in app.slint plus an 8px gap.
+const ROW_STEP: f32 = 76.0;
+
+/// Rows for the picker. Each header starts a tab; its items fill columns and
+/// are positioned from the top of that tab's content.
 struct ListRows {
     items: alloc::vec::Vec<ModelItem>,
     columns: usize,
     slot: usize,
     y: f32,
+    section: i32,
+    header_at: Option<usize>,
 }
 
 impl ListRows {
@@ -512,22 +495,36 @@ impl ListRows {
             columns,
             slot: 0,
             y: 0.0,
+            section: -1,
+            header_at: None,
+        }
+    }
+
+    /// Closes the open tab by recording its content height on its header.
+    fn close_section(&mut self) {
+        if self.slot % self.columns != 0 {
+            self.y += ROW_STEP;
+        }
+        if let Some(at) = self.header_at.take() {
+            self.items[at].height = self.y;
         }
     }
 
     fn header(&mut self, label: &str) {
-        if self.slot % self.columns != 0 {
-            self.y += 46.0;
-        }
+        self.close_section();
         self.slot = 0;
+        self.y = 0.0;
+        self.section += 1;
+        self.header_at = Some(self.items.len());
         self.items.push(ModelItem {
             name: label.into(),
             header: true,
             index: -1,
             col: 0,
-            y: self.y,
+            y: 0.0,
+            section: self.section,
+            height: 0.0,
         });
-        self.y += 34.0;
     }
 
     fn item(&mut self, name: &str, index: i32) {
@@ -537,20 +534,26 @@ impl ListRows {
             index,
             col: (self.slot % self.columns) as i32,
             y: self.y,
+            section: self.section.max(0),
+            height: 0.0,
         });
         self.slot += 1;
         if self.slot % self.columns == 0 {
-            self.y += 46.0;
+            self.y += ROW_STEP;
         }
     }
 
     fn show(mut self, app: &AppWindow, kind: i32, title: &str, current: i32) {
-        if self.slot % self.columns != 0 {
-            self.y += 46.0;
-        }
+        self.close_section();
+        let section = self
+            .items
+            .iter()
+            .find(|item| !item.header && item.index == current)
+            .map_or(0, |item| item.section);
         app.set_model_list_height(self.y);
         app.set_model_list(slint::ModelRc::new(slint::VecModel::from(self.items)));
         app.set_model_list_current(current);
+        app.set_model_list_section(section);
         app.set_model_list_title(title.into());
         app.set_list_kind(kind);
         app.set_model_open(true);
@@ -598,7 +601,12 @@ fn open_preset_list(app: &AppWindow) {
     if names.is_empty() {
         rows.header("Loading presets...");
     }
+    const PER_TAB: usize = 20;
     for (position, name) in names.iter().enumerate() {
+        if position % PER_TAB == 0 {
+            let last = (position + PER_TAB).min(names.len());
+            rows.header(&alloc::format!("{}-{}", position + 1, last));
+        }
         rows.item(name, position as i32 + 1);
     }
     let current = i32::from(crate::state::nano_state_preset_slot());
@@ -617,7 +625,12 @@ fn open_cab_list(app: &AppWindow) {
     let mut rows = ListRows::new(list_columns(app));
     let mut current = -1;
     if library.cabs.is_empty() {
-        rows.header("Loading library...");
+        // Captures arrive in the same reply, so having them means it loaded.
+        rows.header(if library.captures.is_empty() {
+            "Loading library..."
+        } else {
+            "No IRs in library"
+        });
     }
     for (label, user) in [("Factory", false), ("User", true)] {
         let mut first = true;
@@ -714,10 +727,68 @@ fn redraw(framebuffer: &mut Framebuffer) {
     });
 }
 
+static LINK_UP: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static LINK_UP_AT_MS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static LIBRARY_ASKED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static LOADED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static LOAD_TICK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// How long to wait for the pedal's dump before showing the app anyway.
+const LOAD_TIMEOUT_MS: u32 = 20_000;
+
+/// Keeps the welcome screen up after the link opens until the amp state, preset
+/// names and library have arrived, so the app never shows half-loaded data.
+pub fn refresh_loading() {
+    use core::sync::atomic::Ordering::Relaxed;
+    if !LINK_UP.load(Relaxed) || LOADED.load(Relaxed) {
+        return;
+    }
+    if LOAD_TICK.fetch_add(1, Relaxed) % 8 != 0 {
+        return;
+    }
+    let Some(ui) = state().as_mut() else {
+        return;
+    };
+    let waited = (Instant::now().as_millis() as u32).wrapping_sub(LINK_UP_AT_MS.load(Relaxed));
+    let status = if !crate::state::nano_state_amp_ready() {
+        "Loading amp state..."
+    } else if crate::state::nano_state_preset_names().is_empty() {
+        "Loading presets..."
+    } else {
+        // Ask for the library once the dump is in, so the state and library streams don't mix.
+        if !LIBRARY_ASKED.swap(true, Relaxed) {
+            crate::ble::LIBRARY_WANTED.store(true, Relaxed);
+        }
+        let library = crate::state::nano_state_library_snapshot();
+        if library.captures.is_empty() && library.cabs.is_empty() {
+            "Loading library..."
+        } else {
+            ""
+        }
+    };
+    if status.is_empty() || waited > LOAD_TIMEOUT_MS {
+        LOADED.store(true, Relaxed);
+        ui.app.set_load_status("".into());
+        ui.app.set_connecting(false);
+    } else if ui.app.get_load_status() != status {
+        ui.app.set_load_status(status.into());
+    }
+    ui.window.request_redraw();
+}
+
 pub fn set_connected(connected: bool) {
+    use core::sync::atomic::Ordering::Relaxed;
     ensure();
     let ui = state().as_mut().unwrap();
-    ui.app.set_connecting(!connected);
+    LINK_UP.store(connected, Relaxed);
+    LOADED.store(false, Relaxed);
+    LIBRARY_ASKED.store(false, Relaxed);
+    LOAD_TICK.store(0, Relaxed);
+    LINK_UP_AT_MS.store(Instant::now().as_millis() as u32, Relaxed);
+    ui.app.set_connecting(true);
+    if !connected {
+        ui.app.set_load_status("".into());
+    }
     ui.app.set_ble_on(connected);
     ui.app.set_model_enabled(connected);
     ui.window.request_redraw();
@@ -742,7 +813,7 @@ pub fn refresh_midi() {
     let Some(ui) = state().as_mut() else {
         return;
     };
-    if ui.app.get_page() != 5 {
+    if !ui.app.get_settings_open() {
         return;
     }
     MIDI_SHOWN.store(version, core::sync::atomic::Ordering::Relaxed);
@@ -775,6 +846,20 @@ static BT_OPEN_SEEN: core::sync::atomic::AtomicBool = core::sync::atomic::Atomic
 pub fn refresh_bluetooth(devices: &[crate::ble::Seen]) {
     ensure();
     let ui = state().as_mut().unwrap();
+    let best = |nano: bool| {
+        devices
+            .iter()
+            .filter(|d| d.nano == nano)
+            .map(|d| i32::from(d.state))
+            .max()
+            .unwrap_or(-1)
+    };
+    let (amp, foot) = (best(true), best(false));
+    if ui.app.get_conn_amp() != amp || ui.app.get_conn_foot() != foot {
+        ui.app.set_conn_amp(amp);
+        ui.app.set_conn_foot(foot);
+        ui.window.request_redraw();
+    }
     if !ui.app.get_bt_open() {
         BT_OPEN_SEEN.store(false, core::sync::atomic::Ordering::Relaxed);
         return;
@@ -949,7 +1034,7 @@ pub fn show_bpm(bpm: u16) {
     ensure();
     let ui = state().as_mut().unwrap();
     ui.app.set_bpm_text(alloc::format!("{bpm} BPM").into());
-    ui.app.set_tempo_bpm(alloc::format!("{bpm}").into());
+    ui.app.set_tempo_bpm_value(i32::from(bpm));
     ui.window.request_redraw();
 }
 
@@ -957,26 +1042,14 @@ pub fn clear_bpm() {
     ensure();
     let ui = state().as_mut().unwrap();
     ui.app.set_bpm_text("- BPM".into());
-    ui.app.set_tempo_bpm("-".into());
+    ui.app.set_tempo_bpm_value(0);
     ui.window.request_redraw();
 }
 
 pub fn show_tempo_page(active: bool) {
     ensure();
     let ui = state().as_mut().unwrap();
-    if active {
-        ui.app.set_page(3);
-        ui.app.set_model("Tempo".into());
-    } else if ui.app.get_page() == 3 {
-        let chain = ui.app.get_chain();
-        ui.app.set_page(home_page(chain));
-        if chain == 2 {
-            let title = ui.amp_title.clone();
-            ui.app.set_model(title.as_str().into());
-        } else {
-            paint_fx_page(ui);
-        }
-    }
+    ui.app.set_tempo_active(active);
     ui.window.request_redraw();
 }
 
@@ -1036,6 +1109,10 @@ pub fn show_device_settings(settings: &nano_wire::types::DeviceSettings) {
             .unwrap_or_else(|| String::from("-"))
             .into(),
     );
+    if let Some(db) = settings.usb_playback_db {
+        ui.app
+            .set_tools_usb_amount(((db + 40.0) / 40.0).clamp(0.0, 1.0));
+    }
     ui.window.request_redraw();
 }
 
@@ -1044,23 +1121,15 @@ pub fn show_cab_settings(slot: u8, settings: &nano_wire::types::CabSettings) {
     let ui = state().as_mut().unwrap();
     let output = settings
         .output
-        .map(|norm| {
-            let zero_db = 0.662_122_19_f32;
-            let db = if norm <= zero_db {
-                norm / zero_db * 96.0 - 96.0
-            } else {
-                (norm - zero_db) / (1.0 - zero_db) * 12.0
-            };
-            alloc::format!("{db:.1} dB")
-        })
+        .map(|norm| cab_float_display(CabFloat::Level, norm))
         .unwrap_or_else(|| String::from("-- dB"));
     let high_pass = settings
         .high_pass
-        .map(|norm| alloc::format!("{:.0} Hz", 20.0 + norm * 780.0))
+        .map(|norm| cab_float_display(CabFloat::HighPass, norm))
         .unwrap_or_else(|| String::from("-- Hz"));
     let low_pass = settings
         .low_pass
-        .map(|norm| alloc::format!("{:.0} Hz", 1000.0 + norm * 19000.0))
+        .map(|norm| cab_float_display(CabFloat::LowPass, norm))
         .unwrap_or_else(|| String::from("-- Hz"));
     let active = (1..=5).contains(&slot);
     ui.app.set_cab_output_text(
@@ -1109,6 +1178,23 @@ pub fn show_cab_settings(slot: u8, settings: &nano_wire::types::CabSettings) {
     };
     ui.app.set_tools_cab_settings(text.into());
     ui.window.request_redraw();
+}
+
+fn cab_float_display(which: CabFloat, normalized: f32) -> String {
+    let normalized = normalized.clamp(0.0, 1.0);
+    match which {
+        CabFloat::Level => {
+            let zero_db = 0.662_122_19_f32;
+            let db = if normalized <= zero_db {
+                normalized / zero_db * 96.0 - 96.0
+            } else {
+                (normalized - zero_db) / (1.0 - zero_db) * 12.0
+            };
+            alloc::format!("{db:.1} dB")
+        }
+        CabFloat::HighPass => alloc::format!("{:.0} Hz", 20.0 + normalized * 780.0),
+        CabFloat::LowPass => alloc::format!("{:.0} Hz", 1000.0 + normalized * 19000.0),
+    }
 }
 
 pub fn show_expression_assignments(
@@ -1271,15 +1357,9 @@ pub fn show_chain(index: i32) {
 
 fn leave_tools(app: &AppWindow) {
     let page = app.get_page();
-    if page == 5 {
-        crate::midi::cancel_learn();
-    }
     if page == 2 {
         app.set_tuner_active(false);
         crate::link::push_cmd(Cmd::Tuner(false));
-    }
-    if page == 3 {
-        crate::link::push_cmd(Cmd::TempoExit);
     }
 }
 

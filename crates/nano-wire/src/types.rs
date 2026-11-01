@@ -229,6 +229,18 @@ impl From<&Amp> for NanoAmpC {
 }
 
 impl NanoAmpC {
+    /// Return the active 1-based cab slot, falling back to the first slot when
+    /// the state includes a cab name but omits its slot.
+    pub fn active_cab_slot(&self) -> Option<u8> {
+        if self.have_cab_slot && (1..=5).contains(&self.cab_slot) {
+            Some(self.cab_slot)
+        } else if self.have_cab_name {
+            Some(1)
+        } else {
+            None
+        }
+    }
+
     /// Convert to the heap `Amp` type (for logging / shared parsers).
     pub fn to_amp(&self) -> Amp {
         let end = self

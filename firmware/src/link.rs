@@ -14,6 +14,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
 
+use nano_wire::editor::CabFloat;
 use nano_wire::types::JackMode;
 
 static UP: AtomicBool = AtomicBool::new(false);
@@ -29,10 +30,8 @@ pub enum Cmd {
     Tuner(bool),
     TunerReference(u16),
     TunerOutputMute(bool),
-    /// TAP while Tempo Mode is already open.
+    /// TAP from the header; also enters Tempo Mode.
     Tempo,
-    TempoEnter,
-    TempoExit,
     Focus(u8),
     Block {
         slot: u8,
@@ -59,9 +58,15 @@ pub enum Cmd {
     PresetAt(u8),
     /// Load the Nth library IR into the active cab slot.
     CabAt(u16),
+    CabParam {
+        which: CabFloat,
+        normalized: f32,
+    },
     ToolsOpen,
     JackMode(JackMode),
-    UsbPlaybackStep(i8),
+    UsbPlayback(f32),
+    /// Mute guitar input (true) or output (false).
+    Mute { input: bool, muted: bool },
     ExpressionCalibrationStart,
     ExpressionCalibrationSave,
 }

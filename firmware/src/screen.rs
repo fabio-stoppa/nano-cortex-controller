@@ -60,7 +60,7 @@ pub fn nano_ui_set_amp(
     };
     let capture_slot = if capture_active {
         alloc::format!(
-            "{}-{}",
+            "BANK {} OF 5 · SLOT {}",
             (amp.capture_slot - 1) / 5 + 1,
             (amp.capture_slot - 1) % 5 + 1
         )
@@ -70,7 +70,8 @@ pub fn nano_ui_set_amp(
         String::from("-")
     };
 
-    let cab_active = amp.have_cab_slot && amp.cab_slot > 0;
+    let active_cab_slot = amp.active_cab_slot();
+    let cab_active = active_cab_slot.is_some();
     let cab_value = if cab_active && amp.have_cab_name {
         let end = amp
             .cab_name
@@ -85,8 +86,8 @@ pub fn nano_ui_set_amp(
     } else {
         String::from("-")
     };
-    let cab_slot = if cab_active {
-        alloc::format!("{}", amp.cab_slot)
+    let cab_slot = if let Some(slot) = active_cab_slot {
+        alloc::format!("BANK {slot} OF 5")
     } else if amp.have_cab_slot {
         String::from("BYPASS")
     } else {

@@ -339,6 +339,14 @@ pub(super) fn send_state_request(label: &str, from_initial_sync: bool) {
         return;
     }
 
+    // The library reply is a long stream; a state request now would interleave with it.
+    if !from_initial_sync
+        && (s.library_pending || s.library_rx_active)
+        && now_us() - s.library_request_us < 20_000_000
+    {
+        return;
+    }
+
     if s.mode == NANO_RX_CURRENT {
         check_state_rx_timeout();
         if s.mode == NANO_RX_CURRENT {
