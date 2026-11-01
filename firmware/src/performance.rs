@@ -19,6 +19,9 @@ enum Pending {
         index: usize,
         plan: Plan,
     },
+    Effect {
+        plan: Plan,
+    },
 }
 
 struct State {
@@ -444,7 +447,7 @@ pub fn poll() -> Option<crate::link::Cmd> {
                 Progress::Waiting
             }
         }
-        Pending::Scene { plan, .. } => plan.poll(&current, now),
+        Pending::Scene { plan, .. } | Pending::Effect { plan } => plan.poll(&current, now),
     };
     match result {
         Progress::Complete => {
@@ -477,4 +480,89 @@ pub fn poll() -> Option<crate::link::Cmd> {
             Some(command)
         }
     }
+}
+
+pub fn fx_presets() -> Vec<Option<data::FxPreset>> {
+    with(|state| state.config().fx_presets.to_vec())
+}
+
+pub fn capture_fx(index: usize, block: usize, name: &str) -> Result<(), &'static str> {
+    if busy() || !crate::link::connected() || crate::tuner::nano_tuner_is_active() {
+        return Err("Wait for recall, connect the Nano and exit tuner before storing FX");
+    }
+    let current = view();
+    if !current.idle || !current.effects.valid {
+        return Err("Wait for Nano FX state to load");
+    }
+    let effect = data::Effect::capture(
+        current
+            .effects
+            .blocks
+            .get(block)
+            .ok_or("Invalid FX source block")?,
+        block,
+    )?;
+    let bank = bank();
+    let slot = slot();
+    edit(|config| {
+        let target = config
+            .fx_presets
+            .get_mut(index)
+            .ok_or("Invalid FX preset slot")?;
+        *target = Some(data::FxPreset {
+            name: name.into(),
+            source_block: block as u8,
+            effect,
+        });
+        Ok(())
+    })?;
+    with(|state| {
+        state.bank = bank;
+        state.slot = slot;
+    });
+    Ok(())
+}
+
+pub fn clear_fx(index: usize) -> Result<(), &'static str> {
+    let bank = bank();
+    let slot = slot();
+    edit(|config| {
+        *config
+            .fx_presets
+            .get_mut(index)
+            .ok_or("Invalid FX preset slot")? = None;
+        Ok(())
+    })?;
+    with(|state| {
+        state.bank = bank;
+        state.slot = slot;
+    });
+    Ok(())
+}
+
+pub fn recall_fx(index: usize, block: usize) -> Result<(), &'static str> {
+    if busy() || !crate::link::connected() || crate::tuner::nano_tuner_is_active() {
+        return Err("Wait for recall, connect the Nano and exit tuner before recalling FX");
+    }
+    let effect = with(|state| {
+        state
+            .config()
+            .fx_presets
+            .get(index)
+            .and_then(Option::as_ref)
+            .map(|preset| preset.effect.clone())
+    })
+    .ok_or("This FX preset slot is empty")?;
+    let current = view();
+    if !current.idle || !current.amp.valid {
+        return Err("Wait for the current Nano preset to load");
+    }
+    let plan = Plan::effect(effect, block, current.preset, crate::clock::now_us())?;
+    with(|state| {
+        state.pending = Some(Pending::Effect { plan });
+        state.scene = None;
+        state.notice = "Recalling FX preset and verifying...";
+        state.version = state.version.wrapping_add(1);
+    });
+    Ok(())
 }

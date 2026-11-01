@@ -2404,6 +2404,44 @@ component ConnectingOverlay inherits Rectangle {
     }
 }
 
+component FxPresetPanel inherits Rectangle {
+    in property <[string]> presets;
+    in property <int> block: 0;
+    in property <string> notice;
+    callback selected(int);
+    callback recall(int);
+    callback store(int);
+    callback remove(int);
+    callback closed();
+    background: Surface.background;
+    TouchArea {}
+    VerticalLayout {
+        padding: 14px;
+        spacing: 8px;
+        PopupHeader { title: "Named FX presets (32 slots)"; closed => { root.closed(); } }
+        HorizontalLayout {
+            spacing: 6px;
+            for name[index] in ["Pre 1", "Pre 2", "Post 1", "Post 2", "Post 3"]: HeaderButton {
+                label: name; hot: root.block == index;
+                tapped => { root.selected(index); }
+            }
+        }
+        Text { text: root.notice; color: #909090; font-size: 14px; wrap: word-wrap; }
+        shelf := Flickable {
+            vertical-stretch: 1;
+            viewport-width: self.width;
+            viewport-height: root.presets.length * 76px;
+            for label[index] in root.presets: OptionRow {
+                y: index * 76px; width: shelf.width;
+                label: label; value: "";
+                VCenter { HeaderButton { label: "Play"; height: 44px; tapped => { root.recall(index); } } }
+                VCenter { HeaderButton { label: "Store"; height: 44px; tapped => { root.store(index); } } }
+                VCenter { HeaderButton { label: "Delete"; height: 44px; tapped => { root.remove(index); } } }
+            }
+        }
+    }
+}
+
 component BankPanel inherits Rectangle {
     in property <[string]> banks;
     in property <[string]> slots;
@@ -2426,6 +2464,7 @@ component BankPanel inherits Rectangle {
     callback recall(int);
     callback assign(int);
     callback clear(int);
+    callback fx-presets();
     background: Surface.background;
     TouchArea {}
     VerticalLayout {
@@ -2436,7 +2475,11 @@ component BankPanel inherits Rectangle {
             closed => { if root.scenes-open { root.scenes-closed(); } else { root.closed(); } }
         }
         Text { text: root.notice; color: #909090; font-size: 14px; wrap: word-wrap; }
-        if !root.scenes-open: HeaderButton { label: "Add bank (max 8)"; height: 40px; tapped => { root.add(); } }
+        if !root.scenes-open: HorizontalLayout {
+            spacing: 8px;
+            HeaderButton { label: "Add bank (max 8)"; height: 40px; tapped => { root.add(); } }
+            HeaderButton { label: "FX presets"; height: 40px; tapped => { root.fx-presets(); } }
+        }
         if !root.scenes-open: bank-list := Flickable {
             height: min(152px, root.banks.length * 76px);
             viewport-width: self.width;
@@ -2950,6 +2993,15 @@ export component AppWindow inherits Window {
     in-out property <[string]> performance-scenes: [];
     in-out property <int> performance-confirm-action: 0;
     in-out property <int> performance-pending-preset: -1;
+    in-out property <bool> fx-presets-open: false;
+    in-out property <int> fx-preset-block: 0;
+    in-out property <int> fx-preset-edit: -1;
+    in-out property <[string]> fx-presets: [];
+    callback fx-presets-opened();
+    callback fx-preset-block-selected(int);
+    callback fx-preset-recall(int);
+    callback fx-preset-store(int);
+    callback fx-preset-delete(int);
     callback performance-scenes-opened(int);
     callback performance-scene-recall(int);
     callback performance-scene-store(int);
@@ -3329,6 +3381,7 @@ export component AppWindow inherits Window {
         scenes: root.performance-scenes; scene: root.performance-scene;
         scenes-opened(index) => { root.performance-scenes-opened(index); }
         scenes-closed => { root.performance-edit-slot = -1; }
+        fx-presets => { root.fx-presets-opened(); }
         scene-recall(index) => { root.performance-scene-recall(index); }
         scene-store(index) => { root.performance-scene-store(index); }
         scene-clear(index) => { root.midi-clear-confirm = false; root.performance-scene-clear(index); }
@@ -3340,6 +3393,18 @@ export component AppWindow inherits Window {
         recall(index) => { root.performance-recall(index); }
         assign(index) => { root.performance-assign(index); }
         clear(index) => { root.performance-clear(index); }
+    }
+
+    if root.fx-presets-open: FxPresetPanel {
+        visible: !root.kbd-open;
+        presets: root.fx-presets;
+        block: root.fx-preset-block;
+        notice: root.performance-notice;
+        selected(index) => { root.fx-preset-block-selected(index); }
+        recall(index) => { root.fx-preset-recall(index); }
+        store(index) => { root.fx-preset-store(index); }
+        remove(index) => { root.fx-preset-delete(index); }
+        closed => { root.fx-presets-open = false; }
     }
 
     if root.confirm-open: ConfirmDialog {

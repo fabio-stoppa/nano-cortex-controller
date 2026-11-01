@@ -645,6 +645,19 @@ mod tests {
     fn check_bank_screen(app: &AppWindow, window: &MinimalSoftwareWindow) {
         let additions = Rc::new(std::cell::Cell::new(0));
         let stores = Rc::new(std::cell::Cell::new(0));
+        let fx_stores = Rc::new(std::cell::Cell::new(0));
+        let fx_blocks = Rc::new(std::cell::Cell::new(-1));
+        app.on_fx_preset_store({
+            let stores = fx_stores.clone();
+            move |index| {
+                assert_eq!(index, 0);
+                stores.set(stores.get() + 1);
+            }
+        });
+        app.on_fx_preset_block_selected({
+            let blocks = fx_blocks.clone();
+            move |index| blocks.set(index)
+        });
         app.on_performance_scene_store({
             let stores = stores.clone();
             move |index| {
@@ -719,6 +732,58 @@ mod tests {
             });
             assert_eq!(stores.get(), before + 1, "Scene Store is inaccessible");
             app.set_performance_edit_slot(-1);
+            app.set_fx_presets(slint::ModelRc::new(slint::VecModel::from(vec![
+                "1: Drive".into()
+            ])));
+            app.set_fx_presets_open(true);
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.render(&mut pixels, width as usize);
+            });
+            let before = fx_stores.get();
+            let position = LogicalPosition::new(width as f32 - 160.0, 186.0);
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+            assert_eq!(fx_stores.get(), before + 1, "FX Store is inaccessible");
+            let position = LogicalPosition::new(width as f32 - 55.0, 92.0);
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+            assert_eq!(fx_blocks.get(), 4, "Last FX target is inaccessible");
+            app.set_confirm_title("Delete FX preset?".into());
+            app.set_confirm_message("Only this shelf entry is removed.".into());
+            app.set_confirm_label("Delete".into());
+            app.set_confirm_open(true);
+            window.request_redraw();
+            window.draw_if_needed(|renderer| { renderer.render(&mut pixels, width as usize); });
+            let position = LogicalPosition::new(width as f32 - 160.0, 186.0);
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+            assert_eq!(
+                fx_stores.get(),
+                before + 1,
+                "Confirmation allowed an underlying FX Store tap"
+            );
+            app.set_confirm_open(false);
+            app.set_fx_presets_open(false);
         }
         app.set_performance_open(false);
         app.set_connecting(false);

@@ -573,6 +573,16 @@ pub static LIBRARY_WANTED: core::sync::atomic::AtomicBool = core::sync::atomic::
 
 fn apply_cmd(cmd: crate::link::Cmd) {
     match cmd {
+        crate::link::Cmd::FxPresetRecall { index, block } => {
+            if let Err(error) = crate::performance::recall_fx(usize::from(index), usize::from(block)) {
+                crate::performance::report(error);
+            } else { SLIDER.reset(); crate::link::take_param(); }
+        }
+        crate::link::Cmd::FxPresetCapture { index, block, name } => {
+            if let Err(error) = crate::performance::capture_fx(usize::from(index), usize::from(block), &name) {
+                crate::performance::report(error);
+            }
+        }
         crate::link::Cmd::SceneRecall(index) => {
             if let Err(error) = crate::performance::recall_scene(usize::from(index)) { crate::performance::report(error); }
             else { SLIDER.reset(); crate::link::take_param(); }

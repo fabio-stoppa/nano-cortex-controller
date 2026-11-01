@@ -47,6 +47,31 @@ pub(super) fn refresh(app: &AppWindow, force: bool) {
     app.set_performance_bank(crate::performance::bank() as i32);
     app.set_performance_slot(crate::performance::slot().map_or(-1, |index| index as i32));
     app.set_performance_notice(crate::performance::notice().into());
+    let presets = crate::performance::fx_presets()
+        .into_iter()
+        .enumerate()
+        .map(|(index, preset)| {
+            let label = match preset {
+                Some(preset) => format!(
+                    "{}: {}{}",
+                    index + 1,
+                    preset.name,
+                    if preset
+                        .effect
+                        .validate(app.get_fx_preset_block() as usize)
+                        .is_err()
+                    {
+                        " (incompatible)"
+                    } else {
+                        ""
+                    }
+                ),
+                None => format!("{}: (empty)", index + 1),
+            };
+            slint::SharedString::from(label)
+        })
+        .collect::<alloc::vec::Vec<_>>();
+    app.set_fx_presets(slint::ModelRc::new(slint::VecModel::from(presets)));
     let slot = app.get_performance_edit_slot();
     let scenes = crate::performance::scenes(slot as usize)
         .into_iter()
@@ -70,6 +95,7 @@ fn naming(app: &AppWindow, action: i32, bank: i32, text: &str) {
         match action {
             1 => "New bank",
             3 => "Store current sound as scene",
+            4 => "Store selected block as FX preset",
             _ => "Rename bank",
         }
         .into(),
@@ -80,6 +106,76 @@ fn naming(app: &AppWindow, action: i32, bank: i32, text: &str) {
 }
 
 pub(super) fn register(app: &AppWindow) {
+    app.on_fx_presets_opened({
+        let weak = app.as_weak();
+        move || {
+            if let Some(app) = weak.upgrade() {
+                app.set_fx_preset_block(
+                    super::fx_block_for_chain(app.get_chain()).unwrap_or(0) as i32
+                );
+                app.set_fx_presets_open(true);
+                refresh(&app, true);
+                if crate::link::connected() {
+                    crate::link::push_cmd(Cmd::PerformanceFxRefresh);
+                }
+            }
+        }
+    });
+    app.on_fx_preset_block_selected({
+        let weak = app.as_weak();
+        move |block| {
+            if let Some(app) = weak.upgrade() {
+                app.set_fx_preset_block(block);
+                refresh(&app, true);
+            }
+        }
+    });
+    app.on_fx_preset_recall({
+        let weak = app.as_weak();
+        move |index| {
+            if let Some(app) = weak.upgrade() {
+                if !crate::link::connected() {
+                    crate::performance::report("Connect the Nano before recalling FX");
+                    return;
+                }
+                crate::link::push_cmd(Cmd::FxPresetRecall {
+                    index: index as u8,
+                    block: app.get_fx_preset_block() as u8,
+                });
+            }
+        }
+    });
+    app.on_fx_preset_store({
+        let weak = app.as_weak();
+        move |index| {
+            if let Some(app) = weak.upgrade() {
+                if !crate::link::connected() {
+                    crate::performance::report("Connect the Nano before storing FX");
+                    return;
+                }
+                app.set_fx_preset_edit(index);
+                let name = crate::performance::fx_presets()
+                    .get(index as usize)
+                    .and_then(Option::as_ref)
+                    .map_or_else(|| format!("FX {}", index + 1), |preset| preset.name.clone());
+                naming(&app, 4, -1, &name);
+            }
+        }
+    });
+    app.on_fx_preset_delete({
+        let weak = app.as_weak();
+        move |index| {
+            if let Some(app) = weak.upgrade() {
+                app.set_fx_preset_edit(index);
+                confirmation(
+                    &app,
+                    7,
+                    "Delete FX preset?",
+                    "Only this controller FX preset is removed.",
+                );
+            }
+        }
+    });
     app.on_performance_opened({
         let weak = app.as_weak();
         move || {
@@ -228,6 +324,17 @@ pub(super) fn register(app: &AppWindow) {
 pub(super) fn accept_name(app: &AppWindow, name: &str) {
     let action = app.get_performance_name_action();
     app.set_performance_name_action(0);
+    if action == 4 {
+        let existing = crate::performance::fx_presets()
+            .get(app.get_fx_preset_edit() as usize)
+            .is_some_and(Option::is_some);
+        if existing {
+            confirmation(app, 6, "Replace FX preset?", "Replace this shelf slot with the selected block's current model, parameters and bypass.");
+        } else {
+            capture_fx(app);
+        }
+        return;
+    }
     if action == 3 {
         let existing = crate::performance::scenes(app.get_performance_edit_slot() as usize)
             .get(app.get_performance_edit_scene() as usize)
@@ -256,9 +363,24 @@ fn confirmation(app: &AppWindow, action: i32, title: &str, message: &str) {
     app.set_performance_confirm_action(action);
     app.set_confirm_title(title.into());
     app.set_confirm_message(message.into());
-    app.set_confirm_label(if action == 4 { "Delete" } else { "Replace" }.into());
+    app.set_confirm_label(
+        if action == 4 || action == 7 {
+            "Delete"
+        } else {
+            "Replace"
+        }
+        .into(),
+    );
     app.set_confirm_danger(true);
     app.set_confirm_open(true);
+}
+
+fn capture_fx(app: &AppWindow) {
+    crate::link::push_cmd(Cmd::FxPresetCapture {
+        index: app.get_fx_preset_edit() as u8,
+        block: app.get_fx_preset_block() as u8,
+        name: app.get_kbd_text().as_str().into(),
+    });
 }
 
 fn capture_scene(app: &AppWindow) {
@@ -294,6 +416,10 @@ pub(super) fn confirm(app: &AppWindow) -> bool {
     let action = app.get_performance_confirm_action();
     app.set_performance_confirm_action(0);
     match action {
+        6 => capture_fx(app),
+        7 => outcome(crate::performance::clear_fx(
+            app.get_fx_preset_edit() as usize
+        )),
         3 => capture_scene(app),
         4 => outcome(crate::performance::clear_scene(
             app.get_performance_edit_slot() as usize,

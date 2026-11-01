@@ -26,9 +26,11 @@ static OUT: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<Vec<u8>>>> =
 static CMDS: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<Cmd>>> =
     Mutex::new(RefCell::new(VecDeque::new()));
 
-pub(crate) const COMMAND_CAPACITY: usize = 384;
+pub(crate) const COMMAND_CAPACITY: usize = 512;
 
 pub enum Cmd {
+    FxPresetRecall { index: u8, block: u8 },
+    FxPresetCapture { index: u8, block: u8, name: alloc::string::String },
     SceneRecall(u8),
     SceneCapture { bank: u8, slot: u8, scene: u8, name: alloc::string::String },
     PerformanceRefresh,

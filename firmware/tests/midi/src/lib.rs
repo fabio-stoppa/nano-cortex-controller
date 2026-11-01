@@ -292,6 +292,46 @@ mod tests {
     }
 
     #[test]
+    fn fx_shelf_persists_fixed_slots_without_moving_midi_targets() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        *settings::PERFORMANCE.lock().unwrap() = None;
+        performance::load();
+        fx::SNAPSHOT.with(|snapshot| {
+            let mut snapshot = snapshot.borrow_mut();
+            *snapshot = types::NanoFxState::reset_with_ids();
+            snapshot.valid = true;
+            for block in &mut snapshot.blocks {
+                block.valid = true;
+            }
+        });
+        performance::capture_fx(0, 0, "Bypass").unwrap();
+        performance::capture_fx(31, 4, "Last").unwrap();
+        let before = performance::export_json().unwrap();
+        settings::FAIL.store(true, Ordering::Relaxed);
+        assert!(performance::clear_fx(31).is_err());
+        assert_eq!(performance::export_json().unwrap(), before);
+        settings::FAIL.store(false, Ordering::Relaxed);
+        assert!(performance::capture_fx(1, 0, "bypass").is_err());
+        performance::clear_fx(0).unwrap();
+        performance::load();
+        assert!(performance::fx_presets()[0].is_none());
+        assert_eq!(performance::fx_presets()[31].as_ref().unwrap().name, "Last");
+        assert!(matches!(
+            midi::command(267, 127, false),
+            Some(link::Cmd::FxPresetRecall { index: 0, block: 0 })
+        ));
+        assert!(matches!(
+            midi::command(426, 127, false),
+            Some(link::Cmd::FxPresetRecall {
+                index: 31,
+                block: 4
+            })
+        ));
+        assert!(link::COMMAND_CAPACITY > midi::ACTION_COUNT);
+    }
+
+    #[test]
     fn shared_learn_clear_and_relearn_preserve_other_targets() {
         let _guard = LOCK.lock().unwrap();
         reset();
@@ -465,7 +505,7 @@ mod tests {
     fn expanded_actions_and_endpoints_keep_legacy_indices() {
         let _guard = LOCK.lock().unwrap();
         reset();
-        assert_eq!(midi::ACTION_COUNT, 267);
+        assert_eq!(midi::ACTION_COUNT, 427);
         assert_eq!(midi::action_name(13), "Pre FX 1 knob 1");
         assert_eq!(midi::action_name(33), "Amp gain");
         assert_eq!(midi::action_name(41), "Cab low-pass");

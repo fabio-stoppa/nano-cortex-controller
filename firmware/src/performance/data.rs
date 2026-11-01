@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub const MAX_BANKS: usize = 8;
 pub const SLOTS: usize = 4;
 pub const SCENES: usize = 4;
+pub const FX_PRESETS: usize = 32;
 pub const MAX_JSON: usize = 512 * 1024;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -12,6 +13,16 @@ pub struct Config {
     pub format: String,
     pub version: u8,
     pub banks: Vec<Bank>,
+    #[serde(default)]
+    pub fx_presets: [Option<FxPreset>; FX_PRESETS],
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FxPreset {
+    pub name: String,
+    pub source_block: u8,
+    pub effect: Effect,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -97,6 +108,7 @@ impl Default for Config {
             format: String::from("nano-performance"),
             version: 1,
             banks: Vec::new(),
+            fx_presets: Default::default(),
         }
     }
 }
@@ -122,6 +134,28 @@ impl Config {
         }
         if self.banks.len() > MAX_BANKS {
             return Err("At most 8 banks are supported");
+        }
+        for (index, preset) in self
+            .fx_presets
+            .iter()
+            .enumerate()
+            .filter_map(|(index, preset)| preset.as_ref().map(|preset| (index, preset)))
+        {
+            let error = name_error(&preset.name);
+            if !error.is_empty() {
+                return Err(error);
+            }
+            if preset.source_block >= 5 {
+                return Err("Invalid FX preset source block");
+            }
+            preset.effect.validate(usize::from(preset.source_block))?;
+            if self.fx_presets[..index]
+                .iter()
+                .flatten()
+                .any(|old| old.name.eq_ignore_ascii_case(&preset.name))
+            {
+                return Err("FX preset names must be unique");
+            }
         }
         for (index, bank) in self.banks.iter().enumerate() {
             let error = name_error(&bank.name);

@@ -180,10 +180,39 @@ pub enum Progress {
 
 pub struct Plan {
     steps: VecDeque<Step>,
-    snapshot: Snapshot,
+    target: Target,
     preset: u8,
     readback: Option<(u32, Option<u32>)>,
     deadline: i64,
+}
+
+enum Target {
+    Scene(Snapshot),
+    Effect { block: usize, effect: Effect },
+}
+
+fn enqueue_effect(steps: &mut VecDeque<Step>, block: usize, effect: &Effect) {
+    if !effect.model.is_empty() {
+        steps.push_back(Step::Write(Cmd::FxModelId {
+            block: block as u8,
+            id: effect.model.clone(),
+        }));
+        steps.push_back(Step::ModelReady {
+            block,
+            effect: effect.clone(),
+        });
+        for (wire, &norm) in effect.parameters.iter().enumerate() {
+            steps.push_back(Step::Write(Cmd::Param(ParamWrite {
+                block: block as u8,
+                wire: wire as u8,
+                norm,
+            })));
+        }
+    }
+    steps.push_back(Step::Write(Cmd::Block {
+        slot: block as u8,
+        on: effect.enabled,
+    }));
 }
 
 impl Plan {
@@ -191,27 +220,7 @@ impl Plan {
         snapshot.validate()?;
         let mut steps = VecDeque::new();
         for (block, effect) in snapshot.effects.iter().enumerate() {
-            if !effect.model.is_empty() {
-                steps.push_back(Step::Write(Cmd::FxModelId {
-                    block: block as u8,
-                    id: effect.model.clone(),
-                }));
-                steps.push_back(Step::ModelReady {
-                    block,
-                    effect: effect.clone(),
-                });
-                for (wire, &norm) in effect.parameters.iter().enumerate() {
-                    steps.push_back(Step::Write(Cmd::Param(ParamWrite {
-                        block: block as u8,
-                        wire: wire as u8,
-                        norm,
-                    })));
-                }
-            }
-            steps.push_back(Step::Write(Cmd::Block {
-                slot: block as u8,
-                on: effect.enabled,
-            }));
+            enqueue_effect(&mut steps, block, effect);
         }
         for (knob, &raw) in snapshot.amp.iter().enumerate() {
             steps.push_back(Step::Write(Cmd::AmpKnob {
@@ -240,7 +249,28 @@ impl Plan {
         steps.push_back(Step::Write(Cmd::Gate(snapshot.gate_on)));
         Ok(Self {
             steps,
-            snapshot,
+            target: Target::Scene(snapshot),
+            preset,
+            readback: None,
+            deadline: now + 30_000_000,
+        })
+    }
+
+    pub fn effect(
+        effect: Effect,
+        block: usize,
+        preset: u8,
+        now: i64,
+    ) -> Result<Self, &'static str> {
+        if block >= 5 {
+            return Err("Invalid FX preset target block");
+        }
+        effect.validate(block)?;
+        let mut steps = VecDeque::new();
+        enqueue_effect(&mut steps, block, &effect);
+        Ok(Self {
+            steps,
+            target: Target::Effect { block, effect },
             preset,
             readback: None,
             deadline: now + 30_000_000,
@@ -285,8 +315,15 @@ impl Plan {
             }
             Some((generation, Some(cab_generation)))
                 if generation != view.generation
-                    && (self.snapshot.cab.is_none() || view.cab_generation != cab_generation)
-                    && self.snapshot.matches(view) =>
+                    && match &self.target {
+                        Target::Scene(snapshot) => {
+                            (snapshot.cab.is_none() || view.cab_generation != cab_generation)
+                                && snapshot.matches(view)
+                        }
+                        Target::Effect { block, effect } => {
+                            effect.matches(&view.effects.blocks[*block])
+                        }
+                    } =>
             {
                 Progress::Complete
             }
@@ -414,6 +451,38 @@ mod tests {
         view.effects.blocks[0].params[0].normalized = snapshot.effects[0].parameters[0];
         assert!(matches!(plan.poll(&view, 8), Progress::Complete));
         assert!(matches!(plan.poll(&view, 30_000_000), Progress::Failed(_)));
+    }
+
+    #[test]
+    fn fx_recall_only_writes_compatible_target_and_verifies_it_independently() {
+        let mut view = fixture();
+        loaded_model(&mut view, 0);
+        let effect = Effect::capture(&view.effects.blocks[0], 0).unwrap();
+        let incompatible = (0..5)
+            .find(|&block| effect.validate(block).is_err())
+            .expect("Pre effect needs an incompatible block");
+        assert!(Plan::effect(effect.clone(), incompatible, 1, 0).is_err());
+        assert!(Plan::effect(effect.clone(), 5, 1, 0).is_err());
+        let mut plan = Plan::effect(effect, 0, 1, 0).unwrap();
+        loop {
+            match plan.poll(&view, 1) {
+                Progress::Write(Cmd::PerformanceRefresh) => break,
+                Progress::Write(Cmd::FxModelId { block: 0, .. })
+                | Progress::Write(Cmd::Param(ParamWrite { block: 0, .. }))
+                | Progress::Write(Cmd::Block { slot: 0, .. }) => {}
+                _ => panic!("FX preset wrote unrelated controls"),
+            }
+        }
+        view.generation += 1;
+        assert!(matches!(
+            plan.poll(&view, 2),
+            Progress::Write(Cmd::PerformanceFxRefresh)
+        ));
+        view.amp.valid = false;
+        view.effects.blocks[1].valid = false;
+        assert!(matches!(plan.poll(&view, 3), Progress::Complete));
+        view.preset = 2;
+        assert!(matches!(plan.poll(&view, 4), Progress::Failed(_)));
     }
 
     #[test]

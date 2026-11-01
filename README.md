@@ -120,6 +120,14 @@ Timeout/disconnect errors warn that sound may be partly updated; play the origin
 bank slot to recover. Actual sound recall still requires hardware validation.
 
 The USB drive exposes `performance.json` beside `midi.json` (512 KiB maximum).
+**Banks → FX presets** opens a 32-slot shelf. Choose the source/target block using
+the five buttons, then **Store** its current model, parameters and bypass with a
+name. **Play** recalls into that compatible block only; amp/cab/gate and other FX
+are unchanged. Incompatible models are labelled and refused. Replacing/deleting
+asks for confirmation. Slots stay fixed when deleted, preserving the MIDI Learn
+actions for each shelf-slot/target-block pair. FX presets share `performance.json`
+and the scene restore/readback safeguards; they never save over Nano presets.
+
 Both files must remain on the drive, and both are validated before saving on eject.
 An invalid file leaves both configurations unchanged. Records are committed
 independently; if a flash error occurs after performance saves but before MIDI saves,
