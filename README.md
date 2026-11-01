@@ -163,6 +163,13 @@ panic while retaining partial redraws and the existing touch mapping.
 
 ## Screen flicker and scan diagnostics
 
+Bluetooth HCI commands use a controller-local serialized adapter rather than
+bt-hci's `ExternalController` command-slot `RefCell`. Command responses are copied
+into owned buffers, command credits are respected, and a cancelled command's late
+response is drained before sending the next command. ACL traffic remains independent.
+This removes the command-slot borrow-panic path seen during initial connection;
+the boot/connect behavior still needs verification on the 4.3B.
+
 The RGB panel is scanned from six 10-line DRAM strips that an interrupt refills from the PSRAM framebuffer (`firmware/src/bounce.rs`). When that interrupt ran late, usually during BLE traffic, a strip was scanned with stale lines and the screen flickered.
 
 Fixes:

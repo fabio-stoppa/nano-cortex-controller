@@ -16,6 +16,7 @@ mod clock;
 mod deadline;
 mod float;
 mod fx;
+mod hci;
 mod link;
 mod memsafe;
 mod midi;
@@ -78,7 +79,7 @@ async fn main(_spawner: Spawner) {
         }
     };
     log::info!("ble controller up");
-    let controller = bt_hci::controller::ExternalController::<_, 20>::new(connector);
+    let controller = hci::SerialController::new(connector);
     select(ble::run(controller, &mut board), usb_storage::requested()).await;
     usb_storage::run(rest.usb, &mut board).await;
 }

@@ -2,6 +2,8 @@
 
 extern crate alloc;
 
+#[path = "../../../src/hci.rs"]
+mod hci;
 #[path = "../../../src/fx/catalog.rs"]
 pub mod catalog;
 #[path = "../../../src/link.rs"]
