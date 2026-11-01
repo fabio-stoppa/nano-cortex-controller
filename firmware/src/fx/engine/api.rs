@@ -148,6 +148,18 @@ pub fn nano_fx_begin_param_refresh() {
     s.begin_refresh_timer.start_once(1);
 }
 
+pub fn nano_fx_refresh_all() {
+    let blocks = fx().fx.blocks;
+    for (index, block) in blocks.iter().enumerate() {
+        if block.valid && !block.model.is_null() && block.param_count > 0 {
+            for parameter in &mut fx().fx.blocks[index].params[..usize::from(block.param_count)] {
+                parameter.valid = false;
+            }
+            super::refresh::enqueue_param_refresh(index as u32);
+        }
+    }
+}
+
 /// Forget UI/BLE model write asserts so the next preset dump can replace slots.
 pub fn nano_fx_clear_model_trust() {
     clear_model_write_trust();

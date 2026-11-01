@@ -14,7 +14,7 @@ pub fn poll() {
 
 pub use catalog::NANO_FX_CATALOG;
 pub use engine::{
-    nano_fx_begin_param_refresh, nano_fx_clear_model_trust, nano_fx_dump_has_gate_fields,
+    nano_fx_begin_param_refresh, nano_fx_refresh_all, nano_fx_clear_model_trust, nano_fx_dump_has_gate_fields,
     nano_fx_dump_has_model_fields, nano_fx_feed_c305, nano_fx_focus_from_ui, nano_fx_gate_ui_ready,
     nano_fx_get, nano_fx_note_preset_change, nano_fx_on_amount_knob, nano_fx_on_live_param,
     nano_fx_params_sync_ready, nano_fx_params_ui_held,

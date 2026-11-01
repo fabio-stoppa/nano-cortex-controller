@@ -35,7 +35,8 @@ const PRESET_START: usize = MODEL_START + BLOCKS * 2;
 const CAPTURE_START: usize = PRESET_START + 64;
 const MUTE_START: usize = CAPTURE_START + 25;
 const BANK_START: usize = MUTE_START + 6;
-pub const ACTION_COUNT: usize = BANK_START + 14;
+const SCENE_START: usize = BANK_START + 14;
+pub const ACTION_COUNT: usize = SCENE_START + 4;
 
 const BLOCK_NAMES: [&str; BLOCKS] = [
     "Pre FX 1",
@@ -154,8 +155,10 @@ pub fn action_name(index: usize) -> String {
         String::from(if index == BANK_START { "Next bank" } else { "Previous bank" })
     } else if index < BANK_START + 6 {
         format!("Recall bank slot {}", index - BANK_START - 1)
-    } else {
+    } else if index < SCENE_START {
         format!("Select bank {}", index - BANK_START - 5)
+    } else {
+        format!("Recall scene {}", index - SCENE_START + 1)
     }
 }
 
@@ -601,8 +604,10 @@ pub fn command(index: usize, value: u8, continuous: bool) -> Option<Cmd> {
         Some(Cmd::BankStep(if index == BANK_START { 1 } else { -1 }))
     } else if index < BANK_START + 6 {
         Some(Cmd::BankSlot((index - BANK_START - 2) as u8))
-    } else {
+    } else if index < SCENE_START {
         Some(Cmd::BankAt((index - BANK_START - 6) as u8))
+    } else {
+        Some(Cmd::SceneRecall((index - SCENE_START) as u8))
     }
 }
 

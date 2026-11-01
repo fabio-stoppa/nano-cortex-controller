@@ -419,13 +419,20 @@ mod tests {
             for (x, y) in [(5, 5), (5, 100), (5, 470), (795, 240), (400, 476)] {
                 let pixel = pixels[y * 800 + x].0;
                 if popup == 2 {
-                    assert!(pixel >> 11 < gray >> 11, "confirm backdrop not dimmed at {x},{y}");
+                    assert!(
+                        pixel >> 11 < gray >> 11,
+                        "confirm backdrop not dimmed at {x},{y}"
+                    );
                 } else {
                     assert_eq!(pixel, gray, "popup {popup} not fullscreen at {x},{y}");
                 }
             }
             if popup == 2 {
-                assert_eq!(pixels[240 * 800 + 400].0, gray, "confirm card not main gray");
+                assert_eq!(
+                    pixels[240 * 800 + 400].0,
+                    gray,
+                    "confirm card not main gray"
+                );
             }
             let position = LogicalPosition::new(5.0, 470.0);
             window.dispatch_event(WindowEvent::PointerPressed {
@@ -501,7 +508,6 @@ mod tests {
                 assert_eq!(pixels[215 * 800 + 175].0, cell, "amp cell not lightened");
                 app.set_page(1);
             }
-
         }
         app.set_fx_n0("-".into());
         app.set_page(0);
@@ -525,10 +531,12 @@ mod tests {
         let click = |x, y| {
             let position = LogicalPosition::new(x, y);
             window.dispatch_event(WindowEvent::PointerPressed {
-                position, button: PointerEventButton::Left,
+                position,
+                button: PointerEventButton::Left,
             });
             window.dispatch_event(WindowEvent::PointerReleased {
-                position, button: PointerEventButton::Left,
+                position,
+                button: PointerEventButton::Left,
             });
         };
         for (width, height, portrait) in [(800, 480, false), (480, 800, true)] {
@@ -555,14 +563,25 @@ mod tests {
                 renderer.render(&mut pixels, width as usize);
                 renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
             });
-            let last_bottom = (0..height as usize).rev().find(|&y| {
-                (0..width as usize).any(|x| pixels[y * width as usize + x].0 != previous[y * width as usize + x].0)
-            }).expect("Last MIDI message is not rendered");
+            let last_bottom = (0..height as usize)
+                .rev()
+                .find(|&y| {
+                    (0..width as usize).any(|x| {
+                        pixels[y * width as usize + x].0 != previous[y * width as usize + x].0
+                    })
+                })
+                .expect("Last MIDI message is not rendered");
             let grey = ((0x90u16 >> 3) << 11) | ((0x90u16 >> 2) << 5) | (0x90u16 >> 3);
-            let help_top = (last_bottom + 1..last_bottom + 40).find(|&y| {
-                (14..width as usize - 140).any(|x| pixels[y * width as usize + x].0 == grey)
-            }).expect("Shared-message help is not below the last message");
-            assert!(help_top - last_bottom <= 17, "MIDI header gap is {} pixels", help_top - last_bottom);
+            let help_top = (last_bottom + 1..last_bottom + 40)
+                .find(|&y| {
+                    (14..width as usize - 140).any(|x| pixels[y * width as usize + x].0 == grey)
+                })
+                .expect("Shared-message help is not below the last message");
+            assert!(
+                help_top - last_bottom <= 17,
+                "MIDI header gap is {} pixels",
+                help_top - last_bottom
+            );
             click(width as f32 - 70.0, last_bottom as f32 + 6.0);
             assert!(app.get_confirm_open());
             assert_eq!(app.get_confirm_title(), "Clear all MIDI bindings?");
@@ -585,12 +604,18 @@ mod tests {
                     bottom = bottom.max(i / width as usize);
                 }
             }
-            assert!(right > left && bottom > top, "Missing destructive confirmation button");
+            assert!(
+                right > left && bottom > top,
+                "Missing destructive confirmation button"
+            );
             let x = (left + right) as f32 / 2.0;
             let y = (top + bottom) as f32 / 2.0;
             let before = cleared.get();
             click(5.0, 5.0);
-            assert!(app.get_confirm_open(), "Outside tap must not confirm or dismiss");
+            assert!(
+                app.get_confirm_open(),
+                "Outside tap must not confirm or dismiss"
+            );
             click(width as f32 - x, y);
             assert!(!app.get_confirm_open(), "Cancel must close confirmation");
             assert_eq!(cleared.get(), before, "Cancel cleared MIDI bindings");
@@ -605,7 +630,11 @@ mod tests {
             click(x, y);
             assert!(!app.get_confirm_open());
             assert_eq!(cleared.get(), before + 1);
-            assert_eq!(preset_action.get(), 0, "MIDI confirmation triggered preset operation");
+            assert_eq!(
+                preset_action.get(),
+                0,
+                "MIDI confirmation triggered preset operation"
+            );
         }
         app.set_settings_open(false);
         app.set_settings_tab(0);
@@ -615,14 +644,28 @@ mod tests {
 
     fn check_bank_screen(app: &AppWindow, window: &MinimalSoftwareWindow) {
         let additions = Rc::new(std::cell::Cell::new(0));
+        let stores = Rc::new(std::cell::Cell::new(0));
+        app.on_performance_scene_store({
+            let stores = stores.clone();
+            move |index| {
+                assert_eq!(index, 0);
+                stores.set(stores.get() + 1);
+            }
+        });
         app.on_performance_add({
             let additions = additions.clone();
             move || additions.set(additions.get() + 1)
         });
         let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
-        app.set_performance_banks(slint::ModelRc::new(slint::VecModel::from(vec!["Set 1".into(), "Set 2".into()])));
+        app.set_performance_banks(slint::ModelRc::new(slint::VecModel::from(vec![
+            "Set 1".into(),
+            "Set 2".into(),
+        ])));
         app.set_performance_slots(slint::ModelRc::new(slint::VecModel::from(vec![
-            "1: 4 Clean".into(), "2: 8 Lead".into(), "3: (unassigned)".into(), "4: (unassigned)".into(),
+            "1: 4 Clean".into(),
+            "2: 8 Lead".into(),
+            "3: (unassigned)".into(),
+            "4: (unassigned)".into(),
         ])));
         app.set_performance_notice("".into());
         for (width, height, portrait) in [(800, 480, false), (480, 800, true)] {
@@ -639,9 +682,43 @@ mod tests {
             });
             let before = additions.get();
             let position = LogicalPosition::new(100.0, 116.0);
-            window.dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
-            window.dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
-            assert_eq!(additions.get(), before + 1, "Banks screen is covered or Add is inaccessible");
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+            assert_eq!(
+                additions.get(),
+                before + 1,
+                "Banks screen is covered or Add is inaccessible"
+            );
+            app.set_performance_edit_slot(0);
+            app.set_performance_scenes(slint::ModelRc::new(slint::VecModel::from(vec![
+                "1: Clean".into(),
+                "2: Lead".into(),
+                "3: (empty)".into(),
+                "4: (empty)".into(),
+            ])));
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.render(&mut pixels, width as usize);
+            });
+            let before = stores.get();
+            let position = LogicalPosition::new(width as f32 - 160.0, 122.0);
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+            assert_eq!(stores.get(), before + 1, "Scene Store is inaccessible");
+            app.set_performance_edit_slot(-1);
         }
         app.set_performance_open(false);
         app.set_connecting(false);
@@ -670,10 +747,12 @@ mod tests {
         let click = |x, y| {
             let position = LogicalPosition::new(x, y);
             window.dispatch_event(WindowEvent::PointerPressed {
-                position, button: PointerEventButton::Left,
+                position,
+                button: PointerEventButton::Left,
             });
             window.dispatch_event(WindowEvent::PointerReleased {
-                position, button: PointerEventButton::Left,
+                position,
+                button: PointerEventButton::Left,
             });
         };
         for (width, height, portrait) in [(800, 480, false), (480, 800, true)] {
@@ -694,7 +773,11 @@ mod tests {
             });
             let starts_before = started.get();
             click(width as f32 - 62.0, 28.0);
-            assert_eq!(started.get(), starts_before + 1, "Offline USB entry is inaccessible");
+            assert_eq!(
+                started.get(),
+                starts_before + 1,
+                "Offline USB entry is inaccessible"
+            );
             app.set_usb_storage_open(true);
             app.set_usb_storage_finished(false);
             app.set_usb_storage_message("Edit midi.json, then safely eject the drive.".into());
@@ -705,9 +788,17 @@ mod tests {
                 renderer.render(&mut pixels, width as usize);
                 renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
             });
-            assert_eq!(pixels[5 * width as usize + 5].0, background, "USB screen covered by connecting overlay");
+            assert_eq!(
+                pixels[5 * width as usize + 5].0,
+                background,
+                "USB screen covered by connecting overlay"
+            );
             click(width as f32 - 62.0, 28.0);
-            assert_eq!(started.get(), starts_before + 1, "Underlying connecting controls still active");
+            assert_eq!(
+                started.get(),
+                starts_before + 1,
+                "Underlying connecting controls still active"
+            );
             let before = cancelled.get();
             click(width as f32 / 2.0, height as f32 - 50.0);
             assert_eq!(cancelled.get(), before + 1);
@@ -739,8 +830,16 @@ mod tests {
         window.request_redraw();
         render(window, &mut pixels, RenderingRotation::NoRotation, true);
         // Card spans x 130..452: no outline means its edge is plain black.
-        assert_eq!(pixels[85 * 800 + 130].0, 0, "capture card still has an outline");
-        assert_eq!(pixels[85 * 800 + 452].0, 0, "capture card still has an outline");
+        assert_eq!(
+            pixels[85 * 800 + 130].0,
+            0,
+            "capture card still has an outline"
+        );
+        assert_eq!(
+            pixels[85 * 800 + 452].0,
+            0,
+            "capture card still has an outline"
+        );
         let mut lines = 0;
         let mut previous_ink = false;
         for y in 64..136 {
@@ -794,9 +893,7 @@ mod tests {
                     assert_eq!(rgb.0.max(rgb.1).max(rgb.2), 248);
                     rgb
                 };
-                let expected = ((r as u16 >> 3) << 11)
-                    | ((g as u16 >> 2) << 5)
-                    | (b as u16 >> 3);
+                let expected = ((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3);
                 for active in [true, false] {
                     app.set_on_0(active);
                     app.set_on_1(active);

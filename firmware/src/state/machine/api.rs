@@ -240,6 +240,7 @@ fn handle_editor_message(data: &[u8]) -> bool {
             match parsers::parse_cab_settings(payload) {
                 Some(settings) => {
                     s.cab_settings = settings;
+                    crate::state::cab_snapshot_completed();
                     crate::screen::nano_ui_set_cab_settings(s.cab_settings_slot, &settings);
                 }
                 None => warn!(
@@ -252,6 +253,7 @@ fn handle_editor_message(data: &[u8]) -> bool {
             return true;
         }
         nano_wire::editor::MSG_PRESET_SLOTS => {
+            crate::state::preset_ack_completed();
             let mut ack = [0u8; 16];
             let n = builders::preset_change_ack(&mut ack);
             if n > 0 && ble_write_c304(&c_label("Preset change acknowledgment"), &ack[..n]) {
@@ -273,6 +275,13 @@ fn handle_editor_message(data: &[u8]) -> bool {
     }
 
     if let Some((response, status)) = nano_wire::editor::response_ack(data) {
+        if response == nano_wire::editor::MSG_PRESET_SLOTS_RESPONSE {
+            if status == Some(1) {
+                crate::state::preset_ack_completed();
+            } else if status.is_some() {
+                crate::performance::cancel("Nano rejected preset selection");
+            }
+        }
         let label = match response {
             nano_wire::editor::MSG_PRESET_SLOTS_RESPONSE => "Preset change",
             nano_wire::editor::MSG_SETTINGS_WRITE_RESPONSE => "Settings write",
@@ -480,6 +489,7 @@ fn feed_c305(data: &[u8]) {
     }
 
     if len >= 2 && data[0] == 0x10 && data[1] == 0xC0 {
+        crate::state::preset_ack_completed();
         if tuner_live {
             debug!(target: TAG, "C305 diverted (preset ACK) len={len}");
         } else {

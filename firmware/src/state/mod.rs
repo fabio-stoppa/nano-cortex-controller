@@ -3,6 +3,16 @@
 
 pub mod machine;
 
+static SNAPSHOT_GENERATION: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static CAB_GENERATION: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static PRESET_ACK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+pub fn preset_ack_generation() -> u32 { PRESET_ACK.load(core::sync::atomic::Ordering::Relaxed) }
+pub(crate) fn preset_ack_completed() { PRESET_ACK.fetch_add(1, core::sync::atomic::Ordering::Relaxed); }
+pub fn cab_generation() -> u32 { CAB_GENERATION.load(core::sync::atomic::Ordering::Relaxed) }
+pub(crate) fn cab_snapshot_completed() { CAB_GENERATION.fetch_add(1, core::sync::atomic::Ordering::Relaxed); }
+pub fn snapshot_generation() -> u32 { SNAPSHOT_GENERATION.load(core::sync::atomic::Ordering::Relaxed) }
+pub(crate) fn snapshot_completed() { SNAPSHOT_GENERATION.fetch_add(1, core::sync::atomic::Ordering::Relaxed); }
+
 pub fn poll() {
     machine::poll();
 }

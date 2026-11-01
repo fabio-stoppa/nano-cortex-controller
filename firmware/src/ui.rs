@@ -424,11 +424,7 @@ fn ensure() {
                 2 => crate::link::push_cmd(Cmd::CabAt(index as u16)),
                 3 if index <= 255 => crate::link::push_cmd(Cmd::PresetAt(index as u8)),
                 kind @ (4 | 5) if index <= 255 => choose_target(&app, kind, index as u8),
-                6 if (1..=64).contains(&index) => {
-                    if let Err(error) = crate::performance::assign_slot(app.get_performance_assign_slot() as usize, Some(index as u8)) {
-                        crate::performance::report(error);
-                    }
-                }
+                6 if (0..=64).contains(&index) => performance::assign(&app, index),
                 0 if index <= 255 => {
                     let Some(block) = fx_block_for_chain(app.get_chain()) else {
                         return;
@@ -497,6 +493,7 @@ fn ensure() {
         let weak = weak.clone();
         move || {
             if let Some(app) = weak.upgrade() {
+                if performance::confirm(&app) { return; }
                 let bank = app.get_performance_delete_bank();
                 if bank >= 0 {
                     app.set_performance_delete_bank(-1);

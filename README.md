@@ -107,6 +107,18 @@ deletion asks for confirmation and never deletes Nano presets.
 
 MIDI Learn includes next/previous bank, four bank-slot recalls and direct bank
 selection. Existing action IDs remain unchanged. Banks persist in controller flash.
+Each assigned slot has four named **Scenes**: play the slot, adjust the sound and
+tap **Store**. Replacing/deleting scenes, or changing an assignment that has scenes,
+asks for confirmation. Scene recall also has four MIDI Learn actions.
+
+Scenes restore amp controls, capture volume when available, active cab EQ/level,
+gate, and all five FX models, parameters and bypass states. Library selections,
+expression assignments, tempo and global USB/mute settings are not scene data.
+Recall is transient: it never saves over the Nano preset. The controller waits
+for model/parameter loading and fresh readback before reporting **Recall verified**.
+Timeout/disconnect errors warn that sound may be partly updated; play the original
+bank slot to recover. Actual sound recall still requires hardware validation.
+
 The USB drive exposes `performance.json` beside `midi.json` (512 KiB maximum).
 Both files must remain on the drive, and both are validated before saving on eject.
 An invalid file leaves both configurations unchanged. Records are committed

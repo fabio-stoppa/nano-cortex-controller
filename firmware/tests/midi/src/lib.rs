@@ -2,14 +2,14 @@
 
 extern crate alloc;
 
-#[path = "../../../src/hci.rs"]
-mod hci;
-#[path = "../../../src/performance.rs"]
-mod performance;
-#[path = "../../../src/syncutil.rs"]
-mod syncutil;
 #[path = "../../../src/fx/catalog.rs"]
 pub mod catalog;
+#[path = "../../../src/usb_storage/disk.rs"]
+mod disk;
+#[path = "../../../src/hci.rs"]
+mod hci;
+#[path = "../../../src/settings/json_record.rs"]
+mod json_record;
 #[path = "../../../src/link.rs"]
 mod link;
 #[path = "../../../src/midi.rs"]
@@ -20,10 +20,10 @@ mod midi_record;
 pub mod models;
 #[path = "../../../src/fx/params.rs"]
 pub mod params;
-#[path = "../../../src/usb_storage/disk.rs"]
-mod disk;
-#[path = "../../../src/settings/json_record.rs"]
-mod json_record;
+#[path = "../../../src/performance.rs"]
+mod performance;
+#[path = "../../../src/syncutil.rs"]
+mod syncutil;
 #[path = "../../../src/fx/types.rs"]
 pub mod types;
 #[path = "../../../src/fx/util.rs"]
@@ -56,6 +56,47 @@ mod clock {
     }
 }
 
+mod tuner {
+    pub fn nano_tuner_is_active() -> bool {
+        false
+    }
+}
+
+mod state {
+    use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+    use nano_wire::types::{Amp, CabSettings, NanoAmpC};
+    pub static PRESET: AtomicU8 = AtomicU8::new(1);
+    pub static GENERATION: AtomicU32 = AtomicU32::new(1);
+    pub static ACK: AtomicU32 = AtomicU32::new(0);
+    std::thread_local! {
+        pub static AMP: core::cell::RefCell<NanoAmpC> = core::cell::RefCell::new(NanoAmpC::from(&Amp::default()));
+    }
+    pub fn nano_state_snapshot_amp(out: &mut NanoAmpC) -> bool {
+        AMP.with(|amp| {
+            *out = *amp.borrow();
+            out.valid
+        })
+    }
+    pub fn nano_state_cab_settings_snapshot() -> (u8, CabSettings) {
+        (0, CabSettings::default())
+    }
+    pub fn snapshot_generation() -> u32 {
+        GENERATION.load(Ordering::Relaxed)
+    }
+    pub fn cab_generation() -> u32 {
+        0
+    }
+    pub fn preset_ack_generation() -> u32 {
+        ACK.load(Ordering::Relaxed)
+    }
+    pub fn nano_state_preset_slot() -> u8 {
+        PRESET.load(Ordering::Relaxed)
+    }
+    pub fn nano_rx_mode_get() -> u32 {
+        0
+    }
+}
+
 mod settings {
     use super::midi_record;
     use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -70,7 +111,9 @@ mod settings {
         Ok(PERFORMANCE.lock().unwrap().clone())
     }
     pub fn save_performance_json(json: &str) -> Result<(), &'static str> {
-        if FAIL.load(Ordering::Relaxed) { return Err("Mock flash save failed"); }
+        if FAIL.load(Ordering::Relaxed) {
+            return Err("Mock flash save failed");
+        }
         *PERFORMANCE.lock().unwrap() = Some(json.to_owned());
         Ok(())
     }
@@ -79,12 +122,16 @@ mod settings {
         let json = RECORD.lock().unwrap();
         let keys = crate::midi::keys_from_json(json.as_ref()?).ok()?;
         let mut result = [0; midi_record::MAX];
-        for (out, key) in result.iter_mut().take(count).zip(keys) { *out = key; }
+        for (out, key) in result.iter_mut().take(count).zip(keys) {
+            *out = key;
+        }
         Some(result)
     }
 
     pub fn save_midi(keys: &[u16]) -> bool {
-        crate::midi::json_for_keys(keys).and_then(|json| save_midi_json(&json)).is_ok()
+        crate::midi::json_for_keys(keys)
+            .and_then(|json| save_midi_json(&json))
+            .is_ok()
     }
 
     pub fn load_midi_json() -> Result<Option<String>, &'static str> {
@@ -93,7 +140,9 @@ mod settings {
 
     pub fn save_midi_json(json: &str) -> Result<(), &'static str> {
         SAVES.fetch_add(1, Ordering::Relaxed);
-        if FAIL.load(Ordering::Relaxed) { return Err("Mock flash save failed"); }
+        if FAIL.load(Ordering::Relaxed) {
+            return Err("Mock flash save failed");
+        }
         *RECORD.lock().unwrap() = Some(json.to_owned());
         Ok(())
     }
@@ -180,8 +229,66 @@ mod tests {
         assert_eq!(performance::banks(), ["Set 2"]);
         link::set_up(false);
         assert!(performance::recall_slot(1).is_err());
-        assert!(matches!(midi::command(index("Next bank"), 127, false), Some(link::Cmd::BankStep(1))));
-        assert!(matches!(midi::command(index("Recall bank slot 4"), 127, false), Some(link::Cmd::BankSlot(3))));
+        assert!(matches!(
+            midi::command(index("Next bank"), 127, false),
+            Some(link::Cmd::BankStep(1))
+        ));
+        assert!(matches!(
+            midi::command(index("Recall bank slot 4"), 127, false),
+            Some(link::Cmd::BankSlot(3))
+        ));
+    }
+
+    #[test]
+    fn scenes_persist_failed_saves_preserve_data_and_bank_ack_is_required() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        *settings::PERFORMANCE.lock().unwrap() = None;
+        performance::load();
+        performance::add_bank("Live").unwrap();
+        performance::assign_slot(0, Some(1)).unwrap();
+        state::AMP.with(|amp| amp.borrow_mut().valid = true);
+        fx::SNAPSHOT.with(|snapshot| {
+            let mut view = snapshot.borrow_mut();
+            *view = types::NanoFxState::reset_with_ids();
+            view.valid = true;
+            view.gate.on_known = true;
+            for block in &mut view.blocks {
+                block.valid = true;
+            }
+        });
+        state::PRESET.store(1, Ordering::Relaxed);
+        state::ACK.store(0, Ordering::Relaxed);
+        performance::capture_scene(0, 0, 0, "Clean").unwrap();
+        assert_eq!(performance::scenes(0)[0].as_deref(), Some("Clean"));
+        let before = performance::export_json().unwrap();
+        settings::FAIL.store(true, Ordering::Relaxed);
+        assert!(performance::capture_scene(0, 0, 0, "Lead").is_err());
+        assert_eq!(performance::export_json().unwrap(), before);
+        settings::FAIL.store(false, Ordering::Relaxed);
+        performance::start_bank(0).unwrap();
+        assert!(
+            performance::poll().is_none(),
+            "Optimistic preset selection is not acknowledgment"
+        );
+        assert!(performance::busy());
+        assert!(performance::select_bank(0).is_err());
+        state::ACK.fetch_add(1, Ordering::Relaxed);
+        assert!(matches!(
+            performance::poll(),
+            Some(link::Cmd::PerformanceRefresh)
+        ));
+        assert!(performance::poll().is_none());
+        assert!(performance::busy());
+        state::GENERATION.fetch_add(1, Ordering::Relaxed);
+        performance::poll();
+        assert!(!performance::busy());
+        performance::recall_scene(0).unwrap();
+        assert!(performance::busy());
+        performance::cancel("Test interruption");
+        assert!(performance::scene().is_none());
+        performance::assign_slot(0, Some(2)).unwrap();
+        assert!(performance::scenes(0).iter().all(Option::is_none));
     }
 
     #[test]
@@ -358,7 +465,7 @@ mod tests {
     fn expanded_actions_and_endpoints_keep_legacy_indices() {
         let _guard = LOCK.lock().unwrap();
         reset();
-        assert_eq!(midi::ACTION_COUNT, 263);
+        assert_eq!(midi::ACTION_COUNT, 267);
         assert_eq!(midi::action_name(13), "Pre FX 1 knob 1");
         assert_eq!(midi::action_name(33), "Amp gain");
         assert_eq!(midi::action_name(41), "Cab low-pass");
@@ -472,5 +579,4 @@ mod tests {
         assert!(midi::import_json(r#"{"format":"nano-midi","version":1,"bindings":[]}"#).is_err());
         assert_eq!(midi::export_json().unwrap(), original);
     }
-
 }

@@ -421,7 +421,9 @@ pub(super) fn parse_state_buffer() {
     let live_amp = amp_copy(&s.amp);
     let live_dirty = s.amp_live_dirty;
     let cap_dirty = s.cap_vol_live_dirty;
-    if let Some(amp) = parsers::parse_amp(buf) {
+    let parsed_amp = parsers::parse_amp(buf);
+    let amp_complete = parsed_amp.is_some();
+    if let Some(amp) = parsed_amp {
         s.amp = NanoAmpC::from(&amp);
         /*
          * Field 44 often sits in the missing mid-dump gap. Keep a previously
@@ -519,6 +521,7 @@ pub(super) fn parse_state_buffer() {
 
     update_preset_label_locked(buf);
     super::editor::sync_cab_settings(!state_dump_truncated(buf));
+    if amp_complete && !truncated { crate::state::snapshot_completed(); }
 
     if let Some(bpm) = parsers::parse_bpm(buf) {
         info!(target: TAG, "BPM {bpm} (field 56) [{label}]");
