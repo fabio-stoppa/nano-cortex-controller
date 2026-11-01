@@ -533,6 +533,7 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
         }
         while let Some(cmd) = crate::link::pop_cmd() {
             apply_cmd(cmd);
+            flush_writes(client, c304.handle, c304_no_rsp).await;
         }
         if LIBRARY_WANTED.load(core::sync::atomic::Ordering::Relaxed)
             && crate::state::nano_rx_mode_get() == 0
@@ -559,7 +560,25 @@ pub static LIBRARY_WANTED: core::sync::atomic::AtomicBool = core::sync::atomic::
 fn apply_cmd(cmd: crate::link::Cmd) {
     match cmd {
         crate::link::Cmd::Gate(on) => {
-            let _ = crate::fx::nano_fx_write_gate_enabled(on);
+            if !crate::fx::nano_fx_write_gate_enabled(on) {
+                log::warn!("Gate toggle write failed");
+            }
+        }
+        crate::link::Cmd::GateAmount(pct) => {
+            if !crate::fx::nano_fx_write_gate_reduction(pct) {
+                log::warn!("MIDI gate amount write failed");
+            }
+        }
+        crate::link::Cmd::TunerToggle => crate::ui::midi_toggle_tuner(),
+        crate::link::Cmd::MidiAction { index, value, continuous } => {
+            if let Some(cmd) = crate::midi::command(index, value, continuous) {
+                apply_cmd(cmd);
+            }
+        }
+        crate::link::Cmd::Param(param) => {
+            if !crate::fx::nano_fx_write_param_normalized(u32::from(param.block), param.wire, param.norm) {
+                log::warn!("MIDI FX parameter write failed");
+            }
         }
         crate::link::Cmd::Tuner(on) => {
             let _ = crate::tuner::nano_tuner_set_active(on);
@@ -574,11 +593,15 @@ fn apply_cmd(cmd: crate::link::Cmd) {
             write_tuner_settings(settings.reference_hz.unwrap_or(440.0), muted);
         }
         crate::link::Cmd::Tempo => {
-            let _ = crate::state::nano_state_tempo_tap();
+            if !crate::state::nano_state_tempo_tap() {
+                log::warn!("Tap tempo write failed");
+            }
         }
         crate::link::Cmd::Focus(slot) => crate::fx::nano_fx_focus_from_ui(slot),
         crate::link::Cmd::Block { slot, on } => {
-            let _ = crate::fx::nano_fx_write_block_enabled(u32::from(slot), on);
+            if !crate::fx::nano_fx_write_block_enabled(u32::from(slot), on) {
+                log::warn!("FX toggle write failed");
+            }
         }
         crate::link::Cmd::Model { block, delta } => step_model(block, delta),
         crate::link::Cmd::ModelAt { block, index } => {
@@ -589,7 +612,9 @@ fn apply_cmd(cmd: crate::link::Cmd) {
             }
         }
         crate::link::Cmd::Save => {
-            let _ = crate::state::nano_state_save_preset();
+            if !crate::state::nano_state_save_preset() {
+                log::warn!("Preset save failed");
+            }
         }
         crate::link::Cmd::Copy => {
             let _ = crate::state::nano_state_copy_current();
@@ -599,13 +624,19 @@ fn apply_cmd(cmd: crate::link::Cmd) {
             LIBRARY_WANTED.store(true, core::sync::atomic::Ordering::Relaxed);
         }
         crate::link::Cmd::Preset(delta) => {
-            let _ = crate::state::nano_state_step_preset(delta);
+            if !crate::state::nano_state_step_preset(delta) {
+                log::warn!("Preset step failed");
+            }
         }
         crate::link::Cmd::Capture(delta) => {
-            let _ = crate::state::nano_state_step_capture(delta);
+            if !crate::state::nano_state_step_capture(delta) {
+                log::warn!("Capture step failed");
+            }
         }
         crate::link::Cmd::PresetAt(slot) => {
-            let _ = crate::state::nano_state_select_preset(slot);
+            if !crate::state::nano_state_select_preset(slot) {
+                log::warn!("Preset selection failed");
+            }
         }
         crate::link::Cmd::PresetRename { slot, name } => {
             if !crate::state::nano_state_rename_preset(slot, &name) {
@@ -627,7 +658,9 @@ fn apply_cmd(cmd: crate::link::Cmd) {
             }
         }
         crate::link::Cmd::CaptureAt(slot) => {
-            let _ = crate::state::nano_state_write_capture_slot(slot);
+            if !crate::state::nano_state_write_capture_slot(slot) {
+                log::warn!("Capture selection failed");
+            }
         }
         crate::link::Cmd::CabAt(position) => {
             let library = crate::state::nano_state_library_snapshot();
@@ -725,14 +758,17 @@ fn write_tuner_settings(reference_hz: f32, muted: bool) {
 
 fn step_model(block: u8, delta: i8) {
     if delta == 0 || block as usize >= crate::fx::types::NANO_FX_BLOCK_COUNT {
+        log::warn!("Invalid FX model step");
         return;
     }
     let mut fx = crate::fx::types::NanoFxState::zeroed();
     if !crate::fx::nano_fx_snapshot(&mut fx) {
+        log::warn!("FX model step needs current FX state");
         return;
     }
     let count = crate::fx::nano_fx_allowed_model_count(u32::from(block));
     if count == 0 {
+        log::warn!("No allowed models for FX block {block}");
         return;
     }
     let current = fx.blocks[block as usize].model;
@@ -753,7 +789,11 @@ fn step_model(block: u8, delta: i8) {
         None => 0,
     };
     if let Some(model) = crate::fx::nano_fx_get_allowed_model(u32::from(block), next) {
-        let _ = crate::fx::nano_fx_write_block_model(u32::from(block), model);
+        if !crate::fx::nano_fx_write_block_model(u32::from(block), model) {
+            log::warn!("FX model step write failed");
+        }
+    } else {
+        log::warn!("FX model step could not resolve model");
     }
 }
 

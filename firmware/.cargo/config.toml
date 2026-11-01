@@ -2,7 +2,7 @@
 target = "xtensa-esp32s3-none-elf"
 
 [target.xtensa-esp32s3-none-elf]
-runner = "espflash flash --monitor --flash-freq 80mhz --baud 921600"
+runner = "espflash flash --monitor --flash-freq 80mhz --flash-size 16mb --partition-table partitions.csv --baud 921600"
 # rust-lld drops the in-place addend on R_XTENSA_32. The Bluetooth blob
 # stores call targets that way, so those calls land on a literal pool and
 # the controller task takes an illegal instruction. GNU ld keeps the addend.

@@ -15,6 +15,9 @@ use embassy_sync::blocking_mutex::Mutex;
 
 use crate::link::Cmd;
 
+#[path = "midi/backup.rs"]
+mod backup;
+
 pub const BLOCKS: usize = 5;
 pub const KNOBS_PER_BLOCK: usize = 4;
 const TRIGGERS: usize = 8;
@@ -22,7 +25,16 @@ const FX_KNOBS: usize = BLOCKS * KNOBS_PER_BLOCK;
 const AMP_KNOBS: usize = 5;
 const CAB_CONTROLS: usize = 3;
 const LEGACY_ACTION_COUNT: usize = BLOCKS + TRIGGERS + FX_KNOBS;
-pub const ACTION_COUNT: usize = LEGACY_ACTION_COUNT + AMP_KNOBS + 1 + CAB_CONTROLS;
+const EXISTING_ACTION_COUNT: usize = LEGACY_ACTION_COUNT + AMP_KNOBS + 1 + CAB_CONTROLS;
+const EXTRA_KNOBS: usize = crate::fx::types::NANO_FX_MAX_PARAMS - KNOBS_PER_BLOCK;
+const EXTRA_KNOBS_START: usize = EXISTING_ACTION_COUNT;
+const GATE_AMOUNT: usize = EXTRA_KNOBS_START + BLOCKS * EXTRA_KNOBS;
+const USB_PLAYBACK: usize = GATE_AMOUNT + 1;
+const MODEL_START: usize = USB_PLAYBACK + 1;
+const PRESET_START: usize = MODEL_START + BLOCKS * 2;
+const CAPTURE_START: usize = PRESET_START + 64;
+const MUTE_START: usize = CAPTURE_START + 25;
+pub const ACTION_COUNT: usize = MUTE_START + 6;
 
 const BLOCK_NAMES: [&str; BLOCKS] = [
     "Pre FX 1",
@@ -102,9 +114,51 @@ pub fn action_name(index: usize) -> String {
         String::from(AMP_KNOB_NAMES[index - LEGACY_ACTION_COUNT])
     } else if index == LEGACY_ACTION_COUNT + AMP_KNOBS {
         String::from("Capture volume")
-    } else {
+    } else if index < EXISTING_ACTION_COUNT {
         String::from(CAB_CONTROL_NAMES[index - LEGACY_ACTION_COUNT - AMP_KNOBS - 1])
+    } else if index < GATE_AMOUNT {
+        let n = index - EXTRA_KNOBS_START;
+        format!(
+            "{} knob {}",
+            BLOCK_NAMES[n / EXTRA_KNOBS],
+            n % EXTRA_KNOBS + 5
+        )
+    } else if index == GATE_AMOUNT {
+        String::from("Gate amount")
+    } else if index == USB_PLAYBACK {
+        String::from("USB playback level")
+    } else if index < PRESET_START {
+        let n = index - MODEL_START;
+        format!(
+            "{} {} model",
+            BLOCK_NAMES[n / 2],
+            if n % 2 == 0 { "next" } else { "previous" }
+        )
+    } else if index < CAPTURE_START {
+        format!("Select preset {}", index - PRESET_START + 1)
+    } else if index < MUTE_START {
+        format!("Select capture {}", index - CAPTURE_START + 1)
+    } else {
+        String::from(
+            [
+                "Mute input",
+                "Unmute input",
+                "Mute output",
+                "Unmute output",
+                "Mute tuner output",
+                "Unmute tuner output",
+            ][index - MUTE_START],
+        )
     }
+}
+
+fn continuous_action(index: usize) -> bool {
+    (BLOCKS + TRIGGERS..EXISTING_ACTION_COUNT).contains(&index)
+        || (EXTRA_KNOBS_START..=USB_PLAYBACK).contains(&index)
+}
+
+pub fn is_continuous(index: usize) -> bool {
+    continuous_action(index)
 }
 
 struct Table {
@@ -114,6 +168,8 @@ struct Table {
     version: u32,
     unsaved: bool,
     last: u16,
+    notice: &'static str,
+    retry_save_us: i64,
 }
 
 static TABLE: Mutex<CriticalSectionRawMutex, RefCell<Table>> = Mutex::new(RefCell::new(Table {
@@ -122,9 +178,29 @@ static TABLE: Mutex<CriticalSectionRawMutex, RefCell<Table>> = Mutex::new(RefCel
     version: 1,
     unsaved: false,
     last: 0,
+    notice: "",
+    retry_save_us: 0,
 }));
 
 pub fn load() {
+    let migrate = match crate::settings::load_midi_json() {
+        Ok(Some(json)) => {
+            match keys_from_json(&json) {
+                Ok(keys) => TABLE.lock(|t| {
+                    let mut t = t.borrow_mut();
+                    t.keys = keys;
+                    t.version += 1;
+                }),
+                Err(err) => report(err),
+            }
+            return;
+        }
+        Ok(None) => true,
+        Err(err) => {
+            report(err);
+            false
+        }
+    };
     if let Some(keys) = crate::settings::load_midi(ACTION_COUNT) {
         TABLE.lock(|t| {
             let mut t = t.borrow_mut();
@@ -132,8 +208,18 @@ pub fn load() {
                 *slot = key;
             }
             t.version += 1;
+            t.unsaved = migrate;
         });
     }
+}
+
+pub fn report(message: &'static str) {
+    log::warn!("MIDI configuration: {message}");
+    TABLE.lock(|t| {
+        let mut t = t.borrow_mut();
+        t.notice = message;
+        t.version += 1;
+    });
 }
 
 pub struct Row {
@@ -151,7 +237,11 @@ pub fn rows() -> alloc::vec::Vec<Row> {
         let t = t.borrow();
         (0..ACTION_COUNT)
             .map(|i| Row {
-                name: action_name(i),
+                name: if continuous_action(i) {
+                    format!("{} (CC)", action_name(i))
+                } else {
+                    action_name(i)
+                },
                 assigned: key_text(t.keys[i]),
                 learning: t.learning == Some(i),
             })
@@ -161,7 +251,14 @@ pub fn rows() -> alloc::vec::Vec<Row> {
 
 /// Last message seen, for the page's status line.
 pub fn last_text() -> String {
-    key_text(TABLE.lock(|t| t.borrow().last))
+    TABLE.lock(|t| {
+        let t = t.borrow();
+        if t.notice.is_empty() {
+            key_text(t.last)
+        } else {
+            String::from(t.notice)
+        }
+    })
 }
 
 /// Starts waiting for a message for `index`; tapping the same row again cancels.
@@ -176,6 +273,7 @@ pub fn toggle_learn(index: usize) {
         } else {
             Some(index)
         };
+        t.notice = "";
         t.version += 1;
     });
 }
@@ -198,23 +296,105 @@ pub fn clear(index: usize) {
         if t.keys[index] != 0 {
             t.keys[index] = 0;
             t.unsaved = true;
+            t.retry_save_us = 0;
         }
         t.learning = None;
         t.version += 1;
     });
 }
 
+pub fn clear_all() {
+    TABLE.lock(|t| {
+        let mut t = t.borrow_mut();
+        t.unsaved |= t.keys.iter().any(|key| *key != 0);
+        t.keys.fill(0);
+        t.learning = None;
+        t.last = 0;
+        t.notice = "";
+        t.retry_save_us = 0;
+        t.version += 1;
+    });
+    crate::link::clear_midi();
+}
+
+pub fn export_json() -> Result<String, &'static str> {
+    let keys = TABLE.lock(|t| t.borrow().keys);
+    backup::encode(&keys)
+}
+
+pub fn json_for_keys(keys: &[u16]) -> Result<String, &'static str> {
+    let keys = keys.try_into().map_err(|_| "Invalid MIDI action count")?;
+    backup::encode(keys)
+}
+
+pub fn keys_from_json(json: &str) -> Result<[u16; ACTION_COUNT], &'static str> {
+    backup::decode(json)
+}
+
+pub fn import_json(json: &str) -> Result<(), &'static str> {
+    let keys = keys_from_json(json)?;
+    crate::settings::save_midi_json(json)?;
+    TABLE.lock(|t| {
+        let mut t = t.borrow_mut();
+        t.keys = keys;
+        t.unsaved = false;
+        t.learning = None;
+        t.last = 0;
+        t.notice = "";
+        t.retry_save_us = 0;
+        t.version += 1;
+    });
+    crate::link::clear_midi();
+    Ok(())
+}
+
+pub fn prepare_storage() -> Result<String, &'static str> {
+    cancel_learn();
+    let json = export_json()?;
+    crate::settings::save_midi_json(&json)?;
+    Ok(json)
+}
+
+pub fn storage_help() -> String {
+    let mut text = String::from(
+        "Nano MIDI configuration\r\n\r\nEdit or replace midi.json, then safely eject this drive.\r\n\
+         After eject, the controller validates and saves the file. Check its screen.\r\n\
+         Invalid/missing files keep the previous bindings. Cancel discards PC edits.\r\n\
+         Do not format the drive. Other files are temporary and not saved.\r\n\
+         Maximum midi.json size: 48 KiB. Channel: 1-16. Number: 0-127.\r\n\
+         Kinds: cc, note, program. Parameter actions require cc.\r\n\
+         Omitted actions are cleared. One message can target several actions.\r\n\r\nAction IDs:\r\n",
+    );
+    for index in 0..ACTION_COUNT {
+        text.push_str(&format!("{index}: {}{}\r\n", action_name(index),
+            if continuous_action(index) { " (CC only)" } else { "" }));
+    }
+    text
+}
+
 /// Writes changed bindings to flash. Called from the UI task.
 pub fn persist() {
+    let now = crate::clock::now_us();
     let keys = TABLE.lock(|t| {
-        let mut t = t.borrow_mut();
-        t.unsaved.then(|| {
-            t.unsaved = false;
-            t.keys
-        })
+        let t = t.borrow();
+        (t.unsaved && now >= t.retry_save_us).then_some(t.keys)
     });
     if let Some(keys) = keys {
-        crate::settings::save_midi(&keys);
+        let saved = crate::settings::save_midi(&keys);
+        TABLE.lock(|t| {
+            let mut t = t.borrow_mut();
+            if saved && t.keys == keys {
+                t.unsaved = false;
+                if t.notice == "Bindings not saved; retrying." {
+                    t.notice = "";
+                    t.version += 1;
+                }
+            } else if !saved {
+                t.notice = "Bindings not saved; retrying.";
+                t.retry_save_us = now + 5_000_000;
+                t.version += 1;
+            }
+        });
     }
 }
 
@@ -252,7 +432,11 @@ pub fn feed(packet: &[u8]) {
         }
         data[have] = b;
         have += 1;
-        let need = if matches!(status & 0xf0, 0xc0 | 0xd0) { 1 } else { 2 };
+        let need = if matches!(status & 0xf0, 0xc0 | 0xd0) {
+            1
+        } else {
+            2
+        };
         if have == need {
             have = 0;
             want_ts = true;
@@ -285,71 +469,127 @@ fn dispatch(status: u8, data: [u8; 2]) {
         _ => return,
     };
     let key = msg.key();
-    let action = TABLE.lock(|t| {
+    let keys = TABLE.lock(|t| {
         let mut t = t.borrow_mut();
-        t.last = key;
-        t.version += 1;
+        if t.last != key {
+            t.last = key;
+            t.version += 1;
+        }
         if let Some(index) = t.learning.take() {
-            // A message drives one action, so move it off any previous owner.
-            for slot in t.keys.iter_mut().filter(|k| **k == key) {
-                *slot = 0;
+            t.version += 1;
+            if continuous_action(index) && msg.kind != Kind::Cc {
+                t.learning = Some(index);
+                t.notice = "This parameter needs a MIDI CC.";
+                log::warn!("MIDI parameter learn requires CC");
+                return None;
             }
             t.keys[index] = key;
             t.unsaved = true;
+            t.retry_save_us = 0;
+            t.notice = "";
             return None;
         }
-        t.keys.iter().position(|k| *k == key)
+        Some(t.keys)
     });
-    if let Some(index) = action {
-        run(index, msg);
+    if let Some(keys) = keys {
+        let actions = keys.iter().enumerate().filter_map(|(index, assigned)| {
+            (*assigned == key
+                && (!continuous_action(index) || msg.kind == Kind::Cc)
+                && (continuous_action(index) || msg.kind != Kind::Cc || msg.value > 0))
+                .then_some(index)
+        });
+        if !crate::link::push_midi(actions, msg.value, msg.kind == Kind::Cc) {
+            TABLE.lock(|t| {
+                let mut t = t.borrow_mut();
+                t.notice = "MIDI actions not queued; check connection/load.";
+                t.version += 1;
+            });
+        }
     }
 }
 
-fn run(index: usize, msg: Msg) {
-    let wanted = |current: bool| !current;
+/// Called on the Nano link task, so snapshots and writes share its ordering.
+pub fn command(index: usize, value: u8, continuous: bool) -> Option<Cmd> {
+    if index >= ACTION_COUNT || (continuous_action(index) && !continuous) {
+        log::warn!("Unsupported MIDI action {index}");
+        return None;
+    }
     if index < BLOCKS {
         let mut fx = crate::fx::types::NanoFxState::zeroed();
-        let current = crate::fx::nano_fx_snapshot(&mut fx) && fx.blocks[index].on;
-        crate::link::push_cmd(Cmd::Block {
+        if !crate::fx::nano_fx_snapshot(&mut fx) || !fx.blocks[index].valid {
+            log::warn!("MIDI FX toggle needs current block state");
+            return None;
+        }
+        Some(Cmd::Block {
             slot: index as u8,
-            on: wanted(current),
-        });
+            on: !fx.blocks[index].on,
+        })
     } else if index < BLOCKS + TRIGGERS {
         match index - BLOCKS {
             0 => {
                 let mut fx = crate::fx::types::NanoFxState::zeroed();
-                let current = crate::fx::nano_fx_snapshot(&mut fx) && fx.gate.on;
-                crate::link::push_cmd(Cmd::Gate(wanted(current)));
+                if !crate::fx::nano_fx_snapshot(&mut fx) || !fx.gate.on_known {
+                    log::warn!("MIDI gate toggle needs current gate state");
+                    return None;
+                }
+                Some(Cmd::Gate(!fx.gate.on))
             }
-            1 => crate::ui::midi_toggle_tuner(),
-            2 => crate::link::push_cmd(Cmd::Tempo),
-            3 => crate::link::push_cmd(Cmd::Preset(1)),
-            4 => crate::link::push_cmd(Cmd::Preset(-1)),
-            5 => crate::link::push_cmd(Cmd::Capture(1)),
-            6 => crate::link::push_cmd(Cmd::Capture(-1)),
-            _ => crate::link::push_cmd(Cmd::Save),
+            1 => Some(Cmd::TunerToggle),
+            2 => Some(Cmd::Tempo),
+            3 => Some(Cmd::Preset(1)),
+            4 => Some(Cmd::Preset(-1)),
+            5 => Some(Cmd::Capture(1)),
+            6 => Some(Cmd::Capture(-1)),
+            _ => Some(Cmd::Save),
         }
-    } else if index < LEGACY_ACTION_COUNT && msg.kind == Kind::Cc {
+    } else if index < LEGACY_ACTION_COUNT {
         let n = index - BLOCKS - TRIGGERS;
-        set_knob(n / KNOBS_PER_BLOCK, n % KNOBS_PER_BLOCK, msg.value);
-    } else if index < LEGACY_ACTION_COUNT + AMP_KNOBS && msg.kind == Kind::Cc {
+        knob_command(n / KNOBS_PER_BLOCK, n % KNOBS_PER_BLOCK, value)
+    } else if index < LEGACY_ACTION_COUNT + AMP_KNOBS {
         let knob = (index - LEGACY_ACTION_COUNT) as u8;
-        crate::link::push_cmd(Cmd::AmpKnob {
+        Some(Cmd::AmpKnob {
             knob,
-            raw: scale_midi_value(msg.value),
-        });
-    } else if index == LEGACY_ACTION_COUNT + AMP_KNOBS && msg.kind == Kind::Cc {
-        crate::link::push_cmd(Cmd::CaptureVolume(scale_midi_value(msg.value)));
-    } else if msg.kind == Kind::Cc {
+            raw: scale_midi_value(value),
+        })
+    } else if index == LEGACY_ACTION_COUNT + AMP_KNOBS {
+        Some(Cmd::CaptureVolume(scale_midi_value(value)))
+    } else if index < EXISTING_ACTION_COUNT {
         let which = match index - LEGACY_ACTION_COUNT - AMP_KNOBS - 1 {
             0 => nano_wire::editor::CabFloat::Level,
             1 => nano_wire::editor::CabFloat::HighPass,
             _ => nano_wire::editor::CabFloat::LowPass,
         };
-        crate::link::push_cmd(Cmd::CabParam {
+        Some(Cmd::CabParam {
             which,
-            normalized: f32::from(msg.value) / 127.0,
-        });
+            normalized: f32::from(value) / 127.0,
+        })
+    } else if index < GATE_AMOUNT {
+        let n = index - EXTRA_KNOBS_START;
+        knob_command(n / EXTRA_KNOBS, n % EXTRA_KNOBS + KNOBS_PER_BLOCK, value)
+    } else if index == GATE_AMOUNT {
+        Some(Cmd::GateAmount(((u16::from(value) * 100 + 63) / 127) as u8))
+    } else if index == USB_PLAYBACK {
+        Some(Cmd::UsbPlayback(-40.0 + f32::from(value) * 40.0 / 127.0))
+    } else if index < PRESET_START {
+        let n = index - MODEL_START;
+        Some(Cmd::Model {
+            block: (n / 2) as u8,
+            delta: if n % 2 == 0 { 1 } else { -1 },
+        })
+    } else if index < CAPTURE_START {
+        Some(Cmd::PresetAt((index - PRESET_START + 1) as u8))
+    } else if index < MUTE_START {
+        Some(Cmd::CaptureAt((index - CAPTURE_START + 1) as u8))
+    } else {
+        let n = index - MUTE_START;
+        if n < 4 {
+            Some(Cmd::Mute {
+                input: n < 2,
+                muted: n % 2 == 0,
+            })
+        } else {
+            Some(Cmd::TunerOutputMute(n == 4))
+        }
     }
 }
 
@@ -357,22 +597,30 @@ fn scale_midi_value(value: u8) -> u8 {
     ((u16::from(value.min(127)) * u16::from(u8::MAX) + 63) / 127) as u8
 }
 
-fn set_knob(block: usize, cell: usize, value: u8) {
+fn knob_command(block: usize, cell: usize, value: u8) -> Option<Cmd> {
     let mut fx = crate::fx::types::NanoFxState::zeroed();
     if !crate::fx::nano_fx_snapshot(&mut fx) {
-        return;
+        log::warn!("MIDI FX parameter needs current FX state");
+        return None;
     }
     let b = fx.blocks[block];
     let Some(model) = (unsafe { b.model.as_ref() }) else {
-        return;
+        log::warn!("MIDI FX parameter needs a known model");
+        return None;
     };
     if cell >= b.param_count as usize {
-        return;
+        log::warn!("MIDI FX knob {} unavailable on block {block}", cell + 1);
+        return None;
     }
     let wire = crate::fx::nano_fx_param_wire_index(model, cell);
     if wire >= b.param_count as usize {
-        return;
+        log::warn!("MIDI FX parameter wire index unavailable");
+        return None;
     }
     let norm = crate::fx::params::normalize_for_model(model, wire, f32::from(value) / 127.0);
-    crate::link::set_param(block as u8, wire as u8, norm);
+    Some(Cmd::Param(crate::link::ParamWrite {
+        block: block as u8,
+        wire: wire as u8,
+        norm,
+    }))
 }

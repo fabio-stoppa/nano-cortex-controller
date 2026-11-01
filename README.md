@@ -17,7 +17,7 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - **Bluetooth devices** live in Settings → Bluetooth: tap a device to connect, or use its button to connect or forget it.
 - Parameter cells (amp and FX) use the settings-row gray to stand out from the main background.
 - **Bluetooth Tools page** — reads and edits per-preset expression sweeps and bypass assignments, calibrates the pedal, reads cab settings, shows live input/output/expression meters, and reads or changes the EXP/MIDI jack and USB playback level
-- **MIDI learn page** (Tools → MIDI) — tap Learn on an action, then send a BLE-MIDI note, CC, or program change. Bindings cover FX block on/off, gate, tuner, tap tempo, preset/capture step, save, all five amp controls, capture volume, cab level/high-pass/low-pass, and the first four knobs of each FX block via CC. Saved in flash
+- **MIDI learn page** (Tools → MIDI) — tap Learn on an action, then send a BLE-MIDI note, CC, or program change. Learn the same message on several rows to control multiple targets; Clear removes only that row's binding. Buttons cover FX block on/off, gate, tuner, tap tempo, preset/capture step, direct preset 1–64 and capture 1–25 selection, FX model step, save, and explicit input/output/tuner mute/unmute. CC-only parameters cover all five amp controls, capture volume, cab level/high-pass/low-pass, gate amount, USB playback level, and up to 24 displayed knobs per FX block (only knobs present on the current model apply). CC 0 does not trigger button actions; it still sets continuous parameters to their minimum. Repeated CC values for a pending parameter are coalesced; different targets are retained. Saved in flash with readback verification; old MIDI bindings keep their existing action assignments.
 - **Preset manager** — browse presets in 12-slot tabs and use the three-dot menu to rename (on-screen keyboard; 4–64 ASCII letters, digits, spaces, `-`, `_`, unique), delete, move, or copy to any slot. Overwriting an occupied slot asks for confirmation
 - Open preset lists update in place when the refreshed catalog arrives after a rename, delete, move, or copy.
 - Refresh and Save live in Settings → General → Tools next to Tuner (Save is highlighted with unsaved changes); the header only keeps the settings gear.
@@ -43,6 +43,12 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 ./flash.sh build           # or: (cd firmware && ./build.sh)
 ./flash.sh flash           # 921600 baud; NANO_BAUD=115200 ./flash.sh flash for flaky cables
 ```
+
+The flash helper installs `firmware/partitions.csv` for the 16 MiB 4.3B board.
+It retains the default NVS and application start addresses and adds a 128 KiB
+`midi` data partition at 8 MiB. Flash with this table when upgrading to USB
+configuration support; do not erase the entire chip if you want to retain
+existing MIDI assignments and screen layout.
 
 Monitor (keep DTR/RTS off on Waveshare):
 
@@ -78,6 +84,67 @@ Host-test the embedded-font rename keyboard and partial framebuffer redraws:
 ```bash
 cargo +stable test --manifest-path firmware/tests/ui-renderer/Cargo.toml --target x86_64-unknown-linux-gnu
 ```
+
+Host-test MIDI learn, multi-target queues, and binding-record compatibility:
+
+```bash
+cargo +stable test --manifest-path firmware/tests/midi/Cargo.toml --target x86_64-unknown-linux-gnu
+```
+
+## MIDI configuration USB drive
+
+Tools → MIDI → **Clear all bindings** asks for confirmation before removing all
+learned assignments. Cancel leaves them unchanged. This does not change presets
+on the Nano.
+
+1. Connect the 4.3B's USB-C port to a computer with a data cable.
+2. Open Settings → MIDI → **USB drive: midi.json**, or tap **USB drive** on the
+   connecting screen (no Nano Cortex connection required).
+3. The computer sees a small **NANO MIDI** FAT12 drive. Open, edit, copy, or
+   replace `midi.json` with your file manager/text editor. `README.TXT` on the
+   drive lists every action ID and whether it requires CC.
+4. **Safely eject** the drive using the computer's eject command. The controller
+   validates the file and reports whether it was saved. On Linux, use Eject /
+   Safely Remove (not only Unmount); the USB medium-eject command finishes the
+   session.
+5. Tap **Restart controller** to return to Bluetooth control and USB serial.
+
+MIDI Learn and Bluetooth control pause while the computer owns the drive.
+Serial monitoring/flashing is unavailable during USB storage mode; no serial
+backup commands or computer scripts are required. **Cancel USB edits** discards
+computer changes. Restarting/powering off before eject also discards them.
+Other files on the drive are temporary; only `midi.json` is retained. Do not
+format the drive.
+
+Replacing the file **replaces all bindings**, including clearing actions omitted
+from it, so copy it to your computer as a backup first. Invalid, missing,
+oversized (over 48 KiB), or damaged files are rejected, retaining previous bindings.
+Format/version, action IDs, message types, channel (1–16), number (0–127), and
+duplicate action IDs are checked before writing; parameter actions require CC.
+The firmware reads the JSON configuration at boot and updates it when MIDI Learn
+or Clear changes assignments. It uses two checked flash records, commits to the
+inactive copy, and verifies it before installing the new mappings. Interrupted
+saves retain the previous committed copy. Existing compact MIDI records in NVS
+are migrated without changing action IDs.
+Action IDs are stable and append-only; the same message may appear on several
+different actions.
+
+```json
+{
+  "format": "nano-midi",
+  "version": 1,
+  "bindings": [
+    {"action": 0, "kind": "cc", "channel": 1, "number": 7},
+    {"action": 33, "kind": "cc", "channel": 1, "number": 7}
+  ]
+}
+```
+
+This example maps CC 7 to Pre FX 1 on/off and amp gain. JSON text is stored in
+internal flash; the USB drive is a temporary FAT view of that configuration,
+not unrestricted access to the chip. Backups cover MIDI bindings only, not
+Nano presets. The USB MSC implementation uses a pinned Embassy revision because
+MSC device support is not included in the published 0.6 release.
 
 Flipped landscape is rendered unrotated and its finished scan-line spans are
 reversed into the framebuffer, avoiding Slint 1.13's mirrored glyph-sampling

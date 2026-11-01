@@ -501,9 +501,196 @@ mod tests {
                 assert_eq!(pixels[215 * 800 + 175].0, cell, "amp cell not lightened");
                 app.set_page(1);
             }
+
         }
         app.set_fx_n0("-".into());
         app.set_page(0);
+        app.set_portrait(false);
+        window.set_size(PhysicalSize::new(800, 480));
+    }
+
+    fn check_midi_clear_confirmation(app: &AppWindow, window: &MinimalSoftwareWindow) {
+        let cleared = Rc::new(std::cell::Cell::new(0));
+        let preset_action = Rc::new(std::cell::Cell::new(0));
+        app.on_midi_clear_all({
+            let cleared = cleared.clone();
+            move || cleared.set(cleared.get() + 1)
+        });
+        app.on_confirm_accepted({
+            let preset_action = preset_action.clone();
+            move || preset_action.set(preset_action.get() + 1)
+        });
+        let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
+        let red = ((0xf8u16 >> 3) << 11) | ((0x28u16 >> 2) << 5) | (0x1au16 >> 3);
+        let click = |x, y| {
+            let position = LogicalPosition::new(x, y);
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position, button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position, button: PointerEventButton::Left,
+            });
+        };
+        for (width, height, portrait) in [(800, 480, false), (480, 800, true)] {
+            app.set_portrait(portrait);
+            window.set_size(PhysicalSize::new(width, height));
+            app.set_kbd_open(false);
+            app.set_model_open(false);
+            app.set_settings_open(true);
+            app.set_settings_tab(3);
+            app.set_midi_last("CC 7 ch 1".into());
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                renderer.render(&mut pixels, width as usize);
+                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            });
+            let previous = pixels.clone();
+            app.set_midi_last("Note 9 ch 1".into());
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                renderer.render(&mut pixels, width as usize);
+                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            });
+            let last_bottom = (0..height as usize).rev().find(|&y| {
+                (0..width as usize).any(|x| pixels[y * width as usize + x].0 != previous[y * width as usize + x].0)
+            }).expect("Last MIDI message is not rendered");
+            let grey = ((0x90u16 >> 3) << 11) | ((0x90u16 >> 2) << 5) | (0x90u16 >> 3);
+            let help_top = (last_bottom + 1..last_bottom + 40).find(|&y| {
+                (14..width as usize - 140).any(|x| pixels[y * width as usize + x].0 == grey)
+            }).expect("Shared-message help is not below the last message");
+            assert!(help_top - last_bottom <= 17, "MIDI header gap is {} pixels", help_top - last_bottom);
+            click(width as f32 - 70.0, last_bottom as f32 + 6.0);
+            assert!(app.get_confirm_open());
+            assert_eq!(app.get_confirm_title(), "Clear all MIDI bindings?");
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                renderer.render(&mut pixels, width as usize);
+                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            });
+            let mut left = width as usize;
+            let mut right = 0;
+            let mut top = height as usize;
+            let mut bottom = 0;
+            for (i, pixel) in pixels.iter().enumerate() {
+                if pixel.0 == red {
+                    left = left.min(i % width as usize);
+                    right = right.max(i % width as usize);
+                    top = top.min(i / width as usize);
+                    bottom = bottom.max(i / width as usize);
+                }
+            }
+            assert!(right > left && bottom > top, "Missing destructive confirmation button");
+            let x = (left + right) as f32 / 2.0;
+            let y = (top + bottom) as f32 / 2.0;
+            let before = cleared.get();
+            click(5.0, 5.0);
+            assert!(app.get_confirm_open(), "Outside tap must not confirm or dismiss");
+            click(width as f32 - x, y);
+            assert!(!app.get_confirm_open(), "Cancel must close confirmation");
+            assert_eq!(cleared.get(), before, "Cancel cleared MIDI bindings");
+            app.invoke_midi_clear_all_requested();
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                renderer.render(&mut pixels, width as usize);
+                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            });
+            click(x, y);
+            assert!(!app.get_confirm_open());
+            assert_eq!(cleared.get(), before + 1);
+            assert_eq!(preset_action.get(), 0, "MIDI confirmation triggered preset operation");
+        }
+        app.set_settings_open(false);
+        app.set_settings_tab(0);
+        app.set_portrait(false);
+        window.set_size(PhysicalSize::new(800, 480));
+    }
+
+    fn check_usb_storage_screen(app: &AppWindow, window: &MinimalSoftwareWindow) {
+        let started = Rc::new(std::cell::Cell::new(0));
+        let cancelled = Rc::new(std::cell::Cell::new(0));
+        let restarted = Rc::new(std::cell::Cell::new(0));
+        app.on_midi_usb_storage({
+            let started = started.clone();
+            move || started.set(started.get() + 1)
+        });
+        app.on_usb_storage_cancel({
+            let cancelled = cancelled.clone();
+            move || cancelled.set(cancelled.get() + 1)
+        });
+        app.on_usb_storage_restart({
+            let restarted = restarted.clone();
+            move || restarted.set(restarted.get() + 1)
+        });
+        let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
+        let background = ((30u16 >> 3) << 11) | ((30u16 >> 2) << 5) | (30u16 >> 3);
+        let click = |x, y| {
+            let position = LogicalPosition::new(x, y);
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position, button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position, button: PointerEventButton::Left,
+            });
+        };
+        for (width, height, portrait) in [(800, 480, false), (480, 800, true)] {
+            app.set_portrait(portrait);
+            window.set_size(PhysicalSize::new(width, height));
+            app.set_settings_open(false);
+            app.set_model_open(false);
+            app.set_kbd_open(false);
+            app.set_confirm_open(false);
+            app.set_connecting(true);
+            app.set_usb_storage_open(false);
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                renderer.render(&mut pixels, width as usize);
+                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            });
+            let starts_before = started.get();
+            click(width as f32 - 62.0, 28.0);
+            assert_eq!(started.get(), starts_before + 1, "Offline USB entry is inaccessible");
+            app.set_usb_storage_open(true);
+            app.set_usb_storage_finished(false);
+            app.set_usb_storage_message("Edit midi.json, then safely eject the drive.".into());
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                renderer.render(&mut pixels, width as usize);
+                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            });
+            assert_eq!(pixels[5 * width as usize + 5].0, background, "USB screen covered by connecting overlay");
+            click(width as f32 - 62.0, 28.0);
+            assert_eq!(started.get(), starts_before + 1, "Underlying connecting controls still active");
+            let before = cancelled.get();
+            click(width as f32 / 2.0, height as f32 - 50.0);
+            assert_eq!(cancelled.get(), before + 1);
+            assert_eq!(restarted.get(), before);
+            app.set_usb_storage_finished(true);
+            app.set_usb_storage_message("Configuration saved. Restart controller.".into());
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                renderer.render(&mut pixels, width as usize);
+                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            });
+            click(width as f32 / 2.0, height as f32 - 50.0);
+            assert_eq!(restarted.get(), before + 1);
+            assert_eq!(cancelled.get(), before + 1);
+        }
+        app.set_usb_storage_open(false);
+        app.set_connecting(false);
         app.set_portrait(false);
         window.set_size(PhysicalSize::new(800, 480));
     }
@@ -698,6 +885,8 @@ mod tests {
         check_fx_category_colors(&app, &window);
         check_fullscreen_popups(&app, &window);
         check_fx_cell_contrast(&app, &window);
+        check_midi_clear_confirmation(&app, &window);
+        check_usb_storage_screen(&app, &window);
         let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
 
         for (width, height, rotation, portrait) in [

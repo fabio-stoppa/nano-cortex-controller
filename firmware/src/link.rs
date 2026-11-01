@@ -26,9 +26,19 @@ static OUT: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<Vec<u8>>>> =
 static CMDS: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<Cmd>>> =
     Mutex::new(RefCell::new(VecDeque::new()));
 
+const COMMAND_CAPACITY: usize = 256;
+
 pub enum Cmd {
     Gate(bool),
+    GateAmount(u8),
     Tuner(bool),
+    TunerToggle,
+    MidiAction {
+        index: usize,
+        value: u8,
+        continuous: bool,
+    },
+    Param(ParamWrite),
     TunerReference(u16),
     TunerOutputMute(bool),
     /// TAP from the header; also enters Tempo Mode.
@@ -87,7 +97,10 @@ pub enum Cmd {
     JackMode(JackMode),
     UsbPlayback(f32),
     /// Mute guitar input (true) or output (false).
-    Mute { input: bool, muted: bool },
+    Mute {
+        input: bool,
+        muted: bool,
+    },
     ExpressionCalibrationStart,
     ExpressionCalibrationSave,
 }
@@ -104,6 +117,11 @@ static PARAM: Mutex<CriticalSectionRawMutex, RefCell<Option<ParamWrite>>> =
 
 pub fn set_up(up: bool) {
     UP.store(up, Ordering::Release);
+    if !up {
+        OUT.lock(|q| q.borrow_mut().clear());
+        CMDS.lock(|q| q.borrow_mut().clear());
+        PARAM.lock(|p| *p.borrow_mut() = None);
+    }
 }
 
 pub fn connected() -> bool {
@@ -117,11 +135,12 @@ pub fn write(data: &[u8]) -> bool {
     OUT.lock(|queue| {
         let mut queue = queue.borrow_mut();
         if queue.len() >= 8 {
-            queue.pop_front();
+            log::warn!("C304 queue full; write refused");
+            return false;
         }
         queue.push_back(data.to_vec());
-    });
-    true
+        true
+    })
 }
 
 pub fn write_labeled(_label: &CStr, data: &[u8]) -> bool {
@@ -135,15 +154,76 @@ pub fn pop_write() -> Option<Vec<u8>> {
 pub fn push_cmd(cmd: Cmd) {
     CMDS.lock(|queue| {
         let mut queue = queue.borrow_mut();
-        if queue.len() >= 8 {
-            queue.pop_front();
+        if queue.len() >= COMMAND_CAPACITY {
+            log::warn!("Controller command queue full; command refused");
+            return;
         }
         queue.push_back(cmd);
     });
 }
 
+/// Enqueue a whole learned message, or refuse it without evicting older actions.
+pub fn push_midi(actions: impl Iterator<Item = usize>, value: u8, continuous: bool) -> bool {
+    let actions: Vec<_> = actions.collect();
+    if actions.is_empty() {
+        return true;
+    }
+    if !connected() {
+        log::warn!("MIDI actions refused while Nano disconnected");
+        return false;
+    }
+    CMDS.lock(|queue| {
+        let mut queue = queue.borrow_mut();
+        let start = queue
+            .iter()
+            .rposition(|cmd| {
+                !matches!(cmd,
+            Cmd::MidiAction { index, continuous: true, .. } if crate::midi::is_continuous(*index))
+            })
+            .map_or(0, |index| index + 1);
+        let replaceable = |index: usize, cmd: &Cmd| {
+            matches!(cmd,
+            Cmd::MidiAction { index: pending, continuous: true, .. }
+                if continuous && crate::midi::is_continuous(index) && *pending == index)
+        };
+        let additional = actions
+            .iter()
+            .filter(|&&index| !queue.iter().skip(start).any(|cmd| replaceable(index, cmd)))
+            .count();
+        if queue.len() + additional > COMMAND_CAPACITY {
+            log::warn!("MIDI group exceeds command queue; entire message refused");
+            return false;
+        }
+        for index in actions {
+            let cmd = Cmd::MidiAction {
+                index,
+                value,
+                continuous,
+            };
+            if let Some(pending) = queue
+                .iter_mut()
+                .skip(start)
+                .find(|cmd| replaceable(index, cmd))
+            {
+                *pending = cmd;
+            } else {
+                queue.push_back(cmd);
+            }
+        }
+        true
+    })
+}
+
 pub fn pop_cmd() -> Option<Cmd> {
     CMDS.lock(|queue| queue.borrow_mut().pop_front())
+}
+
+pub fn clear_midi() {
+    CMDS.lock(|queue| {
+        queue
+            .borrow_mut()
+            .retain(|cmd| !matches!(cmd, Cmd::MidiAction { .. }))
+    });
 }
 
 /// Latest effect-cell drag. Moves overwrite each other so a sweep does not fill the command queue.

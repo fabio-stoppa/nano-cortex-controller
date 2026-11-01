@@ -1,9 +1,9 @@
 //! Persists the screen layout in the first sector of the `nvs` partition.
 //!
-//! Nothing else in this firmware uses that partition, so one raw sector holds
-//! a small checked record. Writes are skipped when the value has not changed.
+//! The second sector holds legacy MIDI bindings for migration. Current MIDI
+//! configuration lives in the separate `midi` partition.
 
-use alloc::vec;
+use alloc::{string::String, vec};
 use esp_bootloader_esp_idf::partitions::{
     read_partition_table, DataPartitionSubType, PartitionType, PARTITION_TABLE_MAX_LEN,
 };
@@ -41,10 +41,13 @@ fn with_region<T>(
 ) -> Option<T> {
     let flash = flash()?;
     let mut buf = vec![0u8; PARTITION_TABLE_MAX_LEN];
-    let table = read_partition_table(&mut *flash, &mut buf).map_err(|e| log::warn!("ptable {e:?}")).ok()?;
+    let table = read_partition_table(&mut *flash, &mut buf)
+        .map_err(|e| log::warn!("ptable {e:?}"))
+        .ok()?;
     let entry = table
         .find_partition(PartitionType::Data(DataPartitionSubType::Nvs))
-        .map_err(|e| log::warn!("find {e:?}")).ok()??;
+        .map_err(|e| log::warn!("find {e:?}"))
+        .ok()??;
     let mut region = entry.as_flash_region(flash);
     if (region.partition_size() as u32) < SECTOR {
         return None;
@@ -68,59 +71,90 @@ pub fn save_layout(mode: i32) {
         return;
     }
     let saved = with_region(|region| {
-        region.erase(0, SECTOR).map_err(|e| log::warn!("erase {e:?}")).ok()?;
-        region.write(0, &record(mode)).map_err(|e| log::warn!("write {e:?}")).ok()
+        region
+            .erase(0, SECTOR)
+            .map_err(|e| log::warn!("erase {e:?}"))
+            .ok()?;
+        region
+            .write(0, &record(mode))
+            .map_err(|e| log::warn!("write {e:?}"))
+            .ok()
     });
     if saved.is_none() {
         log::warn!("could not save layout");
     }
 }
 
-const MIDI_MAGIC: u32 = 0x4d49_4431;
+mod midi_record;
+mod json_record;
+
 const MIDI_OFFSET: u32 = SECTOR;
-const MIDI_MAX: usize = 64;
 
 /// Saved MIDI bindings (second sector of `nvs`), if a valid record exists.
-pub fn load_midi(count: usize) -> Option<[u16; MIDI_MAX]> {
+pub fn load_midi(count: usize) -> Option<[u16; midi_record::MAX]> {
     with_region(|region| {
-        if (region.partition_size() as u32) < 2 * SECTOR || count > MIDI_MAX {
+        if (region.partition_size() as u32) < 2 * SECTOR || count > midi_record::MAX {
+            log::warn!("MIDI storage region or action count unsupported");
             return None;
         }
-        let mut r = [0u8; 8 + MIDI_MAX * 2];
-        region.read(MIDI_OFFSET, &mut r).ok()?;
-        let magic = u32::from_le_bytes(r[..4].try_into().ok()?);
-        let stored = r[4] as usize;
-        let sum = r[8..].iter().fold(0u8, |a, b| a.wrapping_add(*b));
-        if magic != MIDI_MAGIC || stored > MIDI_MAX || r[5] != !sum {
-            return None;
+        let mut r = [0u8; midi_record::SIZE];
+        region
+            .read(MIDI_OFFSET, &mut r)
+            .map_err(|e| log::warn!("MIDI read {e:?}"))
+            .ok()?;
+        let decoded = midi_record::decode(&r, count);
+        if decoded.is_none() && r.iter().any(|b| *b != 0xff) {
+            log::warn!("Invalid MIDI binding record");
         }
-        let mut keys = [0u16; MIDI_MAX];
-        for (i, key) in keys.iter_mut().enumerate().take(stored.min(count)) {
-            *key = u16::from_le_bytes([r[8 + i * 2], r[9 + i * 2]]);
-        }
-        Some(keys)
+        decoded
     })
 }
 
-pub fn save_midi(keys: &[u16]) {
-    if keys.len() > MIDI_MAX {
-        return;
+pub fn save_midi(keys: &[u16]) -> bool {
+    let result = crate::midi::json_for_keys(keys).and_then(|json| save_midi_json(&json));
+    if let Err(err) = result { log::warn!("Could not save MIDI bindings: {err}"); }
+    result.is_ok()
+}
+
+struct JsonStorage<'a, 'd>(esp_bootloader_esp_idf::partitions::FlashRegion<'a, 'd>);
+
+impl json_record::Storage for JsonStorage<'_, '_> {
+    fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), &'static str> {
+        self.0.read(offset, bytes).map_err(|err| {
+            log::warn!("MIDI JSON read {err:?}");
+            "MIDI JSON flash read failed"
+        })
     }
-    let mut r = [0u8; 8 + MIDI_MAX * 2];
-    r[..4].copy_from_slice(&MIDI_MAGIC.to_le_bytes());
-    r[4] = keys.len() as u8;
-    for (i, key) in keys.iter().enumerate() {
-        r[8 + i * 2..10 + i * 2].copy_from_slice(&key.to_le_bytes());
+    fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), &'static str> {
+        self.0.write(offset, bytes).map_err(|err| {
+            log::warn!("MIDI JSON write {err:?}");
+            "MIDI JSON flash write failed"
+        })
     }
-    r[5] = !r[8..].iter().fold(0u8, |a, b| a.wrapping_add(*b));
-    let saved = with_region(|region| {
-        if (region.partition_size() as u32) < 2 * SECTOR {
-            return None;
-        }
-        region.erase(MIDI_OFFSET, MIDI_OFFSET + SECTOR).map_err(|e| log::warn!("erase {e:?}")).ok()?;
-        region.write(MIDI_OFFSET, &r).map_err(|e| log::warn!("write {e:?}")).ok()
-    });
-    if saved.is_none() {
-        log::warn!("could not save MIDI bindings");
+    fn erase(&mut self, start: u32, end: u32) -> Result<(), &'static str> {
+        self.0.erase(start, end).map_err(|err| {
+            log::warn!("MIDI JSON erase {err:?}");
+            "MIDI JSON flash erase failed"
+        })
     }
+}
+
+fn with_json<T>(f: impl FnOnce(&mut JsonStorage<'_, '_>) -> Result<T, &'static str>) -> Result<T, &'static str> {
+    let flash = flash().ok_or("Flash unavailable")?;
+    let mut buf = vec![0; PARTITION_TABLE_MAX_LEN];
+    let table = read_partition_table(&mut *flash, &mut buf).map_err(|_| "Cannot read partition table")?;
+    let entry = table.iter().find(|entry| entry.label_as_str() == "midi")
+        .ok_or("MIDI partition missing; flash using flash.sh")?;
+    if entry.len() < json_record::CAPACITY {
+        return Err("MIDI partition too small");
+    }
+    f(&mut JsonStorage(entry.as_flash_region(flash)))
+}
+
+pub fn load_midi_json() -> Result<Option<String>, &'static str> {
+    with_json(|storage| json_record::load(storage))
+}
+
+pub fn save_midi_json(json: &str) -> Result<(), &'static str> {
+    with_json(|storage| json_record::save(storage, json))
 }

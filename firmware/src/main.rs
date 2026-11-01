@@ -19,6 +19,7 @@ mod fx;
 mod link;
 mod memsafe;
 mod midi;
+mod usb_storage;
 mod panel;
 mod screen;
 mod settings;
@@ -28,6 +29,7 @@ mod tuner;
 mod ui;
 
 use embassy_executor::Spawner;
+use embassy_futures::select::select;
 use esp_backtrace as _;
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -70,11 +72,13 @@ async fn main(_spawner: Spawner) {
         Ok(connector) => connector,
         Err(err) => {
             log::error!("ble controller init failed: {err:?}");
-            ble::touch_only(&mut board).await;
+            select(ble::touch_only(&mut board), usb_storage::requested()).await;
+            usb_storage::run(rest.usb, &mut board).await;
             return;
         }
     };
     log::info!("ble controller up");
     let controller = bt_hci::controller::ExternalController::<_, 20>::new(connector);
-    ble::run(controller, &mut board).await;
+    select(ble::run(controller, &mut board), usb_storage::requested()).await;
+    usb_storage::run(rest.usb, &mut board).await;
 }
