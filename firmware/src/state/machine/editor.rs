@@ -106,10 +106,17 @@ pub fn nano_state_copy_preset(slot: u8, name: &str) -> bool {
 
 /// True when another preset already uses `name` (the pedal compares case-insensitively).
 pub fn nano_state_preset_name_taken(slot: u8, name: &str) -> bool {
-    nano_state_preset_names()
-        .iter()
-        .enumerate()
-        .any(|(i, other)| i + 1 != usize::from(slot) && other.eq_ignore_ascii_case(name))
+    let catalog = &st().preset_catalog;
+    catalog.valid
+        && catalog
+            .names
+            .iter()
+            .take(usize::from(catalog.count))
+            .enumerate()
+            .any(|(i, other)| {
+                let end = other.iter().position(|&byte| byte == 0).unwrap_or(other.len());
+                i + 1 != usize::from(slot) && other[..end].eq_ignore_ascii_case(name.as_bytes())
+            })
 }
 
 fn send_rename(slot: u8, name: &str) -> bool {

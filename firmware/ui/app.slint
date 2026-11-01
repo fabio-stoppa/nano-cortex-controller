@@ -1019,7 +1019,6 @@ component HeaderBar inherits Rectangle {
                         property <color> tint: root.beat-glow > 0.5
                             ? (root.tempo-active ? #3dcc7a : #ffffff)
                             : (root.tempo-active ? #1c5c3a : #404040);
-                        animate tint { duration: 120ms; easing: ease-out; }
                         if root.tempo-global: Rectangle {
                             border-width: 2.5px;
                             border-color: parent.tint;
@@ -1055,6 +1054,8 @@ component HeaderBar inherits Rectangle {
             height: 44px;
             clicked => { root.preset-list-tapped(); }
             Text {
+                width: parent.width;
+                height: parent.height;
                 text: preset;
                 color: model-enabled ? #ececec : #606060;
                 font-size: 26px;
@@ -2421,10 +2422,13 @@ component KeyCap inherits Rectangle {
     in property <string> label;
     in property <bool> hot: false;
     in property <length> key-height: 56px;
+    // Held keys repeat like a PC keyboard: one tap, a pause, then a steady stream.
+    in property <bool> repeat: false;
+    property <bool> repeated: false;
     callback tapped();
     height: root.key-height;
     horizontal-stretch: 1;
-    background: root.hot ? #1a3af8 : #2a2a2a;
+    background: touch.pressed ? (root.hot ? #5a78ff : #5c5c5c) : (root.hot ? #1a3af8 : #2a2a2a);
     border-radius: 8px;
     Text {
         text: root.label;
@@ -2434,7 +2438,22 @@ component KeyCap inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
     }
-    TouchArea { clicked => { root.tapped(); } }
+    touch := TouchArea {
+        changed pressed => {
+            if self.pressed { root.repeated = false; }
+        }
+        clicked => {
+            if !root.repeated { root.tapped(); }
+        }
+    }
+    Timer {
+        interval: root.repeated ? 60ms : 400ms;
+        running: root.repeat && touch.pressed;
+        triggered => {
+            root.repeated = true;
+            root.tapped();
+        }
+    }
 }
 
 // Typing goes through `key` ("\u{8}" is backspace) so Rust owns the text and its limits.
@@ -2456,7 +2475,7 @@ component NameKeyboard inherits Rectangle {
     property <length> key-height: min(52px, max(40px, (root.height - 180px) / 5));
     // Padding, header, error line and row gaps around the five key rows.
     property <length> card-height: 156px + 5 * root.key-height;
-    background: #000000b0;
+    background: #090909;
     TouchArea { clicked => { root.closed(); } }
     Rectangle {
         width: root.width - 24px;
@@ -2477,18 +2496,23 @@ component NameKeyboard inherits Rectangle {
                     height: 42px;
                     background: #101010;
                     border-radius: Radius.default;
-                    name-text := Text {
+                    // Long names keep their end visible; the start scrolls off to the left.
+                    Rectangle {
                         x: 14px;
                         width: parent.width - 38px;
-                        text: root.text;
-                        color: #e0e0e0;
-                        font-size: 26px;
-                        font-weight: 700;
-                        vertical-alignment: center;
-                        overflow: elide;
+                        clip: true;
+                        name-text := Text {
+                            x: min(0px, parent.width - self.preferred-width);
+                            width: self.preferred-width;
+                            text: root.text;
+                            color: #e0e0e0;
+                            font-size: 26px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
                     }
                     Text {
-                        x: 14px + min(name-text.preferred-width, name-text.width);
+                        x: 14px + min(name-text.preferred-width, parent.width - 38px);
                         width: 10px;
                         text: "|";
                         color: #e0e0e0;
@@ -2539,7 +2563,7 @@ component NameKeyboard inherits Rectangle {
                     key-height: root.key-height;
                     tapped => { root.key(root.shift ? k.to-uppercase() : k); root.shift = false; }
                 }
-                KeyCap { label: "<-"; key-height: root.key-height; horizontal-stretch: 1.5; tapped => { root.key("\u{8}"); } }
+                KeyCap { label: "<-"; repeat: true; key-height: root.key-height; horizontal-stretch: 1.5; tapped => { root.key("\u{8}"); } }
             }
             HorizontalLayout {
                 vertical-stretch: 1;
@@ -2762,7 +2786,7 @@ export component AppWindow inherits Window {
     callback kbd-key(string);
     callback kbd-accepted();
     callback confirm-accepted();
-    pure callback name-error(string) -> string;
+    in-out property <string> kbd-error;
     callback tools-opened();
     callback tools-refresh();
     in-out property <[MidiRow]> midi-rows: [];
@@ -2795,219 +2819,225 @@ export component AppWindow inherits Window {
     background: #1e1e1e;
     default-font-family: "IBM Plex Sans";
     default-font-size: 17px;
+    // The software renderer draws everything under an overlay, so hide what an
+    // opaque or full-screen layer covers.
+    property <bool> main-covered: root.kbd-open || root.model-open || root.page == 2 || root.connecting;
 
-    VerticalLayout {
-        padding: 1px;
-        HeaderBar {
-            height: 48px;
-            portrait: root.portrait;
-            page: root.page;
-            preset: root.preset;
-            model-enabled: root.model-enabled;
-            bpm-text: root.bpm-text;
-            ble-on: root.ble-on;
-            bt-busy: root.bt-busy;
-            bt-open: root.bt-open;
-            bt-tapped => { root.bt-open = !root.bt-open; }
-            save-dirty: root.save-dirty;
-            tempo-active: root.tempo-active;
-            tempo-global: root.tempo-global;
-            bpm-value: root.tempo-bpm-value;
-            tempo-tapped => { root.tempo-tapped(); }
-            preset-list-tapped => { root.preset-list-tapped(); }
-            settings-shown: root.settings-open;
-            settings-tapped => { root.tools-opened(); }
-            refreshing: root.refreshing;
-            refresh-tapped => {
-                root.refreshing = true;
-                root.tools-refresh();
-            }
-        }
-        if !root.portrait: HorizontalLayout {
-            spacing: 4px;
-            ChainRail {
-                width: 112px;
+    Rectangle {
+        visible: !root.main-covered;
+        VerticalLayout {
+            padding: 1px;
+            HeaderBar {
+                height: 48px;
+                portrait: root.portrait;
                 page: root.page;
-                chain: root.chain;
-                tab-0: root.tab-0;
-                on-0: root.on-0;
-                tab-1: root.tab-1;
-                on-1: root.on-1;
-                tab-3: root.tab-3;
-                on-3: root.on-3;
-                tab-4: root.tab-4;
-                on-4: root.on-4;
-                tab-5: root.tab-5;
-                on-5: root.on-5;
-                chain-tapped(index) => { root.chain-tapped(index); }
-                chain-held(index) => { root.chain-held(index); }
-                chain-double(index) => { root.chain-double(index); }
-            }
-            Rectangle {
-                horizontal-stretch: 1;
-                background: transparent;
-                clip: true;
-                if root.page == 0: AmpPanel {
-                    capture-tapped => { root.capture-list-tapped(); }
-                    cab-tapped => { root.cab-list-tapped(); }
-                    portrait: root.portrait;
-                    capture-title: root.capture-title;
-                    capture-value: root.capture-value;
-                    capture-slot: root.capture-slot;
-                    capture-active: root.capture-active;
-                    cab-value: root.cab-value;
-                    cab-slot: root.cab-slot;
-                    cab-active: root.cab-active;
-                    gate-text: root.gate-text;
-                    gate-amount: root.gate-amount;
-                    gate-amnt-text: root.gate-amnt-text;
-                    gate-amnt-amount: root.gate-amnt-amount;
-                    gain-text: root.gain-text;
-                    gain-amount: root.gain-amount;
-                    cap-text: root.cap-text;
-                    cap-amount: root.cap-amount;
-                    master-text: root.master-text;
-                    master-amount: root.master-amount;
-                    bass-text: root.bass-text;
-                    bass-amount: root.bass-amount;
-                    mid-text: root.mid-text;
-                    mid-amount: root.mid-amount;
-                    treble-text: root.treble-text;
-                    treble-amount: root.treble-amount;
-                    cab-output-text: root.cab-output-text;
-                    cab-output-amount: root.cab-output-amount;
-                    cab-high-pass-text: root.cab-high-pass-text;
-                    cab-high-pass-amount: root.cab-high-pass-amount;
-                    cab-low-pass-text: root.cab-low-pass-text;
-                    cab-low-pass-amount: root.cab-low-pass-amount;
-                    slider-moved(id, amount) => { root.slider-moved(id, amount); }
-                    cab-slider-moved(id, amount) => { root.cab-slider-moved(id, amount); }
-                    gate-tapped => { root.gate-tapped(); }
-                }
-                if root.page == 1: FxPanel {
-                    model-name: root.model;
-                    model-enabled: root.model-enabled;
-                    model-list-tapped => { root.model-list-tapped(); }
-                    model-stepped(delta) => { root.model-stepped(delta); }
-                    n0: root.fx-n0; v0: root.fx-v0; a0: root.fx-a0;
-                    n1: root.fx-n1; v1: root.fx-v1; a1: root.fx-a1;
-                    n2: root.fx-n2; v2: root.fx-v2; a2: root.fx-a2;
-                    n3: root.fx-n3; v3: root.fx-v3; a3: root.fx-a3;
-                    n4: root.fx-n4; v4: root.fx-v4; a4: root.fx-a4;
-                    n5: root.fx-n5; v5: root.fx-v5; a5: root.fx-a5;
-                    n6: root.fx-n6; v6: root.fx-v6; a6: root.fx-a6;
-                    n7: root.fx-n7; v7: root.fx-v7; a7: root.fx-a7;
-                    n8: root.fx-n8; v8: root.fx-v8; a8: root.fx-a8;
-                    n9: root.fx-n9; v9: root.fx-v9; a9: root.fx-a9;
-                    n10: root.fx-n10; v10: root.fx-v10; a10: root.fx-a10;
-                    n11: root.fx-n11; v11: root.fx-v11; a11: root.fx-a11;
-                    n12: root.fx-n12; v12: root.fx-v12; a12: root.fx-a12;
-                    n13: root.fx-n13; v13: root.fx-v13; a13: root.fx-a13;
-                    n14: root.fx-n14; v14: root.fx-v14; a14: root.fx-a14;
-                    n15: root.fx-n15; v15: root.fx-v15; a15: root.fx-a15;
-                    n16: root.fx-n16; v16: root.fx-v16; a16: root.fx-a16;
-                    n17: root.fx-n17; v17: root.fx-v17; a17: root.fx-a17;
-                    n18: root.fx-n18; v18: root.fx-v18; a18: root.fx-a18;
-                    n19: root.fx-n19; v19: root.fx-v19; a19: root.fx-a19;
-                    n20: root.fx-n20; v20: root.fx-v20; a20: root.fx-a20;
-                    n21: root.fx-n21; v21: root.fx-v21; a21: root.fx-a21;
-                    n22: root.fx-n22; v22: root.fx-v22; a22: root.fx-a22;
-                    n23: root.fx-n23; v23: root.fx-v23; a23: root.fx-a23;
-                    param-changed(cell, amount) => { root.param-changed(cell, amount); }
+                preset: root.preset;
+                model-enabled: root.model-enabled;
+                bpm-text: root.bpm-text;
+                ble-on: root.ble-on;
+                bt-busy: root.bt-busy;
+                bt-open: root.bt-open;
+                bt-tapped => { root.bt-open = !root.bt-open; }
+                save-dirty: root.save-dirty;
+                tempo-active: root.tempo-active;
+                tempo-global: root.tempo-global;
+                bpm-value: root.tempo-bpm-value;
+                tempo-tapped => { root.tempo-tapped(); }
+                preset-list-tapped => { root.preset-list-tapped(); }
+                settings-shown: root.settings-open;
+                settings-tapped => { root.tools-opened(); }
+                refreshing: root.refreshing;
+                refresh-tapped => {
+                    root.refreshing = true;
+                    root.tools-refresh();
                 }
             }
-        }
-        if root.portrait: VerticalLayout {
-            ChainRail {
-                height: 52px;
-                horizontal: true;
-                page: root.page;
-                chain: root.chain;
-                tab-0: root.tab-0;
-                on-0: root.on-0;
-                tab-1: root.tab-1;
-                on-1: root.on-1;
-                tab-3: root.tab-3;
-                on-3: root.on-3;
-                tab-4: root.tab-4;
-                on-4: root.on-4;
-                tab-5: root.tab-5;
-                on-5: root.on-5;
-                chain-tapped(index) => { root.chain-tapped(index); }
-                chain-held(index) => { root.chain-held(index); }
-                chain-double(index) => { root.chain-double(index); }
-            }
-            Rectangle {
-                vertical-stretch: 1;
-                background: transparent;
-                clip: true;
-                if root.page == 0: AmpPanel {
-                    capture-tapped => { root.capture-list-tapped(); }
-                    cab-tapped => { root.cab-list-tapped(); }
-                    portrait: root.portrait;
-                    capture-title: root.capture-title;
-                    capture-value: root.capture-value;
-                    capture-slot: root.capture-slot;
-                    capture-active: root.capture-active;
-                    cab-value: root.cab-value;
-                    cab-slot: root.cab-slot;
-                    cab-active: root.cab-active;
-                    gate-text: root.gate-text;
-                    gate-amount: root.gate-amount;
-                    gate-amnt-text: root.gate-amnt-text;
-                    gate-amnt-amount: root.gate-amnt-amount;
-                    gain-text: root.gain-text;
-                    gain-amount: root.gain-amount;
-                    cap-text: root.cap-text;
-                    cap-amount: root.cap-amount;
-                    master-text: root.master-text;
-                    master-amount: root.master-amount;
-                    bass-text: root.bass-text;
-                    bass-amount: root.bass-amount;
-                    mid-text: root.mid-text;
-                    mid-amount: root.mid-amount;
-                    treble-text: root.treble-text;
-                    treble-amount: root.treble-amount;
-                    cab-output-text: root.cab-output-text;
-                    cab-output-amount: root.cab-output-amount;
-                    cab-high-pass-text: root.cab-high-pass-text;
-                    cab-high-pass-amount: root.cab-high-pass-amount;
-                    cab-low-pass-text: root.cab-low-pass-text;
-                    cab-low-pass-amount: root.cab-low-pass-amount;
-                    slider-moved(id, amount) => { root.slider-moved(id, amount); }
-                    cab-slider-moved(id, amount) => { root.cab-slider-moved(id, amount); }
-                    gate-tapped => { root.gate-tapped(); }
+            if !root.portrait: HorizontalLayout {
+                spacing: 4px;
+                ChainRail {
+                    width: 112px;
+                    page: root.page;
+                    chain: root.chain;
+                    tab-0: root.tab-0;
+                    on-0: root.on-0;
+                    tab-1: root.tab-1;
+                    on-1: root.on-1;
+                    tab-3: root.tab-3;
+                    on-3: root.on-3;
+                    tab-4: root.tab-4;
+                    on-4: root.on-4;
+                    tab-5: root.tab-5;
+                    on-5: root.on-5;
+                    chain-tapped(index) => { root.chain-tapped(index); }
+                    chain-held(index) => { root.chain-held(index); }
+                    chain-double(index) => { root.chain-double(index); }
                 }
-                if root.page == 1: FxPanel {
-                    model-name: root.model;
-                    model-enabled: root.model-enabled;
-                    model-list-tapped => { root.model-list-tapped(); }
-                    model-stepped(delta) => { root.model-stepped(delta); }
-                    n0: root.fx-n0; v0: root.fx-v0; a0: root.fx-a0;
-                    n1: root.fx-n1; v1: root.fx-v1; a1: root.fx-a1;
-                    n2: root.fx-n2; v2: root.fx-v2; a2: root.fx-a2;
-                    n3: root.fx-n3; v3: root.fx-v3; a3: root.fx-a3;
-                    n4: root.fx-n4; v4: root.fx-v4; a4: root.fx-a4;
-                    n5: root.fx-n5; v5: root.fx-v5; a5: root.fx-a5;
-                    n6: root.fx-n6; v6: root.fx-v6; a6: root.fx-a6;
-                    n7: root.fx-n7; v7: root.fx-v7; a7: root.fx-a7;
-                    n8: root.fx-n8; v8: root.fx-v8; a8: root.fx-a8;
-                    n9: root.fx-n9; v9: root.fx-v9; a9: root.fx-a9;
-                    n10: root.fx-n10; v10: root.fx-v10; a10: root.fx-a10;
-                    n11: root.fx-n11; v11: root.fx-v11; a11: root.fx-a11;
-                    n12: root.fx-n12; v12: root.fx-v12; a12: root.fx-a12;
-                    n13: root.fx-n13; v13: root.fx-v13; a13: root.fx-a13;
-                    n14: root.fx-n14; v14: root.fx-v14; a14: root.fx-a14;
-                    n15: root.fx-n15; v15: root.fx-v15; a15: root.fx-a15;
-                    n16: root.fx-n16; v16: root.fx-v16; a16: root.fx-a16;
-                    n17: root.fx-n17; v17: root.fx-v17; a17: root.fx-a17;
-                    n18: root.fx-n18; v18: root.fx-v18; a18: root.fx-a18;
-                    n19: root.fx-n19; v19: root.fx-v19; a19: root.fx-a19;
-                    n20: root.fx-n20; v20: root.fx-v20; a20: root.fx-a20;
-                    n21: root.fx-n21; v21: root.fx-v21; a21: root.fx-a21;
-                    n22: root.fx-n22; v22: root.fx-v22; a22: root.fx-a22;
-                    n23: root.fx-n23; v23: root.fx-v23; a23: root.fx-a23;
-                    param-changed(cell, amount) => { root.param-changed(cell, amount); }
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: transparent;
+                    clip: true;
+                    if root.page == 0: AmpPanel {
+                        capture-tapped => { root.capture-list-tapped(); }
+                        cab-tapped => { root.cab-list-tapped(); }
+                        portrait: root.portrait;
+                        capture-title: root.capture-title;
+                        capture-value: root.capture-value;
+                        capture-slot: root.capture-slot;
+                        capture-active: root.capture-active;
+                        cab-value: root.cab-value;
+                        cab-slot: root.cab-slot;
+                        cab-active: root.cab-active;
+                        gate-text: root.gate-text;
+                        gate-amount: root.gate-amount;
+                        gate-amnt-text: root.gate-amnt-text;
+                        gate-amnt-amount: root.gate-amnt-amount;
+                        gain-text: root.gain-text;
+                        gain-amount: root.gain-amount;
+                        cap-text: root.cap-text;
+                        cap-amount: root.cap-amount;
+                        master-text: root.master-text;
+                        master-amount: root.master-amount;
+                        bass-text: root.bass-text;
+                        bass-amount: root.bass-amount;
+                        mid-text: root.mid-text;
+                        mid-amount: root.mid-amount;
+                        treble-text: root.treble-text;
+                        treble-amount: root.treble-amount;
+                        cab-output-text: root.cab-output-text;
+                        cab-output-amount: root.cab-output-amount;
+                        cab-high-pass-text: root.cab-high-pass-text;
+                        cab-high-pass-amount: root.cab-high-pass-amount;
+                        cab-low-pass-text: root.cab-low-pass-text;
+                        cab-low-pass-amount: root.cab-low-pass-amount;
+                        slider-moved(id, amount) => { root.slider-moved(id, amount); }
+                        cab-slider-moved(id, amount) => { root.cab-slider-moved(id, amount); }
+                        gate-tapped => { root.gate-tapped(); }
+                    }
+                    if root.page == 1: FxPanel {
+                        model-name: root.model;
+                        model-enabled: root.model-enabled;
+                        model-list-tapped => { root.model-list-tapped(); }
+                        model-stepped(delta) => { root.model-stepped(delta); }
+                        n0: root.fx-n0; v0: root.fx-v0; a0: root.fx-a0;
+                        n1: root.fx-n1; v1: root.fx-v1; a1: root.fx-a1;
+                        n2: root.fx-n2; v2: root.fx-v2; a2: root.fx-a2;
+                        n3: root.fx-n3; v3: root.fx-v3; a3: root.fx-a3;
+                        n4: root.fx-n4; v4: root.fx-v4; a4: root.fx-a4;
+                        n5: root.fx-n5; v5: root.fx-v5; a5: root.fx-a5;
+                        n6: root.fx-n6; v6: root.fx-v6; a6: root.fx-a6;
+                        n7: root.fx-n7; v7: root.fx-v7; a7: root.fx-a7;
+                        n8: root.fx-n8; v8: root.fx-v8; a8: root.fx-a8;
+                        n9: root.fx-n9; v9: root.fx-v9; a9: root.fx-a9;
+                        n10: root.fx-n10; v10: root.fx-v10; a10: root.fx-a10;
+                        n11: root.fx-n11; v11: root.fx-v11; a11: root.fx-a11;
+                        n12: root.fx-n12; v12: root.fx-v12; a12: root.fx-a12;
+                        n13: root.fx-n13; v13: root.fx-v13; a13: root.fx-a13;
+                        n14: root.fx-n14; v14: root.fx-v14; a14: root.fx-a14;
+                        n15: root.fx-n15; v15: root.fx-v15; a15: root.fx-a15;
+                        n16: root.fx-n16; v16: root.fx-v16; a16: root.fx-a16;
+                        n17: root.fx-n17; v17: root.fx-v17; a17: root.fx-a17;
+                        n18: root.fx-n18; v18: root.fx-v18; a18: root.fx-a18;
+                        n19: root.fx-n19; v19: root.fx-v19; a19: root.fx-a19;
+                        n20: root.fx-n20; v20: root.fx-v20; a20: root.fx-a20;
+                        n21: root.fx-n21; v21: root.fx-v21; a21: root.fx-a21;
+                        n22: root.fx-n22; v22: root.fx-v22; a22: root.fx-a22;
+                        n23: root.fx-n23; v23: root.fx-v23; a23: root.fx-a23;
+                        param-changed(cell, amount) => { root.param-changed(cell, amount); }
+                    }
+                }
+            }
+            if root.portrait: VerticalLayout {
+                ChainRail {
+                    height: 52px;
+                    horizontal: true;
+                    page: root.page;
+                    chain: root.chain;
+                    tab-0: root.tab-0;
+                    on-0: root.on-0;
+                    tab-1: root.tab-1;
+                    on-1: root.on-1;
+                    tab-3: root.tab-3;
+                    on-3: root.on-3;
+                    tab-4: root.tab-4;
+                    on-4: root.on-4;
+                    tab-5: root.tab-5;
+                    on-5: root.on-5;
+                    chain-tapped(index) => { root.chain-tapped(index); }
+                    chain-held(index) => { root.chain-held(index); }
+                    chain-double(index) => { root.chain-double(index); }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: transparent;
+                    clip: true;
+                    if root.page == 0: AmpPanel {
+                        capture-tapped => { root.capture-list-tapped(); }
+                        cab-tapped => { root.cab-list-tapped(); }
+                        portrait: root.portrait;
+                        capture-title: root.capture-title;
+                        capture-value: root.capture-value;
+                        capture-slot: root.capture-slot;
+                        capture-active: root.capture-active;
+                        cab-value: root.cab-value;
+                        cab-slot: root.cab-slot;
+                        cab-active: root.cab-active;
+                        gate-text: root.gate-text;
+                        gate-amount: root.gate-amount;
+                        gate-amnt-text: root.gate-amnt-text;
+                        gate-amnt-amount: root.gate-amnt-amount;
+                        gain-text: root.gain-text;
+                        gain-amount: root.gain-amount;
+                        cap-text: root.cap-text;
+                        cap-amount: root.cap-amount;
+                        master-text: root.master-text;
+                        master-amount: root.master-amount;
+                        bass-text: root.bass-text;
+                        bass-amount: root.bass-amount;
+                        mid-text: root.mid-text;
+                        mid-amount: root.mid-amount;
+                        treble-text: root.treble-text;
+                        treble-amount: root.treble-amount;
+                        cab-output-text: root.cab-output-text;
+                        cab-output-amount: root.cab-output-amount;
+                        cab-high-pass-text: root.cab-high-pass-text;
+                        cab-high-pass-amount: root.cab-high-pass-amount;
+                        cab-low-pass-text: root.cab-low-pass-text;
+                        cab-low-pass-amount: root.cab-low-pass-amount;
+                        slider-moved(id, amount) => { root.slider-moved(id, amount); }
+                        cab-slider-moved(id, amount) => { root.cab-slider-moved(id, amount); }
+                        gate-tapped => { root.gate-tapped(); }
+                    }
+                    if root.page == 1: FxPanel {
+                        model-name: root.model;
+                        model-enabled: root.model-enabled;
+                        model-list-tapped => { root.model-list-tapped(); }
+                        model-stepped(delta) => { root.model-stepped(delta); }
+                        n0: root.fx-n0; v0: root.fx-v0; a0: root.fx-a0;
+                        n1: root.fx-n1; v1: root.fx-v1; a1: root.fx-a1;
+                        n2: root.fx-n2; v2: root.fx-v2; a2: root.fx-a2;
+                        n3: root.fx-n3; v3: root.fx-v3; a3: root.fx-a3;
+                        n4: root.fx-n4; v4: root.fx-v4; a4: root.fx-a4;
+                        n5: root.fx-n5; v5: root.fx-v5; a5: root.fx-a5;
+                        n6: root.fx-n6; v6: root.fx-v6; a6: root.fx-a6;
+                        n7: root.fx-n7; v7: root.fx-v7; a7: root.fx-a7;
+                        n8: root.fx-n8; v8: root.fx-v8; a8: root.fx-a8;
+                        n9: root.fx-n9; v9: root.fx-v9; a9: root.fx-a9;
+                        n10: root.fx-n10; v10: root.fx-v10; a10: root.fx-a10;
+                        n11: root.fx-n11; v11: root.fx-v11; a11: root.fx-a11;
+                        n12: root.fx-n12; v12: root.fx-v12; a12: root.fx-a12;
+                        n13: root.fx-n13; v13: root.fx-v13; a13: root.fx-a13;
+                        n14: root.fx-n14; v14: root.fx-v14; a14: root.fx-a14;
+                        n15: root.fx-n15; v15: root.fx-v15; a15: root.fx-a15;
+                        n16: root.fx-n16; v16: root.fx-v16; a16: root.fx-a16;
+                        n17: root.fx-n17; v17: root.fx-v17; a17: root.fx-a17;
+                        n18: root.fx-n18; v18: root.fx-v18; a18: root.fx-a18;
+                        n19: root.fx-n19; v19: root.fx-v19; a19: root.fx-a19;
+                        n20: root.fx-n20; v20: root.fx-v20; a20: root.fx-a20;
+                        n21: root.fx-n21; v21: root.fx-v21; a21: root.fx-a21;
+                        n22: root.fx-n22; v22: root.fx-v22; a22: root.fx-a22;
+                        n23: root.fx-n23; v23: root.fx-v23; a23: root.fx-a23;
+                        param-changed(cell, amount) => { root.param-changed(cell, amount); }
+                    }
                 }
             }
         }
@@ -3015,6 +3045,7 @@ export component AppWindow inherits Window {
 
     if root.page == 2: TunerPanel {
         x: 0px; y: 0px; width: root.width; height: root.height;
+        visible: !root.kbd-open;
             note: root.tuner-note;
             cents: root.tuner-cents;
             reference: root.tuner-reference;
@@ -3030,6 +3061,7 @@ export component AppWindow inherits Window {
         }
 
     if root.settings-open: ToolsPanel {
+        visible: !root.kbd-open;
         jack-mode: root.tools-jack-mode;
         jack-expression: root.tools-jack-expression;
         usb-level: root.tools-usb-level;
@@ -3080,6 +3112,7 @@ export component AppWindow inherits Window {
 
     if root.model-open: ModelPicker {
         x: 0px; y: 0px; width: root.width; height: root.height;
+        visible: !root.kbd-open;
         title: root.model-list-title;
         items: root.model-list;
         menu-index <=> root.preset-menu-index;
@@ -3092,7 +3125,11 @@ export component AppWindow inherits Window {
         two-line-names: root.list-kind >= 1 && root.list-kind <= 5;
         picked(index) => {
             root.model-chosen(index);
-            root.model-open = false;
+            if root.list-kind == 3 {
+                root.model-list-current = index;
+            } else {
+                root.model-open = false;
+            }
         }
         preset-action-chosen(index, action) => { root.model-preset-action-chosen(index, action); }
         closed => { root.model-open = false; }
@@ -3100,6 +3137,7 @@ export component AppWindow inherits Window {
 
     if root.confirm-open: ConfirmDialog {
         x: 0px; y: 0px; width: root.width; height: root.height;
+        visible: !root.kbd-open;
         title: root.confirm-title;
         message: root.confirm-message;
         accept-label: root.confirm-label;
@@ -3115,7 +3153,7 @@ export component AppWindow inherits Window {
         x: 0px; y: 0px; width: root.width; height: root.height;
         title: root.kbd-title;
         text: root.kbd-text;
-        error: root.name-error(root.kbd-text);
+        error: root.kbd-error;
         key(k) => { root.kbd-key(k); }
         accepted => {
             root.kbd-open = false;

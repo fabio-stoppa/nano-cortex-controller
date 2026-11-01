@@ -16,7 +16,10 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - **Preset manager** — browse presets in 12-slot tabs and use the three-dot menu to rename (on-screen keyboard; 4–64 ASCII letters, digits, spaces, `-`, `_`, unique), delete, move, or copy to any slot. Overwriting an occupied slot asks for confirmation
 - Open preset lists update in place when the refreshed catalog arrives after a rename, delete, move, or copy.
 - Preset three-dot menus have a 64px-wide, full-row-height touch target separate from preset selection.
-- Preset, capture, and cab popup names wrap to two lines; the rename keyboard has a blinking cursor.
+- Selecting a preset keeps the preset list open and moves its highlight, so presets can be auditioned back to back.
+- Preset, capture, and cab popup names wrap to two lines; the rename keyboard has a blinking cursor, keys light up while pressed, holding backspace repeats (400ms delay, then every 60ms), and long names keep their end visible.
+- While the rename keyboard is open, touch is polled every 10ms instead of 50ms; duplicate-name validation scans the stored catalog without allocating copies.
+- The software renderer has no occlusion culling, so screens covered by the keyboard or a full-screen panel are hidden rather than redrawn underneath it. The header title elides long preset names.
 - **Expression calibration** — guided reset, pedal sweep, and save flow; the screen shows the sampled range before saving
 - **Protocol responses** — handles Nano preset-change requests and surfaces supported write acknowledgements
 
@@ -30,7 +33,7 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 
 ```bash
 ./flash.sh build           # or: (cd firmware && ./build.sh)
-./flash.sh flash
+./flash.sh flash           # 921600 baud; NANO_BAUD=115200 ./flash.sh flash for flaky cables
 ```
 
 Monitor (keep DTR/RTS off on Waveshare):

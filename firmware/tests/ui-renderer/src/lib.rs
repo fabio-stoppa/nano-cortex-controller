@@ -155,8 +155,27 @@ mod tests {
                 button: PointerEventButton::Left,
             });
             assert_eq!(picked.get(), 1, "preset body no longer selects");
+            assert!(app.get_model_open(), "preset pick closed the popup");
+            assert_eq!(app.get_model_list_current(), 1);
             picked.set(0);
         }
+        app.set_list_kind(1);
+        app.set_model_list_current(-1);
+        window.request_redraw();
+        let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
+        render(window, &mut pixels, RenderingRotation::NoRotation, true);
+        let position = LogicalPosition::new(100.0, 125.0);
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        window.dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+        assert_eq!(picked.get(), 1);
+        assert!(!app.get_model_open(), "capture pick kept the popup open");
+        app.set_list_kind(3);
         app.set_model_open(false);
         app.set_preset_menu_index(-1);
     }
@@ -202,6 +221,123 @@ mod tests {
         }
     }
 
+    fn check_backspace_repeat(
+        app: &AppWindow,
+        window: &MinimalSoftwareWindow,
+        time: &std::cell::Cell<std::time::Duration>,
+    ) {
+        app.set_portrait(false);
+        window.set_size(PhysicalSize::new(800, 480));
+        app.set_kbd_open(true);
+        let mut px = vec![Rgb565Pixel(0); 800 * 480];
+        window.request_redraw();
+        render(window, &mut px, RenderingRotation::NoRotation, true);
+        let backspace = LogicalPosition::new(720.0, 348.0);
+        let mut hold = |text: &str, ms: u64| {
+            app.set_kbd_text(text.into());
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position: backspace,
+                button: PointerEventButton::Left,
+            });
+            for _ in 0..ms / 10 {
+                time.set(time.get() + std::time::Duration::from_millis(10));
+                slint::platform::update_timers_and_animations();
+                window.dispatch_event(WindowEvent::PointerMoved {
+                    position: backspace,
+                });
+                render(window, &mut px, RenderingRotation::NoRotation, false);
+            }
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position: backspace,
+                button: PointerEventButton::Left,
+            });
+            render(window, &mut px, RenderingRotation::NoRotation, false);
+            app.get_kbd_text().to_string()
+        };
+        assert_eq!(hold("Summer Drive", 50), "Summer Driv", "tap deletes one");
+        assert_eq!(
+            hold("Summer Drive", 350),
+            "Summer Driv",
+            "repeated before the 400ms delay"
+        );
+        // 400ms pause, then every 60ms: 1 + 5 repeats by 700ms.
+        assert_eq!(
+            hold("Summer Drive", 700),
+            "Summer",
+            "hold did not repeat every 60ms"
+        );
+        assert_eq!(hold("Summer Drive", 2000), "", "long hold leaves text");
+        assert_eq!(
+            hold("Summer Drive", 50),
+            "Summer Driv",
+            "repeat leaked into next tap"
+        );
+        app.set_kbd_open(false);
+        app.set_kbd_text("".into());
+        window.request_redraw();
+        render(window, &mut px, RenderingRotation::NoRotation, true);
+    }
+
+    fn check_long_names(app: &AppWindow, window: &MinimalSoftwareWindow) {
+        app.set_portrait(false);
+        window.set_size(PhysicalSize::new(800, 480));
+        app.set_model_enabled(true);
+        app.set_bpm_text("114 BPM".into());
+        let mut px = vec![Rgb565Pixel(0); 800 * 480];
+        let mut header = |name: &str| {
+            app.set_preset(name.into());
+            window.request_redraw();
+            render(window, &mut px, RenderingRotation::NoRotation, true);
+            px[..48 * 800].to_vec()
+        };
+        let short = header("Clean");
+        let long = header(&"Really Long Preset Name ".repeat(3));
+        for y in 0..48 {
+            for x in (0..214).chain(586..800) {
+                assert_eq!(
+                    short[y * 800 + x].0,
+                    long[y * 800 + x].0,
+                    "title drew over {x},{y}"
+                );
+            }
+        }
+        app.set_preset("-".into());
+
+        app.set_kbd_open(true);
+        let mut name = |text: String| {
+            app.set_kbd_text(text.into());
+            window.request_redraw();
+            render(window, &mut px, RenderingRotation::NoRotation, false);
+            px.clone()
+        };
+        let empty = name(String::new());
+        let ending = name(format!("Q{}END", "W".repeat(40)));
+        assert!(ending != empty, "long name is not drawn");
+        assert!(
+            name(format!("Z{}END", "W".repeat(40))) == ending,
+            "long name shows its start instead of its end"
+        );
+
+        let position = LogicalPosition::new(300.0, 300.0);
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        let before = px.clone();
+        let glow = render(window, &mut px, RenderingRotation::NoRotation, false);
+        assert!(glow > 0 && glow < 6000, "key press repainted {glow} pixels");
+        assert!(px != before, "pressed key does not glow");
+        window.dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+        render(window, &mut px, RenderingRotation::NoRotation, false);
+        app.set_kbd_open(false);
+        app.set_kbd_text("".into());
+        window.request_redraw();
+        render(window, &mut px, RenderingRotation::NoRotation, true);
+    }
+
     struct Platform {
         window: Rc<MinimalSoftwareWindow>,
         time: Rc<std::cell::Cell<std::time::Duration>>,
@@ -224,8 +360,28 @@ mod tests {
         pixels: &mut [Rgb565Pixel],
         rotation: RenderingRotation,
         full: bool,
-    ) {
+    ) -> usize {
+        struct Counted {
+            inner: lines::PartialLines,
+            pixels: usize,
+        }
+        impl LineBufferProvider for &mut Counted {
+            type TargetPixel = Rgb565Pixel;
+            fn process_line(
+                &mut self,
+                line: usize,
+                range: std::ops::Range<usize>,
+                render: impl FnOnce(&mut [Rgb565Pixel]),
+            ) {
+                self.pixels += range.len();
+                self.inner.process_line(line, range, render);
+            }
+        }
         let flipped = rotation == RenderingRotation::Rotate180;
+        let mut counted = Counted {
+            inner: lines::PartialLines::new(pixels.as_mut_ptr(), flipped),
+            pixels: 0,
+        };
         window.draw_if_needed(|renderer| {
             renderer.set_rendering_rotation(if flipped {
                 RenderingRotation::NoRotation
@@ -235,9 +391,10 @@ mod tests {
             if full {
                 renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
             }
-            renderer.render_by_line(lines::PartialLines::new(pixels.as_mut_ptr(), flipped));
+            renderer.render_by_line(&mut counted);
             renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
         });
+        counted.pixels
     }
 
     #[test]
@@ -280,13 +437,6 @@ mod tests {
         let app = AppWindow::new().unwrap();
         check_catalog_refresh(&app);
         app.set_connecting(false);
-        app.on_name_error(|name| {
-            if name.len() < 4 {
-                "At least 4 characters".into()
-            } else {
-                "".into()
-            }
-        });
         app.on_kbd_key({
             let weak = app.as_weak();
             move |key| {
@@ -297,10 +447,20 @@ mod tests {
                 } else if text.len() < 64 {
                     text.push_str(key.as_str());
                 }
+                app.set_kbd_error(
+                    if text.len() < 4 {
+                        "At least 4 characters"
+                    } else {
+                        ""
+                    }
+                    .into(),
+                );
                 app.set_kbd_text(text.into());
             }
         });
         app.show().unwrap();
+        check_long_names(&app, &window);
+        check_backspace_repeat(&app, &window, &time);
         check_preset_menu_hit_target(&app, &window);
         check_two_line_popup_names(&app, &window);
         let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
@@ -324,7 +484,11 @@ mod tests {
             let cursor_on = pixels.clone();
             time.set(time.get() + std::time::Duration::from_millis(501));
             slint::platform::update_timers_and_animations();
-            render(&window, &mut pixels, rotation, false);
+            let blink_pixels = render(&window, &mut pixels, rotation, false);
+            assert!(
+                blink_pixels <= 500,
+                "cursor blink repainted more than its glyph"
+            );
             assert!(pixels != cursor_on, "cursor did not blink off");
             time.set(time.get() + std::time::Duration::from_millis(501));
             slint::platform::update_timers_and_animations();
@@ -344,7 +508,11 @@ mod tests {
                     app.set_kbd_text(name[..len].into());
                     slint::platform::update_timers_and_animations();
                     window.request_redraw();
-                    render(&window, &mut pixels, rotation, false);
+                    let painted = render(&window, &mut pixels, rotation, false);
+                    assert!(
+                        painted < 800 * 480 / 2,
+                        "keystroke repainted {painted} pixels for {name:?}, len {len}"
+                    );
                 }
             }
             for y in (100..height.min(450)).step_by(23) {

@@ -85,6 +85,10 @@ pub fn frame(framebuffer: &mut Framebuffer) {
     redraw(framebuffer);
 }
 
+pub fn keyboard_open() -> bool {
+    state().as_ref().is_some_and(|ui| ui.app.get_kbd_open())
+}
+
 pub fn pointer(framebuffer: &mut Framebuffer, point: Option<(u16, u16)>) {
     ensure();
     let ui = state().as_mut().unwrap();
@@ -438,7 +442,6 @@ fn ensure() {
             }
         }
     });
-    app.on_name_error(|text| preset_name_error(text.as_str()).into());
     app.on_kbd_key({
         let weak = weak.clone();
         move |key| {
@@ -452,6 +455,7 @@ fn ensure() {
                 text.push_str(key.as_str());
             }
             app.set_kbd_text(text.as_str().into());
+            app.set_kbd_error(preset_name_error(&text).into());
         }
     });
     app.on_kbd_accepted({
@@ -750,6 +754,7 @@ fn preset_action(app: &AppWindow, action: i32) {
             };
             app.set_kbd_title(alloc::format!("Rename preset {slot}").as_str().into());
             app.set_kbd_text(start.into());
+            app.set_kbd_error(preset_name_error(start).into());
             app.set_kbd_open(true);
         }
         3 => {
@@ -1145,6 +1150,10 @@ pub fn show_preset(name: &str) {
     ensure();
     let ui = state().as_mut().unwrap();
     ui.app.set_preset(name.into());
+    if ui.app.get_model_open() && ui.app.get_list_kind() == 3 {
+        ui.app
+            .set_model_list_current(i32::from(crate::state::nano_state_preset_slot()));
+    }
     ui.window.request_redraw();
 }
 

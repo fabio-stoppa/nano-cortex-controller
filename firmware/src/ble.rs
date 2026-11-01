@@ -30,7 +30,7 @@ pub static SLIDER: Signal<CriticalSectionRawMutex, SliderWrite> = Signal::new();
 
 /// The old host dropped queued notifies here. The link task reads them directly.
 pub fn nano_ble_flush_c305_backlog() {}
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use trouble_host::prelude::*;
 
 use crate::panel::Board;
@@ -977,29 +977,34 @@ async fn touch_loop(board: &mut Board<'_>) {
     #[cfg(feature = "scan-diag")]
     let mut tick = 0u32;
     let mut ticks = 0u32;
+    let mut next_refresh = Instant::now();
     loop {
-        ticks = ticks.wrapping_add(1);
-        if ticks % 3 == 0 {
-            crate::ui::refresh_bluetooth(&devices());
-        }
-        crate::ui::refresh_midi();
-        crate::ui::refresh_loading();
-        #[cfg(feature = "scan-diag")]
-        {
-            tick = tick.wrapping_add(1);
-            if tick % 20 == 0 {
-                crate::bounce::report_diagnostics();
+        if Instant::now() >= next_refresh {
+            next_refresh = Instant::now() + Duration::from_millis(50);
+            ticks = ticks.wrapping_add(1);
+            if ticks % 3 == 0 {
+                crate::ui::refresh_bluetooth(&devices());
+            }
+            crate::ui::refresh_midi();
+            crate::ui::refresh_loading();
+            #[cfg(feature = "scan-diag")]
+            {
+                tick = tick.wrapping_add(1);
+                if tick % 20 == 0 {
+                    crate::bounce::report_diagnostics();
+                }
             }
         }
         match board.touch.get_touch(&mut board.i2c) {
             Ok(Some(point)) => {
                 crate::ui::pointer(&mut board.framebuffer, Some((point.x, point.y)));
             }
-            Ok(None) | Err(gt911::Error::NotReady) => {
-                crate::ui::pointer(&mut board.framebuffer, None);
-            }
+            Ok(None) => crate::ui::pointer(&mut board.framebuffer, None),
+            // No new sample yet; the finger is not necessarily lifted.
+            Err(gt911::Error::NotReady) => crate::ui::frame(&mut board.framebuffer),
             Err(_) => log::info!("touch read failed"),
         }
-        Timer::after(Duration::from_millis(50)).await;
+        let poll_ms = if crate::ui::keyboard_open() { 10 } else { 50 };
+        Timer::after(Duration::from_millis(poll_ms)).await;
     }
 }

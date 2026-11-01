@@ -9,6 +9,7 @@
 #   ./flash.sh         [port]                — alias for 'run'
 #
 # Port resolution order: explicit arg > $NANO_PORT env var > /dev/ttyACM0 > /dev/ttyUSB0
+# Flash baud: $NANO_BAUD (default 921600; use 115200 if a cable is unreliable)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -62,7 +63,7 @@ do_flash() {
         exit 1
     fi
     echo "--- flash ($profile) → $port ---"
-    espflash flash --port "$port" --baud 115200 --flash-freq 80mhz "$elf"
+    espflash flash --port "$port" --baud "${NANO_BAUD:-921600}" --flash-freq 80mhz "$elf"
 }
 
 do_monitor() {
@@ -82,7 +83,7 @@ do_run() {
     local elf
     elf="$(elf_path "$profile")"
     echo "--- flash + monitor ($profile) → $port ---"
-    espflash flash --port "$port" --baud 115200 --flash-freq 80mhz --monitor "$elf"
+    espflash flash --port "$port" --baud "${NANO_BAUD:-921600}" --flash-freq 80mhz --monitor "$elf"
 }
 
 # ---------------------------------------------------------------------------
