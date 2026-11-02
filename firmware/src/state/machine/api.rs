@@ -345,6 +345,7 @@ fn feed_library_chunk(data: &[u8]) -> bool {
                     catalog.cabs.len()
                 );
                 s.library_catalog = catalog;
+                crate::state::library_completed();
                 crate::screen::nano_ui_library_updated();
                 if s.amp.valid {
                     push_amp_ui();
@@ -443,6 +444,7 @@ fn feed_library_chunk(data: &[u8]) -> bool {
                 catalog.cabs.len()
             );
             s.library_catalog = catalog;
+            crate::state::library_completed();
             crate::screen::nano_ui_library_updated();
             if s.amp.valid {
                 push_amp_ui();

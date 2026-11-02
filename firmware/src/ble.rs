@@ -497,8 +497,6 @@ where
     let interval_us = conn.params().conn_interval.as_micros();
     log::info!("nano connected, interval {interval_us} us");
     mark(nano, 2);
-    crate::link::set_up(true);
-    crate::screen::nano_ui_set_ble_connected(true);
     stage(connection::Stage::Discovering);
     // One 251-byte PDU is about 2.1 ms. Without this, the link stays at
     // 27-byte PDUs and one event still carries more packets than the
@@ -539,6 +537,16 @@ where
 }
 
 async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8>) {
+    let mut required = [false; 2];
+    for (index, uuid) in [UUID_A002, UUID_A003].iter().enumerate() {
+        match client.services_by_uuid(&Uuid::new_short(*uuid)).await {
+            Ok(services) => required[index] = !services.is_empty(),
+            Err(error) => {
+                log::error!("Nano service discovery failed: {error:?}");
+                return;
+            }
+        }
+    }
     let Some(c304) = find_char(client, UUID_C304).await else {
         log::warn!("C304 missing");
         return;
@@ -552,6 +560,16 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
     }
     log::info!("C304 handle {} C305 handle {}", c304.handle, c305.handle);
     let c304_no_rsp = c304.props.any(&[CharacteristicProp::WriteWithoutResponse]);
+    if let Err(error) = connection::validate_capabilities(
+        required[0],
+        required[1],
+        c304.props.any(&[CharacteristicProp::Write]),
+        c305.props.any(&[CharacteristicProp::Notify]),
+    ) {
+        log::error!("{error}");
+        crate::scenes::report(error);
+        return;
+    }
     log::info!(
         "C304 write without response {}",
         if c304_no_rsp { "yes" } else { "no" }
@@ -567,6 +585,13 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
     };
 
     stage(connection::Stage::Loading);
+    crate::link::set_up(true);
+    crate::screen::nano_ui_set_ble_connected(true);
+    let initial_snapshot = crate::state::snapshot_generation();
+    let initial_library = crate::state::library_generation();
+    let mut library_asked = false;
+    let mut ready = false;
+    crate::state::nano_state_reset();
     let mut payload = [0u8; 16];
     let n = nano_wire::editor::read_settings_payload(&mut payload);
     if n > 0 {
@@ -575,10 +600,12 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
                 log::info!("C304 read-settings write ({n} bytes)");
                 log_pkt("C304 TX settings", &payload[..n], None);
             }
-            Err(_) => log::warn!("C304 write failed"),
+            Err(error) => {
+                log::error!("Initial C304 settings write failed: {error:?}");
+                return;
+            }
         }
     }
-    crate::state::nano_state_reset();
     crate::state::nano_state_begin_sync();
     flush_writes(client, c304.handle, c304_no_rsp).await;
 
@@ -598,6 +625,10 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
                 crate::state::feed_c305_bytes(note.as_ref());
             }
             Ok(Either::Second(write)) => {
+                if !ready {
+                    log::warn!("Slider edit refused while Nano is loading");
+                    continue;
+                }
                 if crate::scenes::busy() {
                     crate::scenes::report("Slider ignored while scene recall is running");
                     continue;
@@ -625,7 +656,7 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
             }
             Err(_) => {}
         }
-        while !crate::scenes::busy() {
+        while ready && !crate::scenes::busy() {
             let Some(cmd) = crate::link::pop_cmd() else { break; };
             apply_cmd(cmd);
             flush_writes(client, c304.handle, c304_no_rsp).await;
@@ -643,7 +674,9 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
             log::info!("Library request sent={sent}");
         }
         if let Some(param) = crate::link::take_param() {
-            if crate::scenes::busy() {
+            if !ready {
+                log::warn!("Parameter edit refused while Nano is loading");
+            } else if crate::scenes::busy() {
                 crate::scenes::report("Parameter edit ignored while scene recall is running");
             } else {
                 crate::scenes::sound_edited();
@@ -657,6 +690,25 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
             }
         }
         crate::state::poll();
+        if !ready {
+            let snapshot = crate::state::snapshot_generation() != initial_snapshot;
+            let presets = !crate::state::nano_state_preset_names().is_empty();
+            if snapshot && presets && !library_asked && crate::state::nano_rx_mode_get() == 0 {
+                library_asked = crate::state::nano_state_request_library();
+                if !library_asked {
+                    crate::scenes::report("Loading failed: initial library request refused");
+                    return;
+                }
+            }
+            if connection::initial_state_loaded(
+                snapshot,
+                presets,
+                crate::state::library_generation() != initial_library,
+            ) {
+                ready = true;
+                stage(connection::Stage::Ready);
+            }
+        }
         if crate::scenes::autosave_due() {
             let result = crate::scenes::autosave_selected();
             match result {
@@ -1204,7 +1256,6 @@ async fn touch_loop(board: &mut Board<'_>) {
                 crate::ui::refresh_bluetooth(&devices());
             }
             crate::ui::refresh_midi();
-            crate::ui::refresh_loading();
             #[cfg(feature = "scan-diag")]
             {
                 tick = tick.wrapping_add(1);

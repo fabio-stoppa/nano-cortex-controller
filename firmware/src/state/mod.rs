@@ -4,6 +4,9 @@
 pub mod machine;
 
 static SNAPSHOT_GENERATION: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static LIBRARY_GENERATION: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+pub fn library_generation() -> u32 { LIBRARY_GENERATION.load(core::sync::atomic::Ordering::Relaxed) }
+pub(crate) fn library_completed() { LIBRARY_GENERATION.fetch_add(1, core::sync::atomic::Ordering::Relaxed); }
 static CAB_GENERATION: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static PRESET_ACK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 pub fn preset_ack_generation() -> u32 { PRESET_ACK.load(core::sync::atomic::Ordering::Relaxed) }

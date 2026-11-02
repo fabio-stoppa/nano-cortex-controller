@@ -1018,78 +1018,27 @@ fn redraw(framebuffer: &mut Framebuffer) {
     });
 }
 
-static LINK_UP: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-static LINK_UP_AT_MS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-static LIBRARY_ASKED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-static LOADED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-static LOAD_TICK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-
 pub fn set_connection_stage(stage: &str) {
     ensure();
     let ui = state().as_mut().unwrap();
     ui.app.set_connection_stage(stage.into());
-    ui.window.request_redraw();
-}
-
-/// How long to wait for the pedal's dump before showing the app anyway.
-const LOAD_TIMEOUT_MS: u32 = 20_000;
-
-/// Keeps the welcome screen up after the link opens until the amp state, preset
-/// names and library have arrived, so the app never shows half-loaded data.
-pub fn refresh_loading() {
-    use core::sync::atomic::Ordering::Relaxed;
-    if !LINK_UP.load(Relaxed) || LOADED.load(Relaxed) {
-        return;
-    }
-    if LOAD_TICK.fetch_add(1, Relaxed) % 8 != 0 {
-        return;
-    }
-    let Some(ui) = state().as_mut() else {
-        return;
-    };
-    let waited = (Instant::now().as_millis() as u32).wrapping_sub(LINK_UP_AT_MS.load(Relaxed));
-    let status = if !crate::state::nano_state_amp_ready() {
-        "Loading amp state..."
-    } else if crate::state::nano_state_preset_names().is_empty() {
-        "Loading presets..."
-    } else {
-        // Ask for the library once the dump is in, so the state and library streams don't mix.
-        if !LIBRARY_ASKED.swap(true, Relaxed) {
-            crate::ble::LIBRARY_WANTED.store(true, Relaxed);
-        }
-        let library = crate::state::nano_state_library_snapshot();
-        if library.captures.is_empty() && library.cabs.is_empty() {
-            "Loading library..."
-        } else {
-            ""
-        }
-    };
-    if status.is_empty() || waited > LOAD_TIMEOUT_MS {
-        ui.app.set_connection_stage("Ready".into());
-        LOADED.store(true, Relaxed);
+    ui.app.set_connecting(stage != "Ready");
+    ui.app.set_model_enabled(stage == "Ready");
+    if stage != "Loading" {
         ui.app.set_load_status("".into());
-        ui.app.set_connecting(false);
-    } else if ui.app.get_load_status() != status {
-        ui.app.set_load_status(status.into());
     }
     ui.window.request_redraw();
 }
 
 pub fn set_connected(connected: bool) {
-    use core::sync::atomic::Ordering::Relaxed;
     ensure();
     let ui = state().as_mut().unwrap();
-    LINK_UP.store(connected, Relaxed);
-    LOADED.store(false, Relaxed);
-    LIBRARY_ASKED.store(false, Relaxed);
-    LOAD_TICK.store(0, Relaxed);
-    LINK_UP_AT_MS.store(Instant::now().as_millis() as u32, Relaxed);
     ui.app.set_connecting(true);
     if !connected {
         ui.app.set_load_status("".into());
     }
     ui.app.set_ble_on(connected);
-    ui.app.set_model_enabled(connected);
+    ui.app.set_model_enabled(false);
     ui.window.request_redraw();
 }
 
