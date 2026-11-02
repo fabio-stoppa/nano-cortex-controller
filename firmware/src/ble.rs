@@ -103,7 +103,18 @@ pub struct Seen {
 /// How long a device stays listed as available after its last advertisement.
 const AVAILABLE_FOR: Duration = Duration::from_secs(8);
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+static RX_PACKETS: AtomicU32 = AtomicU32::new(0);
+static TX_PACKETS: AtomicU32 = AtomicU32::new(0);
+static WRITE_FAILURES: AtomicU32 = AtomicU32::new(0);
+
+fn traffic_summary() {
+    log::info!("Nano traffic: rx={}, tx={}, write_failures={}",
+        RX_PACKETS.load(Ordering::Relaxed),
+        TX_PACKETS.load(Ordering::Relaxed),
+        WRITE_FAILURES.load(Ordering::Relaxed));
+}
 
 type Shared<T> = Mutex<CriticalSectionRawMutex, RefCell<T>>;
 
@@ -389,9 +400,13 @@ where
 {
     loop {
         NANO_RESTART.reset();
+        RX_PACKETS.store(0, Ordering::Relaxed);
+        TX_PACKETS.store(0, Ordering::Relaxed);
+        WRITE_FAILURES.store(0, Ordering::Relaxed);
         // GATT construction has large temporary buffers. Keep session polling
         // out of the parent future's stack frame.
         select(Box::pin(nano_session(stack, hunt, radio)), NANO_RESTART.wait()).await;
+        traffic_summary();
         crate::link::set_up(false);
         SLIDER.reset();
         LIBRARY_WANTED.store(false, Ordering::Relaxed);
@@ -639,6 +654,7 @@ async fn receive_notifications(listener: &mut NotificationListener<'_, 512>) {
     let mut seen = 0u32;
     loop {
         let note = listener.next().await;
+        RX_PACKETS.fetch_add(1, Ordering::Relaxed);
         seen = seen.wrapping_add(1);
         if seen <= 4 || seen % 32 == 0 {
             log_pkt("C305 RX", note.as_ref(), Some(seen));
@@ -663,6 +679,7 @@ async fn nano_commands<C: Controller, P: PacketPool>(
     let mut library_asked = false;
     let mut ready = false;
     let loading_started = Instant::now();
+    let mut next_summary = loading_started + Duration::from_secs(10);
     crate::state::nano_state_reset();
     let mut payload = [0u8; 16];
     let n = nano_wire::editor::read_settings_payload(&mut payload);
@@ -682,6 +699,10 @@ async fn nano_commands<C: Controller, P: PacketPool>(
     if flush_writes(client, c304.handle, c304_no_rsp).await.is_err() { return; }
 
     loop {
+        if Instant::now() >= next_summary {
+            traffic_summary();
+            next_summary = Instant::now() + Duration::from_secs(10);
+        }
         if !ready && Instant::now() - loading_started >= LOAD_TIMEOUT {
             crate::scenes::report("Loading failed: initial state, presets, or library timed out");
             log::error!("Nano initial loading timed out");
@@ -704,7 +725,7 @@ async fn nano_commands<C: Controller, P: PacketPool>(
                     let result = write_packet(client, c304.handle, c304_no_rsp, &buf[..n]).await;
                     match result {
                         Ok(()) => {
-                            log::info!("slider {} = {}", write.id, write.raw);
+                            log::debug!("slider {} = {}", write.id, write.raw);
                             log_pkt("C304 TX slider", &buf[..n], None);
                         }
                         Err(()) => return,
@@ -1089,13 +1110,19 @@ async fn write_packet<C: Controller, P: PacketPool>(
     no_response_supported: bool,
     packet: &[u8],
 ) -> Result<(), ()> {
-    bounded("C304 write", WRITE_TIMEOUT, async {
+    let result = bounded("C304 write", WRITE_TIMEOUT, async {
         if no_response_supported && nano_wire::editor::is_live_value_write(packet) {
             client.write_handle_without_response(handle, packet).await
         } else {
             client.write_handle(handle, packet).await
         }
-    }).await
+    }).await;
+    if result.is_ok() {
+        TX_PACKETS.fetch_add(1, Ordering::Relaxed);
+    } else {
+        WRITE_FAILURES.fetch_add(1, Ordering::Relaxed);
+    }
+    result
 }
 
 async fn flush_writes<C: Controller, P: PacketPool>(
@@ -1107,7 +1134,7 @@ async fn flush_writes<C: Controller, P: PacketPool>(
         let result = write_packet(client, handle, no_response_supported, &packet).await;
         match result {
             Ok(()) => {
-                log::info!("C304 write {} bytes", packet.len());
+                log::debug!("C304 write {} bytes", packet.len());
                 log_pkt("C304 TX", &packet, None);
                 embassy_futures::yield_now().await;
             }
@@ -1276,6 +1303,9 @@ fn eq_ignore_ascii_case(a: &[u8], b: &[u8]) -> bool {
 }
 
 fn log_pkt(label: &str, data: &[u8], packet_number: Option<u32>) {
+    if !log::log_enabled!(log::Level::Debug) {
+        return;
+    }
     let digits = b"0123456789ABCDEF";
     for (chunk_index, chunk) in data.chunks(16).enumerate() {
         let mut hex = [0u8; 48];
@@ -1289,8 +1319,8 @@ fn log_pkt(label: &str, data: &[u8], packet_number: Option<u32>) {
         let text = core::str::from_utf8(&hex[..o]).unwrap_or("");
         let offset = chunk_index * 16;
         match packet_number {
-            Some(n) => log::info!("{label} #{n} len={} offset={offset} {text}", data.len()),
-            None => log::info!("{label} len={} offset={offset} {text}", data.len()),
+            Some(n) => log::debug!("{label} #{n} len={} offset={offset} {text}", data.len()),
+            None => log::debug!("{label} len={} offset={offset} {text}", data.len()),
         }
     }
 }
