@@ -706,6 +706,20 @@ mod tests {
     }
 
     fn check_tuner_and_welcome_layout(app: &AppWindow, window: &MinimalSoftwareWindow) {
+        fn render(
+            window: &MinimalSoftwareWindow,
+            pixels: &mut [Rgb565Pixel],
+            rotation: RenderingRotation,
+            _fresh: bool,
+        ) {
+            use slint::platform::WindowAdapter;
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(rotation);
+                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                renderer.render(pixels, window.window().size().width as usize);
+                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            });
+        }
         let tap = |x, y| {
             let position = LogicalPosition::new(x, y);
             window.dispatch_event(WindowEvent::PointerPressed {
@@ -1509,9 +1523,9 @@ mod tests {
                         // Portrait tabs are 69px wide; the selected AMP tab is wider.
                         let tab_x = [14, 87, 160, 251, 324, 397][slot];
                         let (x, y) = if portrait {
-                            (tab_x + 11, 744)
+                            (tab_x + 11, 760)
                         } else {
-                            (20, 70 + 67 * slot)
+                            (24, 97 + 67 * slot)
                         };
                         assert_eq!(
                             pixels[y * width as usize + x].0,
@@ -1522,7 +1536,7 @@ mod tests {
                             let (left, right, top, bottom) = if portrait {
                                 (tab_x + 1, tab_x + 68, 734, 786)
                             } else {
-                                (14, 125, 64 + 68 * slot, 119 + 68 * slot)
+                                (14, 119, 70 + 67 * slot, 124 + 67 * slot)
                             };
                             assert!(
                                 (top..bottom).any(|row| {
