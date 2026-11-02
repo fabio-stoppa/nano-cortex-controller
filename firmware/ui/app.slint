@@ -2431,6 +2431,7 @@ component ToolsPanel inherits Rectangle {
 // One device's connection state: dot, name and status text.
 component StatusLine inherits Rectangle {
     in property <string> label;
+    in property <string> status: "";
     // -1 not seen, 0 nearby, 1 connecting, 2 connected
     in property <int> state;
     height: 28px;
@@ -2446,7 +2447,7 @@ component StatusLine inherits Rectangle {
             }
         }
         Text {
-            text: root.label + ": " + (root.state == 2 ? "Connected" : (root.state == 1 ? "Connecting..." : (root.state == 0 ? "Found, not connected" : "Searching...")));
+            text: root.label + ": " + (root.status != "" ? root.status : (root.state == 2 ? "Connected" : (root.state == 1 ? "Connecting..." : (root.state == 0 ? "Found, not connected" : "Searching..."))));
             color: root.state >= 1 ? #ffffff : #909090;
             font-size: 17px;
             font-weight: 700;
@@ -2514,11 +2515,10 @@ component ConnectingOverlay inherits Rectangle {
             horizontal-alignment: center;
         }
         Rectangle { height: 8px; }
-        Text {
-            text: "Nano Cortex: " + root.stage;
-            color: #ffffff;
-            font-size: 16px;
-            horizontal-alignment: center;
+        StatusLine {
+            label: "Nano Cortex";
+            status: root.stage;
+            state: root.amp-state;
         }
         StatusLine { label: "Footswitch"; state: root.foot-state; }
         Text {
