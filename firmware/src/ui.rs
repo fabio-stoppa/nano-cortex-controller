@@ -1030,6 +1030,13 @@ pub fn set_connection_stage(stage: &str) {
     ui.window.request_redraw();
 }
 
+pub fn set_connection_error(message: &str) {
+    ensure();
+    let ui = state().as_mut().unwrap();
+    ui.app.set_load_status(message.into());
+    ui.window.request_redraw();
+}
+
 pub fn set_connected(connected: bool) {
     ensure();
     let ui = state().as_mut().unwrap();

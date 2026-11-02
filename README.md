@@ -14,6 +14,9 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - Ready requires both Nano services, writable C304, a successful C305 notification
   subscription, a complete initial state snapshot, preset names, and a parsed library.
   The loading screen never proceeds merely because a timer expired.
+- Nano connect attempts have a 12-second deadline, individual setup operations
+  8 seconds, C304 writes 3 seconds, and initial loading 45 seconds. A stalled or
+  failed write ends the session rather than continuing uncertain queued edits.
 - **Preset, effects, and tuner** — the same behavior as the old ESP-IDF app, driven by Embassy deadlines (`firmware/src/state`, `firmware/src/fx`, `firmware/src/tuner`)
 - **800×480 LCD** — Slint UI drawn into the RGB panel (`firmware/src/ui.rs`)
 - **Category-colored FX tabs** — guitar OD orange, bass OD amber, compressor yellow, pitch magenta, filter lime, wah green, utility pink, modulation purple, delay cyan, and reverb blue. Colors match the saturation and brightness of the blue and amp-red accents in both orientations; bypassed FX retain black backgrounds with category-colored labels.

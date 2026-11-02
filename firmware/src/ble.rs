@@ -43,6 +43,31 @@ fn stage(stage: connection::Stage) {
     crate::ui::set_connection_stage(stage.label());
 }
 
+const SETUP_TIMEOUT: Duration = Duration::from_secs(8);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(3);
+const LOAD_TIMEOUT: Duration = Duration::from_secs(45);
+
+async fn bounded<T, E: core::fmt::Debug>(
+    label: &str,
+    deadline: Duration,
+    operation: impl core::future::Future<Output = Result<T, E>>,
+) -> Result<T, ()> {
+    match with_timeout(deadline, operation).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => {
+            log::error!("{label} failed: {error:?}");
+            crate::ui::set_connection_error(&alloc::format!("{label} failed: {error:?}"));
+            Err(())
+        }
+        Err(_) => {
+            log::error!("{label} timed out");
+            crate::ui::set_connection_error(&alloc::format!("{label} timed out; reconnecting"));
+            Err(())
+        }
+    }
+}
+
 const NANO_PREFIX: &[u8] = b"Neural DSP Nano Cortex";
 const FOOT: &[u8] = b"FootCtrl";
 const FOOT_PLUS: &[u8] = b"FootCtrlPlus";
@@ -485,7 +510,7 @@ where
     log::info!("connecting to nano");
     stage(connection::Stage::Connecting);
     mark(nano, 1);
-    let conn = central.connect(&connect).await;
+    let conn = bounded("Nano connection", CONNECT_TIMEOUT, central.connect(&connect)).await;
     drop(guard);
     let conn = match conn {
         Ok(conn) => conn,
@@ -501,12 +526,15 @@ where
     // One 251-byte PDU is about 2.1 ms. Without this, the link stays at
     // 27-byte PDUs and one event still carries more packets than the
     // controller can buffer.
-    match conn.update_data_length(stack, 251, 2120).await {
+    match bounded("Nano data length setup", SETUP_TIMEOUT, conn.update_data_length(stack, 251, 2120)).await {
         Ok(()) => log::info!("data length 251 requested"),
-        Err(_) => log::warn!("data length update failed"),
+        Err(()) => return,
     };
 
-    let client = match Box::pin(GattClient::<C, DefaultPacketPool, 8>::new(stack, &conn)).await {
+    let client = match bounded(
+        "Nano GATT initialization", SETUP_TIMEOUT,
+        Box::pin(GattClient::<C, DefaultPacketPool, 8>::new(stack, &conn)),
+    ).await {
         Ok(client) => client,
         Err(_) => {
             log::warn!("nano gatt client failed");
@@ -539,7 +567,8 @@ where
 async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8>) {
     let mut required = [false; 2];
     for (index, uuid) in [UUID_A002, UUID_A003].iter().enumerate() {
-        match client.services_by_uuid(&Uuid::new_short(*uuid)).await {
+        match bounded("Nano service discovery", SETUP_TIMEOUT,
+            client.services_by_uuid(&Uuid::new_short(*uuid))).await {
             Ok(services) => required[index] = !services.is_empty(),
             Err(error) => {
                 log::error!("Nano service discovery failed: {error:?}");
@@ -576,7 +605,7 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
     );
 
     stage(connection::Stage::Subscribing);
-    let mut listener = match client.subscribe(&c305, false).await {
+    let mut listener = match bounded("C305 subscription", SETUP_TIMEOUT, client.subscribe(&c305, false)).await {
         Ok(listener) => listener,
         Err(_) => {
             log::warn!("C305 subscribe failed");
@@ -591,11 +620,12 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
     let initial_library = crate::state::library_generation();
     let mut library_asked = false;
     let mut ready = false;
+    let loading_started = Instant::now();
     crate::state::nano_state_reset();
     let mut payload = [0u8; 16];
     let n = nano_wire::editor::read_settings_payload(&mut payload);
     if n > 0 {
-        match client.write_handle(c304.handle, &payload[..n]).await {
+        match write_packet(client, c304.handle, false, &payload[..n]).await {
             Ok(()) => {
                 log::info!("C304 read-settings write ({n} bytes)");
                 log_pkt("C304 TX settings", &payload[..n], None);
@@ -607,10 +637,15 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
         }
     }
     crate::state::nano_state_begin_sync();
-    flush_writes(client, c304.handle, c304_no_rsp).await;
+    if flush_writes(client, c304.handle, c304_no_rsp).await.is_err() { return; }
 
     let mut seen = 0u32;
     loop {
+        if !ready && Instant::now() - loading_started >= LOAD_TIMEOUT {
+            crate::scenes::report("Loading failed: initial state, presets, or library timed out");
+            log::error!("Nano initial loading timed out");
+            return;
+        }
         match with_timeout(
             Duration::from_millis(10),
             select(listener.next(), SLIDER.wait()),
@@ -637,20 +672,13 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
                 let mut buf = [0u8; 24];
                 let n = slider_payload(write, &mut buf);
                 if n > 0 {
-                    let result = if c304_no_rsp && nano_wire::editor::is_live_value_write(&buf[..n])
-                    {
-                        client
-                            .write_handle_without_response(c304.handle, &buf[..n])
-                            .await
-                    } else {
-                        client.write_handle(c304.handle, &buf[..n]).await
-                    };
+                    let result = write_packet(client, c304.handle, c304_no_rsp, &buf[..n]).await;
                     match result {
                         Ok(()) => {
                             log::info!("slider {} = {}", write.id, write.raw);
                             log_pkt("C304 TX slider", &buf[..n], None);
                         }
-                        Err(_) => log::warn!("slider write failed"),
+                        Err(()) => return,
                     }
                 }
             }
@@ -659,11 +687,11 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
         while ready && !crate::scenes::busy() {
             let Some(cmd) = crate::link::pop_cmd() else { break; };
             apply_cmd(cmd);
-            flush_writes(client, c304.handle, c304_no_rsp).await;
+            if flush_writes(client, c304.handle, c304_no_rsp).await.is_err() { return; }
         }
         if let Some(cmd) = crate::scenes::poll() {
             apply_cmd(cmd);
-            flush_writes(client, c304.handle, c304_no_rsp).await;
+            if flush_writes(client, c304.handle, c304_no_rsp).await.is_err() { return; }
         }
         if LIBRARY_WANTED.load(core::sync::atomic::Ordering::Relaxed)
             && crate::state::nano_rx_mode_get() == 0
@@ -726,7 +754,7 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
                 }
             }
         }
-        flush_writes(client, c304.handle, c304_no_rsp).await;
+        if flush_writes(client, c304.handle, c304_no_rsp).await.is_err() { return; }
     }
 }
 
@@ -1024,17 +1052,28 @@ fn step_model(block: u8, delta: i8) {
     }
 }
 
+async fn write_packet<C: Controller, P: PacketPool>(
+    client: &GattClient<'_, C, P, 8>,
+    handle: u16,
+    no_response_supported: bool,
+    packet: &[u8],
+) -> Result<(), ()> {
+    bounded("C304 write", WRITE_TIMEOUT, async {
+        if no_response_supported && nano_wire::editor::is_live_value_write(packet) {
+            client.write_handle_without_response(handle, packet).await
+        } else {
+            client.write_handle(handle, packet).await
+        }
+    }).await
+}
+
 async fn flush_writes<C: Controller, P: PacketPool>(
     client: &GattClient<'_, C, P, 8>,
     handle: u16,
     no_response_supported: bool,
-) {
+) -> Result<(), ()> {
     while let Some(packet) = crate::link::pop_write() {
-        let result = if no_response_supported && nano_wire::editor::is_live_value_write(&packet) {
-            client.write_handle_without_response(handle, &packet).await
-        } else {
-            client.write_handle(handle, &packet).await
-        };
+        let result = write_packet(client, handle, no_response_supported, &packet).await;
         match result {
             Ok(()) => {
                 log::info!("C304 write {} bytes", packet.len());
@@ -1043,9 +1082,11 @@ async fn flush_writes<C: Controller, P: PacketPool>(
             Err(error) => {
                 log::warn!("C304 write failed: {error:?}");
                 crate::scenes::cancel("Bluetooth write failed; recall may be partially applied");
+                return Err(());
             }
         }
     }
+    Ok(())
 }
 
 fn slider_payload(write: SliderWrite, buf: &mut [u8]) -> usize {
@@ -1148,14 +1189,11 @@ async fn find_char<C: Controller, P: PacketPool>(
     uuid: u16,
 ) -> Option<Characteristic<[u8]>> {
     for svc_uuid in [UUID_A002, UUID_A003] {
-        let svcs = client
-            .services_by_uuid(&Uuid::new_short(svc_uuid))
-            .await
-            .ok()?;
+        let svcs = bounded("Nano service discovery", SETUP_TIMEOUT,
+            client.services_by_uuid(&Uuid::new_short(svc_uuid))).await.ok()?;
         for svc in svcs.iter() {
-            if let Ok(ch) = client
-                .characteristic_by_uuid::<[u8]>(svc, &Uuid::new_short(uuid))
-                .await
+            if let Ok(ch) = bounded("Nano characteristic discovery", SETUP_TIMEOUT,
+                client.characteristic_by_uuid::<[u8]>(svc, &Uuid::new_short(uuid))).await
             {
                 return Some(ch);
             }
