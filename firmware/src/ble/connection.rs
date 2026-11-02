@@ -1,3 +1,31 @@
+use core::future::Future;
+use embassy_time::{with_timeout, Duration};
+
+pub const SETUP_TIMEOUT: Duration = Duration::from_secs(8);
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(3);
+pub const LOAD_TIMEOUT: Duration = Duration::from_secs(45);
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Failure<E> {
+    Bluetooth(E),
+    Timeout,
+}
+
+pub async fn with_deadline<T, E>(
+    deadline: Duration,
+    operation: impl Future<Output = Result<T, E>>,
+) -> Result<T, Failure<E>> {
+    match with_timeout(deadline, operation).await {
+        Ok(result) => result.map_err(Failure::Bluetooth),
+        Err(_) => Err(Failure::Timeout),
+    }
+}
+
+pub async fn run_io(receive: impl Future<Output = ()>, commands: impl Future<Output = ()>) {
+    embassy_futures::select::select(receive, commands).await;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {
     Searching,
@@ -18,7 +46,6 @@ impl Stage {
             Self::Loading => "Loading",
             Self::Ready => "Ready",
         }
-
     }
 }
 
@@ -75,18 +102,20 @@ impl Operation {
 
     pub const fn recovery(self) -> &'static str {
         match self {
-            Self::Connect | Self::Scan =>
-                "Move Nano closer, enable pairing, and disconnect Cortex Cloud.",
-            Self::DataLength | Self::Gatt | Self::Receive =>
-                "Check Nano power/range; restart the controller if this repeats.",
-            Self::Services | Self::Characteristics =>
-                "Check that this is a Nano Cortex with compatible firmware.",
-            Self::Subscribe =>
-                "Check Nano pairing; authentication errors may require re-pairing.",
-            Self::Write =>
-                "Check the sound before retrying; save/copy/move/delete may have applied.",
-            Self::Loading =>
-                "Keep Nano nearby and disconnect other clients; loading will restart.",
+            Self::Connect | Self::Scan => {
+                "Move Nano closer, enable pairing, and disconnect Cortex Cloud."
+            }
+            Self::DataLength | Self::Gatt | Self::Receive => {
+                "Check Nano power/range; restart the controller if this repeats."
+            }
+            Self::Services | Self::Characteristics => {
+                "Check that this is a Nano Cortex with compatible firmware."
+            }
+            Self::Subscribe => "Check Nano pairing; authentication errors may require re-pairing.",
+            Self::Write => {
+                "Check the sound before retrying; save/copy/move/delete may have applied."
+            }
+            Self::Loading => "Keep Nano nearby and disconnect other clients; loading will restart.",
         }
     }
 }
@@ -107,10 +136,12 @@ mod tests {
 
     #[test]
     fn validate_each_required_capability() {
-        assert!(validate_capabilities(true, true, true, true).is_ok());
-        assert!(validate_capabilities(false, true, true, true).is_err());
-        assert!(validate_capabilities(true, false, true, true).is_err());
-        assert!(validate_capabilities(true, true, false, true).is_err());
-        assert!(validate_capabilities(true, true, true, false).is_err());
+        for bits in 0..16 {
+            assert_eq!(
+                validate_capabilities(bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, bits & 8 != 0,)
+                    .is_ok(),
+                bits == 15,
+            );
+        }
     }
 }

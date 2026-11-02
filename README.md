@@ -120,11 +120,19 @@ Host-test the embedded-font rename keyboard and partial framebuffer redraws:
 cargo +stable test --manifest-path firmware/tests/ui-renderer/Cargo.toml --target x86_64-unknown-linux-gnu
 ```
 
-Host-test MIDI learn, multi-target queues, and binding-record compatibility:
+Host-test MIDI learn, multi-target queues, binding records, and connection reliability:
 
 ```bash
 cargo +stable test --manifest-path firmware/tests/midi/Cargo.toml --target x86_64-unknown-linux-gnu
 ```
+
+The connection tests use a deterministic Embassy clock and the production
+deadline/duplex helpers. They cover exact write deadlines without retries,
+underlying Bluetooth codes, cancellation at every connection stage, a 261,120-byte
+transfer through a 16-notification queue while writes wait for replies, and
+10,000 touch/MIDI edits followed by disconnect. Protocol tests also check the
+exact 256 KiB reassembly limit, overflow recovery, and reset between sessions.
+These are simulated transport tests, not radio or Nano firmware validation.
 
 ## Scenes and MIDI configuration
 
@@ -311,7 +319,18 @@ panic while retaining partial redraws and the existing touch mapping.
 
 1. Power on the Nano Cortex with Bluetooth enabled
 2. **Disconnect Cortex Cloud** (or close the browser editor) — only one BLE client at a time
-3. Flash and watch serial for `Found Nano Cortex, connecting...`
+3. Flash and watch serial for `Nano connection: Searching` through `Ready`.
+
+For hardware acceptance, interrupt Nano power or leave range at Connecting,
+Discovering, Subscribing, Loading, and Ready; also restart the controller while
+Searching. Each attempt must end with the correct stage/code, leave no edits
+to replay, and reconnect with fresh state. Exercise fast touch/MIDI sweeps,
+scene recalls, and library transfers together; inspect traffic summaries for
+write failures and confirm replies continue during write bursts. Force a missing
+or incompatible service and a rejected subscription where a BLE test peripheral
+is available; neither may reach Ready. Do not retry destructive operations
+without checking the Nano's resulting state. Capture setup timings and negotiated
+MTU/interval before proposing any radio interval/window/buffer changes.
 
 Renamed Nanos are discovered through their advertised A002/A003 service UUIDs,
 independently of the local name. Factory-name matching remains a fallback.

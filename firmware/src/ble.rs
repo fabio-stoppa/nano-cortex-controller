@@ -37,30 +37,25 @@ use crate::panel::Board;
 
 mod advertisement;
 pub mod connection;
-use connection::Operation;
+use connection::{Failure, Operation, CONNECT_TIMEOUT, LOAD_TIMEOUT, SETUP_TIMEOUT, WRITE_TIMEOUT};
 
 fn stage(stage: connection::Stage) {
     log::info!("Nano connection: {}", stage.label());
     crate::ui::set_connection_stage(stage.label());
 }
 
-const SETUP_TIMEOUT: Duration = Duration::from_secs(8);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
-const WRITE_TIMEOUT: Duration = Duration::from_secs(3);
-const LOAD_TIMEOUT: Duration = Duration::from_secs(45);
-
 async fn bounded<T, E: core::fmt::Debug>(
     operation_kind: Operation,
     deadline: Duration,
     operation: impl core::future::Future<Output = Result<T, E>>,
 ) -> Result<T, ()> {
-    match with_timeout(deadline, operation).await {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(error)) => {
+    match connection::with_deadline(deadline, operation).await {
+        Ok(value) => Ok(value),
+        Err(Failure::Bluetooth(error)) => {
             report_failure(operation_kind, &error);
             Err(())
         }
-        Err(_) => {
+        Err(Failure::Timeout) => {
             report_failure(operation_kind, &"deadline exceeded");
             Err(())
         }
@@ -419,6 +414,7 @@ where
         LIBRARY_WANTED.store(false, Ordering::Relaxed);
         crate::state::nano_state_reset();
         crate::screen::nano_ui_set_ble_connected(false);
+        stage(connection::Stage::Searching);
         reset_state(true);
         log::warn!("nano link ended, scanning again");
         Timer::after(Duration::from_secs(2)).await;
@@ -553,9 +549,15 @@ where
     // One 251-byte PDU is about 2.1 ms. Without this, the link stays at
     // 27-byte PDUs and one event still carries more packets than the
     // controller can buffer.
-    match bounded(Operation::DataLength, SETUP_TIMEOUT, conn.update_data_length(stack, 251, 2120)).await {
+    match connection::with_deadline(SETUP_TIMEOUT, conn.update_data_length(stack, 251, 2120)).await {
         Ok(()) => log::info!("data length 251 requested"),
-        Err(()) => return,
+        Err(Failure::Bluetooth(error)) => {
+            log::warn!("Data length update rejected; keeping negotiated default: {error:?}");
+        }
+        Err(Failure::Timeout) => {
+            report_failure(Operation::DataLength, &"controller deadline exceeded");
+            return;
+        }
     };
 
     let client = match bounded(
@@ -655,7 +657,7 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
         }
     };
 
-    select(
+    connection::run_io(
         receive_notifications(&mut listener),
         nano_commands(client, &c304, c304_no_rsp),
     ).await;

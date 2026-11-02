@@ -88,7 +88,44 @@ impl C305FragmentReassembler {
 
 #[cfg(test)]
 mod tests {
-    use super::{C305FragmentReassembler, FragmentStatus};
+    use super::{C305FragmentReassembler, FragmentError, FragmentStatus, MAX_MESSAGE_LEN};
+
+    #[test]
+    fn accepts_exact_limit_and_rejects_one_byte_over_then_recovers() {
+        let mut reassembler = C305FragmentReassembler::new();
+        let mut packet = vec![0x55; MAX_MESSAGE_LEN + 2];
+        packet[..2].copy_from_slice(&[0xf5, 0x41]);
+        assert_eq!(reassembler.push(&packet), Ok(FragmentStatus::Incomplete));
+        assert_eq!(
+            reassembler.push(&[0xf5, 0x01, 0x55]),
+            Err(FragmentError::TooLarge)
+        );
+        assert!(!reassembler.is_active());
+        assert_eq!(
+            reassembler.push(&[0xf5, 0xc1, 0x33]),
+            Ok(FragmentStatus::Complete)
+        );
+        assert_eq!(reassembler.take_message(), [0x33]);
+    }
+
+    #[test]
+    fn disconnect_reset_rejects_old_continuation_and_accepts_new_start() {
+        let mut reassembler = C305FragmentReassembler::new();
+        assert_eq!(
+            reassembler.push(&[0xf5, 0x41, 1]),
+            Ok(FragmentStatus::Incomplete)
+        );
+        reassembler.reset();
+        assert_eq!(
+            reassembler.push(&[0xf5, 0x81, 2]),
+            Ok(FragmentStatus::NotFragment)
+        );
+        assert_eq!(
+            reassembler.push(&[0xf5, 0xc1, 3]),
+            Ok(FragmentStatus::Complete)
+        );
+        assert_eq!(reassembler.take_message(), [3]);
+    }
 
     #[test]
     fn reassembles_start_continuation_and_end_packets() {

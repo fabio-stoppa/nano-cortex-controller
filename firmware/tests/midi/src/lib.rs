@@ -4,6 +4,11 @@ extern crate alloc;
 
 #[path = "../../../src/ble/advertisement.rs"]
 mod advertisement;
+#[path = "../../../src/ble/connection.rs"]
+mod connection;
+
+#[cfg(test)]
+mod connection_tests;
 
 #[path = "../../../src/usb_storage/disk.rs"]
 mod usb_disk;
@@ -727,6 +732,29 @@ mod tests {
         cc(7, 10);
         cc(7, 70);
         assert_eq!(queued(), [(a, 70), (b, 70)]);
+    }
+
+    #[test]
+    fn rapid_midi_and_touch_bursts_leave_no_stale_edits_after_disconnect() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        let a = index("Amp gain");
+        let b = index("Post FX 2 knob 24");
+        learn_cc(a, 7);
+        learn_cc(b, 7);
+        for value in 0..10_000 {
+            cc(7, (value % 128) as u8);
+            link::set_param(0, 0, (value % 128) as f32 / 127.0);
+        }
+        assert_eq!(queued(), [(a, 15), (b, 15)]);
+        assert!(link::take_param().is_some());
+        link::push_cmd(link::Cmd::Save);
+        link::set_param(1, 1, 0.9);
+        link::set_up(false);
+        link::set_up(true);
+        assert!(link::pop_cmd().is_none());
+        assert!(link::take_param().is_none());
+        assert!(link::pop_write().is_none());
     }
 
     #[test]
