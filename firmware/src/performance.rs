@@ -90,20 +90,11 @@ fn install(config: Config) {
     });
 }
 
+#[cfg(test)]
 pub fn export_json() -> Result<String, &'static str> {
     let config = with(|state| state.config().clone());
     config.encode()
 }
-pub fn validate_json(json: &str) -> Result<(), &'static str> {
-    Config::decode(json).map(|_| ())
-}
-pub fn import_json(json: &str) -> Result<(), &'static str> {
-    let config = Config::decode(json)?;
-    crate::settings::save_performance_json(json)?;
-    install(config);
-    Ok(())
-}
-
 fn edit(f: impl FnOnce(&mut Config) -> Result<(), &'static str>) -> Result<(), &'static str> {
     if busy() {
         return Err("Wait for the current recall to finish");

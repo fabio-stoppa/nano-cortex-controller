@@ -14,4 +14,3 @@ log = "0.4"
 nano-wire = { path = "../../../crates/nano-wire" }
 serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
-fatfs = "0.3"

@@ -148,7 +148,9 @@ fn with_json<T>(label: &str, capacity: u32, f: impl FnOnce(&mut JsonStorage<'_, 
     if entry.len() < capacity {
         return Err("Configuration partition too small");
     }
-    f(&mut JsonStorage(entry.as_flash_region(flash)))
+    f(&mut JsonStorage(entry.as_flash_region(flash))).inspect_err(|error| {
+        log::warn!("Configuration partition {label}: {error}");
+    })
 }
 
 pub fn load_midi_json() -> Result<Option<String>, &'static str> {

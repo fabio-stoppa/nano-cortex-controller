@@ -334,6 +334,7 @@ pub fn clear_all() {
     crate::link::clear_midi();
 }
 
+#[cfg(test)]
 pub fn export_json() -> Result<String, &'static str> {
     let keys = TABLE.lock(|t| t.borrow().keys);
     backup::encode(&keys)
@@ -348,6 +349,7 @@ pub fn keys_from_json(json: &str) -> Result<[u16; ACTION_COUNT], &'static str> {
     backup::decode(json)
 }
 
+#[cfg(test)]
 pub fn import_json(json: &str) -> Result<(), &'static str> {
     let keys = keys_from_json(json)?;
     crate::settings::save_midi_json(json)?;
@@ -363,30 +365,6 @@ pub fn import_json(json: &str) -> Result<(), &'static str> {
     });
     crate::link::clear_midi();
     Ok(())
-}
-
-pub fn prepare_storage() -> Result<String, &'static str> {
-    cancel_learn();
-    let json = export_json()?;
-    crate::settings::save_midi_json(&json)?;
-    Ok(json)
-}
-
-pub fn storage_help() -> String {
-    let mut text = String::from(
-        "Nano MIDI configuration\r\n\r\nEdit or replace midi.json, then safely eject this drive.\r\n\
-         After eject, the controller validates and saves the file. Check its screen.\r\n\
-         Invalid/missing files keep the previous bindings. Cancel discards PC edits.\r\n\
-         Do not format the drive. Other files are temporary and not saved.\r\n\
-         Maximum midi.json size: 48 KiB. Channel: 1-16. Number: 0-127.\r\n\
-         Kinds: cc, note, program. Parameter actions require cc.\r\n\
-         Omitted actions are cleared. One message can target several actions.\r\n\r\nAction IDs:\r\n",
-    );
-    for index in 0..ACTION_COUNT {
-        text.push_str(&format!("{index}: {}{}\r\n", action_name(index),
-            if continuous_action(index) { " (CC only)" } else { "" }));
-    }
-    text
 }
 
 /// Writes changed bindings to flash. Called from the UI task.

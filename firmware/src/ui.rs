@@ -261,9 +261,6 @@ fn ensure() {
     app.on_midi_learn(|index| crate::midi::toggle_learn(index.max(0) as usize));
     app.on_midi_clear(|index| crate::midi::clear(index.max(0) as usize));
     app.on_midi_clear_all(crate::midi::clear_all);
-    app.on_midi_usb_storage(crate::usb_storage::request);
-    app.on_usb_storage_cancel(crate::usb_storage::cancel);
-    app.on_usb_storage_restart(|| esp_hal::system::software_reset());
     app.on_tools_jack_selected(move |expression| {
         crate::link::push_cmd(Cmd::JackMode(if expression {
             nano_wire::types::JackMode::Expression
@@ -1020,9 +1017,6 @@ static MIDI_SHOWN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32
 /// Repaints the MIDI page when its bindings change and saves new ones.
 pub fn refresh_midi() {
     if let Some(ui) = state().as_ref() { performance::refresh(&ui.app, false); }
-    if state().as_ref().is_some_and(|ui| ui.app.get_usb_storage_open()) {
-        return;
-    }
     crate::midi::persist();
     let version = crate::midi::version();
     if MIDI_SHOWN.load(core::sync::atomic::Ordering::Relaxed) == version {
@@ -1049,20 +1043,6 @@ pub fn refresh_midi() {
     ui.app
         .set_midi_last(crate::midi::last_text().as_str().into());
     ui.window.request_redraw();
-}
-
-pub fn usb_storage_status(message: &str, finished: bool) {
-    if let Some(ui) = state().as_mut() {
-        ui.app.set_settings_open(false);
-        ui.app.set_model_open(false);
-        ui.app.set_kbd_open(false);
-        ui.app.set_confirm_open(false);
-        ui.app.set_connecting(false);
-        ui.app.set_usb_storage_open(true);
-        ui.app.set_usb_storage_finished(finished);
-        ui.app.set_usb_storage_message(message.into());
-        ui.window.request_redraw();
-    }
 }
 
 /// Same as tapping the tuner button, so the page switch stays in one place.

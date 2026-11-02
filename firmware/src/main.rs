@@ -20,7 +20,6 @@ mod hci;
 mod link;
 mod memsafe;
 mod midi;
-mod usb_storage;
 mod panel;
 mod performance;
 mod screen;
@@ -31,7 +30,6 @@ mod tuner;
 mod ui;
 
 use embassy_executor::Spawner;
-use embassy_futures::select::select;
 use esp_backtrace as _;
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -74,13 +72,11 @@ async fn main(_spawner: Spawner) {
         Ok(connector) => connector,
         Err(err) => {
             log::error!("ble controller init failed: {err:?}");
-            select(ble::touch_only(&mut board), usb_storage::requested()).await;
-            usb_storage::run(rest.usb, &mut board).await;
+            ble::touch_only(&mut board).await;
             return;
         }
     };
     log::info!("ble controller up");
     let controller = hci::SerialController::new(connector);
-    select(ble::run(controller, &mut board), usb_storage::requested()).await;
-    usb_storage::run(rest.usb, &mut board).await;
+    ble::run(controller, &mut board).await;
 }

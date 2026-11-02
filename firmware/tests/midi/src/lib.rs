@@ -4,8 +4,6 @@ extern crate alloc;
 
 #[path = "../../../src/fx/catalog.rs"]
 pub mod catalog;
-#[path = "../../../src/usb_storage/disk.rs"]
-mod disk;
 #[path = "../../../src/hci.rs"]
 mod hci;
 #[path = "../../../src/settings/json_record.rs"]
@@ -384,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn all_new_actions_fit_the_editable_json_and_atomic_multi_target_queue() {
+    fn all_new_actions_fit_the_persisted_json_and_atomic_multi_target_queue() {
         let _guard = LOCK.lock().unwrap();
         reset();
         for action in 0..midi::ACTION_COUNT {
@@ -435,7 +433,7 @@ mod tests {
         cc(7, 127);
         assert_eq!(queued().len(), midi::ACTION_COUNT);
         let json = midi::export_json().unwrap();
-        assert!(json.len() <= disk::MAX_JSON);
+        assert!(json.len() <= json_record::MAX_JSON);
         midi::import_json(&json).unwrap();
         assert_eq!(midi::export_json().unwrap(), json);
         reset();

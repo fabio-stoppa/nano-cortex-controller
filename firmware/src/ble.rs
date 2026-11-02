@@ -268,8 +268,11 @@ where
 
     let _ = join3(
         async {
-            if let Err(_) = runner.run_with_handler(&hunt).await {
-                log::error!("ble runner stopped");
+            if let Err(error) = runner.run_with_handler(&hunt).await {
+                log::error!("ble runner stopped: {error:?}");
+                crate::performance::report(
+                    "Bluetooth runner stopped; restart controller and check serial log",
+                );
             }
         },
         links(&stack, &hunt),
@@ -347,8 +350,8 @@ where
     let config = listen(&[]);
     let scan = match scanner.scan(&config).await {
         Ok(scan) => scan,
-        Err(_) => {
-            log::warn!("scan start failed");
+        Err(error) => {
+            log::warn!("scan start failed: {error:?}");
             return None;
         }
     };

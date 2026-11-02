@@ -1837,7 +1837,6 @@ component MidiPanel inherits Rectangle {
     callback learn(int);
     callback clear(int);
     callback clear-all();
-    callback usb-storage();
     background: transparent;
     VerticalLayout {
         spacing: 8px;
@@ -1870,11 +1869,6 @@ component MidiPanel inherits Rectangle {
                 height: 48px;
                 tapped => { root.clear-all(); }
             } }
-        }
-        HeaderButton {
-            label: "USB drive: midi.json";
-            height: 48px;
-            tapped => { root.usb-storage(); }
         }
         midi-list := Flickable {
             vertical-stretch: 1;
@@ -1971,7 +1965,6 @@ component ToolsPanel inherits Rectangle {
     callback midi-learn(int);
     callback midi-clear(int);
     callback midi-clear-all();
-    callback midi-usb-storage();
     in property <bool> save-dirty;
     callback save();
     callback refresh();
@@ -2257,7 +2250,6 @@ component ToolsPanel inherits Rectangle {
                 learn(index) => { root.midi-learn(index); }
                 clear(index) => { root.midi-clear(index); }
                 clear-all => { root.midi-clear-all(); }
-                usb-storage => { root.midi-usb-storage(); }
             }
             Rectangle { vertical-stretch: 1; background: transparent; }
         }
@@ -2298,7 +2290,6 @@ component ConnectingOverlay inherits Rectangle {
     in property <int> foot-state: -1;
     in property <string> loading: "";
     in property <string> version: "";
-    callback usb-storage();
     callback performance();
     background: #1e1e1e;
     TouchArea {}
@@ -2389,14 +2380,6 @@ component ConnectingOverlay inherits Rectangle {
     HeaderButton {
         x: parent.width - self.width - 12px;
         y: 12px;
-        width: 100px;
-        height: 32px;
-        label: "USB drive";
-        tapped => { root.usb-storage(); }
-    }
-    HeaderButton {
-        x: parent.width - self.width - 12px;
-        y: 52px;
         width: 100px;
         height: 32px;
         label: "Banks";
@@ -3062,7 +3045,6 @@ export component AppWindow inherits Window {
     callback midi-clear(int);
     callback midi-clear-all();
     callback midi-clear-all-requested();
-    callback midi-usb-storage();
     callback performance-opened();
     callback performance-add();
     callback performance-selected(int);
@@ -3122,11 +3104,6 @@ export component AppWindow inherits Window {
     callback performance-scene-recall(int);
     callback performance-scene-store(int);
     callback performance-scene-clear(int);
-    callback usb-storage-cancel();
-    callback usb-storage-restart();
-    in-out property <bool> usb-storage-open: false;
-    in-out property <bool> usb-storage-finished: false;
-    in-out property <string> usb-storage-message: "";
     property <bool> midi-clear-confirm: false;
     midi-clear-all-requested => {
         root.confirm-title = "Clear all MIDI bindings?";
@@ -3161,7 +3138,7 @@ export component AppWindow inherits Window {
     // The software renderer draws everything under an overlay, so hide what an
     // opaque or full-screen layer covers.
     // Confirmations are cards over whatever is open, so they do not hide it.
-    property <bool> popup-open: root.kbd-open || root.model-open || root.settings-open || root.usb-storage-open || root.performance-open || root.fx-presets-open || root.gig-open;
+    property <bool> popup-open: root.kbd-open || root.model-open || root.settings-open || root.performance-open || root.fx-presets-open || root.gig-open;
     property <bool> main-covered: root.popup-open || root.page == 2 || root.connecting;
 
     Rectangle {
@@ -3434,7 +3411,6 @@ export component AppWindow inherits Window {
         midi-learn(index) => { root.midi-learn(index); }
         midi-clear(index) => { root.midi-clear(index); }
         midi-clear-all => { root.midi-clear-all-requested(); }
-        midi-usb-storage => { root.midi-usb-storage(); }
         tuner => { root.settings-open = false; root.tuner-tapped(); }
         save-dirty: root.save-dirty;
         save => { root.save-tapped(); }
@@ -3488,7 +3464,7 @@ export component AppWindow inherits Window {
         closed => { root.model-open = false; }
     }
 
-    if root.performance-open && !root.usb-storage-open && !root.model-open: BankPanel {
+    if root.performance-open && !root.model-open: BankPanel {
         width: root.width; height: root.height;
         visible: !root.kbd-open && !root.fx-presets-open;
         banks: root.performance-banks; slots: root.performance-slots;
@@ -3513,7 +3489,7 @@ export component AppWindow inherits Window {
         clear(index) => { root.performance-clear(index); }
     }
 
-    if root.gig-open && root.page != 2 && !root.usb-storage-open: GigPanel {
+    if root.gig-open && root.page != 2: GigPanel {
         width: root.width; height: root.height;
         portrait: root.portrait;
         connected: !root.connecting;
@@ -3566,37 +3542,6 @@ export component AppWindow inherits Window {
         }
     }
 
-    if root.usb-storage-open: Rectangle {
-        width: root.width; height: root.height;
-        background: Surface.background;
-        TouchArea {}
-        VerticalLayout {
-            padding: 24px;
-            spacing: 20px;
-            Text {
-                text: "USB MIDI configuration";
-                color: #ffffff;
-                font-size: 26px;
-                font-weight: 700;
-            }
-            Text {
-                text: root.usb-storage-message;
-                color: #ececec;
-                font-size: 20px;
-                wrap: word-wrap;
-            }
-            Rectangle { background: transparent; vertical-stretch: 1; }
-            DialogButton {
-                label: root.usb-storage-finished ? "Restart controller" : "Cancel USB edits";
-                fill: #1a3af8;
-                tapped => {
-                    if root.usb-storage-finished { root.usb-storage-restart(); }
-                    else { root.usb-storage-cancel(); }
-                }
-            }
-        }
-    }
-
     if root.kbd-open: NameKeyboard {
         x: 0px; y: 0px; width: root.width; height: root.height;
         title: root.kbd-title;
@@ -3610,12 +3555,11 @@ export component AppWindow inherits Window {
         closed => { root.kbd-open = false; root.performance-name-action = 0; }
     }
 
-    if root.connecting && !root.usb-storage-open && !root.performance-open && !root.fx-presets-open && !root.gig-open: ConnectingOverlay {
+    if root.connecting && !root.performance-open && !root.fx-presets-open && !root.gig-open: ConnectingOverlay {
         amp-state: root.conn-amp;
         foot-state: root.conn-foot;
         loading: root.load-status;
         version: root.app-version;
-        usb-storage => { root.midi-usb-storage(); }
         performance => { root.performance-opened(); }
     }
 }

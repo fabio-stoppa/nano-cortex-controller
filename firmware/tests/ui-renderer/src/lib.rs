@@ -643,6 +643,11 @@ mod tests {
     }
 
     fn check_bank_screen(app: &AppWindow, window: &MinimalSoftwareWindow) {
+        let openings = Rc::new(std::cell::Cell::new(0));
+        app.on_performance_opened({
+            let openings = openings.clone();
+            move || openings.set(openings.get() + 1)
+        });
         let additions = Rc::new(std::cell::Cell::new(0));
         let stores = Rc::new(std::cell::Cell::new(0));
         let fx_stores = Rc::new(std::cell::Cell::new(0));
@@ -685,6 +690,29 @@ mod tests {
             app.set_portrait(portrait);
             window.set_size(PhysicalSize::new(width, height));
             app.set_connecting(true);
+            app.set_performance_open(false);
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                renderer.render(&mut pixels, width as usize);
+                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            });
+            let before = openings.get();
+            let position = LogicalPosition::new(width as f32 - 62.0, 28.0);
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+            assert_eq!(
+                openings.get(),
+                before + 1,
+                "Offline Banks entry is inaccessible"
+            );
             app.set_performance_open(true);
             window.request_redraw();
             window.draw_if_needed(|renderer| {
@@ -933,102 +961,6 @@ mod tests {
         window.set_size(PhysicalSize::new(800, 480));
     }
 
-    fn check_usb_storage_screen(app: &AppWindow, window: &MinimalSoftwareWindow) {
-        let started = Rc::new(std::cell::Cell::new(0));
-        let cancelled = Rc::new(std::cell::Cell::new(0));
-        let restarted = Rc::new(std::cell::Cell::new(0));
-        app.on_midi_usb_storage({
-            let started = started.clone();
-            move || started.set(started.get() + 1)
-        });
-        app.on_usb_storage_cancel({
-            let cancelled = cancelled.clone();
-            move || cancelled.set(cancelled.get() + 1)
-        });
-        app.on_usb_storage_restart({
-            let restarted = restarted.clone();
-            move || restarted.set(restarted.get() + 1)
-        });
-        let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
-        let background = ((30u16 >> 3) << 11) | ((30u16 >> 2) << 5) | (30u16 >> 3);
-        let click = |x, y| {
-            let position = LogicalPosition::new(x, y);
-            window.dispatch_event(WindowEvent::PointerPressed {
-                position,
-                button: PointerEventButton::Left,
-            });
-            window.dispatch_event(WindowEvent::PointerReleased {
-                position,
-                button: PointerEventButton::Left,
-            });
-        };
-        for (width, height, portrait) in [(800, 480, false), (480, 800, true)] {
-            app.set_portrait(portrait);
-            window.set_size(PhysicalSize::new(width, height));
-            app.set_settings_open(false);
-            app.set_model_open(false);
-            app.set_kbd_open(false);
-            app.set_confirm_open(false);
-            app.set_connecting(true);
-            app.set_usb_storage_open(false);
-            window.request_redraw();
-            window.draw_if_needed(|renderer| {
-                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
-                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
-                renderer.render(&mut pixels, width as usize);
-                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
-            });
-            let starts_before = started.get();
-            click(width as f32 - 62.0, 28.0);
-            assert_eq!(
-                started.get(),
-                starts_before + 1,
-                "Offline USB entry is inaccessible"
-            );
-            app.set_usb_storage_open(true);
-            app.set_usb_storage_finished(false);
-            app.set_usb_storage_message("Edit midi.json, then safely eject the drive.".into());
-            window.request_redraw();
-            window.draw_if_needed(|renderer| {
-                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
-                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
-                renderer.render(&mut pixels, width as usize);
-                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
-            });
-            assert_eq!(
-                pixels[5 * width as usize + 5].0,
-                background,
-                "USB screen covered by connecting overlay"
-            );
-            click(width as f32 - 62.0, 28.0);
-            assert_eq!(
-                started.get(),
-                starts_before + 1,
-                "Underlying connecting controls still active"
-            );
-            let before = cancelled.get();
-            click(width as f32 / 2.0, height as f32 - 50.0);
-            assert_eq!(cancelled.get(), before + 1);
-            assert_eq!(restarted.get(), before);
-            app.set_usb_storage_finished(true);
-            app.set_usb_storage_message("Configuration saved. Restart controller.".into());
-            window.request_redraw();
-            window.draw_if_needed(|renderer| {
-                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
-                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
-                renderer.render(&mut pixels, width as usize);
-                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
-            });
-            click(width as f32 / 2.0, height as f32 - 50.0);
-            assert_eq!(restarted.get(), before + 1);
-            assert_eq!(cancelled.get(), before + 1);
-        }
-        app.set_usb_storage_open(false);
-        app.set_connecting(false);
-        app.set_portrait(false);
-        window.set_size(PhysicalSize::new(800, 480));
-    }
-
     fn check_source_card_names(app: &AppWindow, window: &MinimalSoftwareWindow) {
         app.set_page(0);
         app.set_capture_active(true);
@@ -1226,7 +1158,6 @@ mod tests {
         check_fullscreen_popups(&app, &window);
         check_fx_cell_contrast(&app, &window);
         check_midi_clear_confirmation(&app, &window);
-        check_usb_storage_screen(&app, &window);
         check_bank_screen(&app, &window);
         check_gig_screen(&app, &window);
         let mut pixels = vec![Rgb565Pixel(0); 800 * 480];

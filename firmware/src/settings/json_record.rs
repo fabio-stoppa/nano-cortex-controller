@@ -43,22 +43,22 @@ fn slot(
     if &header[..8] != MAGIC
         || checksum(&header[..28]) != u32::from_le_bytes(header[28..32].try_into().unwrap())
     {
-        return Err(SlotError::Invalid("Invalid MIDI JSON record header"));
+        return Err(SlotError::Invalid("Invalid configuration JSON record header"));
     }
     let generation = u64::from_le_bytes(header[8..16].try_into().unwrap());
     let length = u32::from_le_bytes(header[16..20].try_into().unwrap()) as usize;
     if length == 0 || length > maximum || length + HEADER > size as usize {
-        return Err(SlotError::Invalid("Invalid MIDI JSON record length"));
+        return Err(SlotError::Invalid("Invalid configuration JSON record length"));
     }
     let mut data = vec![0; length];
     storage
         .read(index * size + HEADER as u32, &mut data)
         .map_err(SlotError::Read)?;
     if checksum(&data) != u32::from_le_bytes(header[20..24].try_into().unwrap()) {
-        return Err(SlotError::Invalid("MIDI JSON record checksum failed"));
+        return Err(SlotError::Invalid("Configuration JSON record checksum failed"));
     }
-    let text =
-        String::from_utf8(data).map_err(|_| SlotError::Invalid("MIDI JSON record is not UTF-8"))?;
+    let text = String::from_utf8(data)
+        .map_err(|_| SlotError::Invalid("Configuration JSON record is not UTF-8"))?;
     Ok(Some((generation, text)))
 }
 
@@ -72,9 +72,9 @@ fn current(storage: &mut impl Storage, size: u32, maximum: usize) -> Result<Curr
     let a = slot(storage, 0, size, maximum);
     let b = slot(storage, 1, size, maximum);
     let mut invalid = false;
-    for result in [&a, &b] {
+    for (index, result) in [&a, &b].into_iter().enumerate() {
         if let Err(err) = result {
-            log::warn!("MIDI JSON storage: {}", err.message());
+            log::warn!("Configuration JSON journal slot {index}: {}", err.message());
             if let SlotError::Read(message) = err {
                 return Err(message);
             }
@@ -102,7 +102,7 @@ pub fn load_sized(
     match current(storage, size, maximum)? {
         Current::Valid(_, _, json) => Ok(Some(json)),
         Current::Empty => Ok(None),
-        Current::Damaged => Err("No valid MIDI JSON record; storage recovery required"),
+        Current::Damaged => Err("No valid configuration JSON record; storage recovery required"),
     }
 }
 
@@ -122,7 +122,7 @@ pub fn save_sized(
         || json.len() > maximum
         || json.len() + HEADER > size as usize
     {
-        return Err("midi.json exceeds storage limits");
+        return Err("Configuration JSON exceeds storage limits");
     }
     let (index, generation) = match current(storage, size, maximum)? {
         Current::Valid(_, _, old) if old == json => return Ok(()),
@@ -130,11 +130,11 @@ pub fn save_sized(
             1 - index,
             generation
                 .checked_add(1)
-                .ok_or("MIDI storage generation overflow")?,
+                .ok_or("Configuration storage generation overflow")?,
         ),
         Current::Empty => (0, 1),
         Current::Damaged => {
-            log::warn!("Rebuilding damaged MIDI JSON storage from supplied configuration");
+            log::warn!("Rebuilding damaged configuration JSON storage from supplied configuration");
             (0, 1)
         }
     };
@@ -144,7 +144,7 @@ pub fn save_sized(
     let mut check = vec![0; json.len()];
     storage.read(offset + HEADER as u32, &mut check)?;
     if check != json.as_bytes() {
-        return Err("MIDI JSON write verification failed");
+        return Err("Configuration JSON write verification failed");
     }
     let mut header = [0; HEADER];
     header[..8].copy_from_slice(MAGIC);
@@ -156,9 +156,9 @@ pub fn save_sized(
     storage.write(offset, &header)?;
     let verified = slot(storage, index, size, maximum)
         .map_err(|err| err.message())?
-        .ok_or("MIDI JSON commit missing")?;
+        .ok_or("Configuration JSON commit missing")?;
     if verified.0 != generation || verified.1 != json {
-        return Err("MIDI JSON commit verification failed");
+        return Err("Configuration JSON commit verification failed");
     }
     Ok(())
 }
