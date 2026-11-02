@@ -14,6 +14,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
+use embassy_sync::signal::Signal;
 
 use nano_wire::editor::CabFloat;
 use nano_wire::editor::ExpressionAssignments;
@@ -32,6 +33,8 @@ static OUT: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<QueuedWrite>>> =
 
 static CMDS: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<Cmd>>> =
     Mutex::new(RefCell::new(VecDeque::new()));
+
+pub static COMMAND_READY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 static WRITE_QUEUE_PEAK: AtomicU32 = AtomicU32::new(0);
 static COMMAND_QUEUE_PEAK: AtomicU32 = AtomicU32::new(0);
@@ -172,6 +175,7 @@ pub fn set_up(up: bool) {
         OUT.lock(|q| q.borrow_mut().clear());
         CMDS.lock(|q| q.borrow_mut().clear());
         PARAM.lock(|p| *p.borrow_mut() = None);
+        COMMAND_READY.reset();
     }
 }
 
@@ -248,6 +252,7 @@ pub fn push_cmd(cmd: Cmd) {
         }
         queue.push_back(cmd);
         record_peak(&COMMAND_QUEUE_PEAK, queue.len());
+        COMMAND_READY.signal(());
     });
 }
 
@@ -300,6 +305,7 @@ pub fn push_midi(actions: impl Iterator<Item = usize>, value: u8, continuous: bo
             }
         }
         record_peak(&COMMAND_QUEUE_PEAK, queue.len());
+        COMMAND_READY.signal(());
         true
     })
 }
@@ -325,6 +331,7 @@ pub fn set_param(block: u8, wire: u8, norm: f32) {
     PARAM.lock(|slot| {
         *slot.borrow_mut() = Some(ParamWrite { block, wire, norm });
     });
+    COMMAND_READY.signal(());
 }
 
 pub fn take_param() -> Option<ParamWrite> {

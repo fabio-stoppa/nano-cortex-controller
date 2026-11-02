@@ -562,10 +562,12 @@ component VCenter inherits VerticalLayout {
 // children (e.g. tabs) on the right, and a separator drawn over the bottom edge.
 component PopupHeader inherits Rectangle {
     in property <string> title;
+    in property <length> right-reserved-width: 0px;
     callback closed();
     height: 58px;
     HorizontalLayout {
         spacing: 12px;
+        padding-right: root.right-reserved-width;
         alignment: start;
         // Pinned to the top so its gap to the popup edge equals the side padding.
         VerticalLayout {
@@ -1014,6 +1016,67 @@ component MenuButton inherits Rectangle {
     TouchArea { clicked => { root.tapped(); } }
 }
 
+component TempoReadout inherits Rectangle {
+    in property <string> bpm-text;
+    in property <int> bpm-value: 0;
+    in property <bool> tempo-global: true;
+    in property <bool> animate-beat: true;
+    in property <length> text-size: 21px;
+    property <bool> beat-on: false;
+    callback tapped();
+    background: transparent;
+    Timer {
+        interval: root.bpm-value > 0 ? 60000ms / root.bpm-value : 1000ms;
+        running: root.animate-beat && root.bpm-value > 0;
+        triggered => { root.beat-on = true; fade.running = true; }
+    }
+    fade := Timer {
+        interval: 120ms;
+        running: false;
+        triggered => { root.beat-on = false; self.running = false; }
+    }
+    TouchArea {
+        clicked => { root.tapped(); }
+        HorizontalLayout {
+            alignment: start;
+            spacing: 6px;
+            VCenter { Rectangle {
+                width: 20px;
+                height: 20px;
+                property <color> tint: #ffffff;
+                opacity: root.beat-on || root.bpm-value == 0 ? 1 : 0.8;
+                if root.tempo-global: Rectangle {
+                    border-width: 2.5px;
+                    border-color: parent.tint;
+                    border-radius: 10px;
+                }
+                if root.tempo-global: Rectangle {
+                    x: 6px; width: 8px;
+                    border-width: 2px;
+                    border-color: parent.tint;
+                    border-radius: 4px;
+                }
+                if root.tempo-global: Rectangle {
+                    y: 8.75px; height: 2.5px;
+                    background: parent.tint;
+                }
+                if !root.tempo-global: Rectangle {
+                    x: 4px; y: 4px; width: 12px; height: 12px;
+                    background: parent.tint;
+                    border-radius: 6px;
+                }
+            } }
+            Text {
+                text: root.bpm-text;
+                color: #ffffff;
+                font-size: root.text-size;
+                font-weight: 800;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
 component HeaderBar inherits Rectangle {
     in property <string> scene-label: "Scene";
     in property <bool> scene-enabled: true;
@@ -1026,30 +1089,13 @@ component HeaderBar inherits Rectangle {
     in property <bool> tempo-active: false;
     in property <bool> tempo-global: true;
     in property <int> bpm-value: 0;
-    // Beat flash: jumps to 1 on every beat and fades back out.
-    property <float> beat-glow: 0;
+    in property <bool> animate-beat: true;
     callback tempo-tapped();
     callback preset-list-tapped();
     callback settings-tapped();
     callback scene-library-tapped();
     callback scene-held();
     background: transparent;
-    beat := Timer {
-        interval: root.bpm-value > 0 ? 60000ms / root.bpm-value : 1000ms;
-        running: root.bpm-value > 0;
-        triggered => {
-            root.beat-glow = 1;
-            fade.running = true;
-        }
-    }
-    fade := Timer {
-        interval: 120ms;
-        running: false;
-        triggered => {
-            root.beat-glow = 0;
-            self.running = false;
-        }
-    }
     HorizontalLayout {
         padding-left: 8px;
         padding-right: 0px;
@@ -1057,48 +1103,14 @@ component HeaderBar inherits Rectangle {
         // Reserve enough room for the Scene button and menu in both orientations.
         VCenter {
             width: portrait ? 174px : 254px;
-            TouchArea {
+            TempoReadout {
                 height: 44px;
-                clicked => { root.tempo-tapped(); }
-                HorizontalLayout {
-                    height: parent.height;
-                    alignment: start;
-                    spacing: 6px;
-                    VCenter { Rectangle {
-                        width: 20px;
-                        height: 20px;
-                        // Flashes on every beat; green while tapping.
-                        property <color> tint: #ffffff;
-                        opacity: root.beat-glow > 0.5 || root.bpm-value == 0 ? 1 : 0.8;
-                        if root.tempo-global: Rectangle {
-                            border-width: 2.5px;
-                            border-color: parent.tint;
-                            border-radius: 10px;
-                        }
-                        if root.tempo-global: Rectangle {
-                            x: 6px; width: 8px;
-                            border-width: 2px;
-                            border-color: parent.tint;
-                            border-radius: 4px;
-                        }
-                        if root.tempo-global: Rectangle {
-                            y: 8.75px; height: 2.5px;
-                            background: parent.tint;
-                        }
-                        if !root.tempo-global: Rectangle {
-                            x: 4px; y: 4px; width: 12px; height: 12px;
-                            background: parent.tint;
-                            border-radius: 6px;
-                        }
-                    } }
-                    Text {
-                        text: bpm-text;
-                        color: #ffffff;
-                        font-size: portrait ? 18px : 21px;
-                        font-weight: 800;
-                        vertical-alignment: center;
-                    }
-                }
+                bpm-text: root.bpm-text;
+                bpm-value: root.bpm-value;
+                tempo-global: root.tempo-global;
+                animate-beat: root.animate-beat;
+                text-size: root.portrait ? 18px : 21px;
+                tapped => { root.tempo-tapped(); }
             }
         }
         VCenter { min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; TouchArea {

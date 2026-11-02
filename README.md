@@ -191,6 +191,13 @@ gate, and all five FX models, parameters and bypass states. Library selections,
 expression assignments, tempo and global USB/mute settings are not scene data.
 Recall is transient: it never saves over the Nano preset. The controller waits
 for model/parameter loading and fresh readback before reporting **Recall verified**.
+Recall sends only changed values for already-loaded models; changing a model
+still waits for loading and restores all its parameters. Commands wake the BLE
+writer immediately, and scene writes run in bounded cooperative bursts rather
+than pausing between every parameter. Serial logs distinguish time until writes
+are sent from time until recall is verified; neither measures audible latency.
+There is no guaranteed 10 ms recall: BLE uses a requested 7.5 ms connection
+interval, and multiple writes, model loading and readback can span many intervals.
 Timeout/disconnect errors warn that sound may be partly updated; reload the
 original Nano preset to recover. Actual sound recall still requires hardware validation.
 

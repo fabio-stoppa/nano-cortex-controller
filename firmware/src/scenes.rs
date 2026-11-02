@@ -11,6 +11,7 @@ use restore::{Plan, Progress, View};
 struct Pending {
     index: usize,
     plan: Plan,
+    started_us: i64,
 }
 
 struct State {
@@ -295,7 +296,8 @@ pub fn recall_scene(index: usize) -> Result<(), &'static str> {
     if busy() || !crate::link::connected() || crate::tuner::nano_tuner_is_active() {
         return Err("Wait for recall, connect the Nano and exit tuner first");
     }
-    let preset = view().preset;
+    let current = view();
+    let preset = current.preset;
     let snapshot = with(|state| -> Result<_, &'static str> {
         let collection = state
             .config()
@@ -310,9 +312,14 @@ pub fn recall_scene(index: usize) -> Result<(), &'static str> {
             .ok_or("This scene is empty")?;
         Ok(scene.snapshot.clone())
     })?;
-    let plan = Plan::scene(snapshot, preset, crate::clock::now_us())?;
+    let started_us = crate::clock::now_us();
+    let plan = Plan::scene(snapshot, &current, started_us)?;
     with(|state| {
-        state.pending = Some(Pending { index, plan });
+        state.pending = Some(Pending {
+            index,
+            plan,
+            started_us,
+        });
         state.autosave_edit = None;
         state.scene = None;
         state.scene_dirty = false;
@@ -338,6 +345,11 @@ pub fn poll() -> Option<crate::link::Cmd> {
     let result = pending.plan.poll(&current, now);
     match result {
         Progress::Complete => {
+            log::info!(
+                "Scene {} verified in {} us",
+                pending.index + 1,
+                now - pending.started_us
+            );
             with(|state| {
                 state.scene = Some(pending.index);
                 state.scene_dirty = false;
@@ -359,6 +371,13 @@ pub fn poll() -> Option<crate::link::Cmd> {
             None
         }
         Progress::Write(command) => {
+            if matches!(&command, crate::link::Cmd::SceneRefresh) {
+                log::info!(
+                    "Scene {} writes sent in {} us; awaiting readback (not audio latency)",
+                    pending.index + 1,
+                    now - pending.started_us
+                );
+            }
             if !matches!(
                 &command,
                 crate::link::Cmd::SceneRefresh | crate::link::Cmd::SceneFxRefresh

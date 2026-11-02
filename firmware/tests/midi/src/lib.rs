@@ -870,6 +870,26 @@ mod tests {
     }
 
     #[test]
+    fn touch_and_midi_commands_wake_writer_and_disconnect_clears_wakeup() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        assert!(!link::COMMAND_READY.signaled());
+        link::push_cmd(link::Cmd::SceneRecall(0));
+        assert!(link::COMMAND_READY.signaled());
+        assert!(matches!(link::pop_cmd(), Some(link::Cmd::SceneRecall(0))));
+        link::COMMAND_READY.reset();
+        assert!(link::push_midi([0].into_iter(), 127, false));
+        assert!(link::COMMAND_READY.signaled());
+        link::COMMAND_READY.reset();
+        link::set_param(0, 0, 0.5);
+        assert!(link::COMMAND_READY.signaled());
+        link::set_up(false);
+        assert!(!link::COMMAND_READY.signaled());
+        link::push_cmd(link::Cmd::SceneRecall(0));
+        assert!(!link::COMMAND_READY.signaled());
+    }
+
+    #[test]
     fn queue_overflow_is_atomic_and_disconnect_clears_every_path() {
         let _guard = LOCK.lock().unwrap();
         reset();

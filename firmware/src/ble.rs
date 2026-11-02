@@ -942,9 +942,12 @@ async fn nano_commands<C: Controller, P: PacketPool>(
             return;
         }
         let slider_wait_ms = if crate::scenes::busy() { 2 } else { 10 };
-        if with_timeout(Duration::from_millis(slider_wait_ms), SLIDER.wait())
-            .await
-            .is_ok()
+        if with_timeout(
+            Duration::from_millis(slider_wait_ms),
+            embassy_futures::select::select(SLIDER.wait(), crate::link::COMMAND_READY.wait()),
+        )
+        .await
+        .is_ok()
         {
             while let Some(write) = take_slider() {
                 if !ready {
@@ -986,7 +989,10 @@ async fn nano_commands<C: Controller, P: PacketPool>(
             }
             embassy_futures::yield_now().await;
         }
-        if let Some(cmd) = crate::scenes::poll() {
+        for _ in 0..8 {
+            let Some(cmd) = crate::scenes::poll() else {
+                break;
+            };
             apply_cmd(cmd);
             if flush_writes(client, c304.handle, c304_no_rsp)
                 .await
@@ -994,6 +1000,7 @@ async fn nano_commands<C: Controller, P: PacketPool>(
             {
                 return;
             }
+            embassy_futures::yield_now().await;
         }
         if LIBRARY_WANTED.load(core::sync::atomic::Ordering::Relaxed)
             && crate::state::nano_rx_mode_get() == 0

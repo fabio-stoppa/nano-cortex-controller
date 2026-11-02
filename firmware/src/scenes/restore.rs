@@ -188,17 +188,35 @@ pub struct Plan {
     deadline: i64,
 }
 
-fn enqueue_effect(steps: &mut VecDeque<Step>, block: usize, effect: &Effect) {
+fn enqueue_effect(
+    steps: &mut VecDeque<Step>,
+    block: usize,
+    effect: &Effect,
+    current: Option<&NanoFxBlock>,
+) {
+    let ready = current.is_some_and(|current| effect.model_ready(current));
     if !effect.model.is_empty() {
-        steps.push_back(Step::Write(Cmd::FxModelId {
-            block: block as u8,
-            id: effect.model.clone(),
-        }));
-        steps.push_back(Step::ModelReady {
-            block,
-            effect: effect.clone(),
-        });
+        if !ready {
+            steps.push_back(Step::Write(Cmd::FxModelId {
+                block: block as u8,
+                id: effect.model.clone(),
+            }));
+            steps.push_back(Step::ModelReady {
+                block,
+                effect: effect.clone(),
+            });
+        }
         for (wire, &norm) in effect.parameters.iter().enumerate() {
+            if ready
+                && current.is_some_and(|current| {
+                    crate::fx::models::find_model(&effect.model).is_some_and(|model| {
+                        current.params[wire].normalized
+                            == crate::fx::params::normalize_for_model(model, wire, norm)
+                    })
+                })
+            {
+                continue;
+            }
             steps.push_back(Step::Write(Cmd::Param(ParamWrite {
                 block: block as u8,
                 wire: wire as u8,
@@ -213,41 +231,89 @@ fn enqueue_effect(steps: &mut VecDeque<Step>, block: usize, effect: &Effect) {
 }
 
 impl Plan {
-    pub fn scene(snapshot: Snapshot, preset: u8, now: i64) -> Result<Self, &'static str> {
+    pub fn scene(snapshot: Snapshot, current: &View, now: i64) -> Result<Self, &'static str> {
         snapshot.validate()?;
         let mut steps = VecDeque::new();
         for (block, effect) in snapshot.effects.iter().enumerate() {
-            enqueue_effect(&mut steps, block, effect);
+            enqueue_effect(
+                &mut steps,
+                block,
+                effect,
+                (current.idle && current.effects.valid).then_some(&current.effects.blocks[block]),
+            );
         }
+        let amp = &current.verified_amp;
+        let actual = [amp.gain, amp.level, amp.bass, amp.mid, amp.treble];
+        let live = [
+            current.amp.gain,
+            current.amp.level,
+            current.amp.bass,
+            current.amp.mid,
+            current.amp.treble,
+        ];
         for (knob, &raw) in snapshot.amp.iter().enumerate() {
+            if current.idle
+                && amp.valid
+                && current.amp.valid
+                && actual[knob] == raw
+                && live[knob] == raw
+            {
+                continue;
+            }
             steps.push_back(Step::Write(Cmd::AmpKnob {
                 knob: knob as u8,
                 raw,
             }));
         }
-        if let Some(raw) = snapshot.capture_volume {
+        if let Some(raw) = snapshot.capture_volume.filter(|&raw| {
+            !current.idle
+                || !amp.valid
+                || !amp.have_capture_volume
+                || amp.capture_volume != raw
+                || !current.amp.valid
+                || !current.amp.have_capture_volume
+                || current.amp.capture_volume != raw
+        }) {
             steps.push_back(Step::Write(Cmd::CaptureVolume(raw)));
         }
         if let Some(values) = snapshot.cab {
-            for (which, normalized) in [
+            for ((which, normalized), actual) in [
                 nano_wire::editor::CabFloat::Level,
                 nano_wire::editor::CabFloat::HighPass,
                 nano_wire::editor::CabFloat::LowPass,
             ]
             .into_iter()
             .zip(values)
-            {
+            .zip([
+                current.cab.output,
+                current.cab.high_pass,
+                current.cab.low_pass,
+            ]) {
+                if current.idle && actual == Some(normalized) {
+                    continue;
+                }
                 steps.push_back(Step::Write(Cmd::CabParam { which, normalized }));
             }
         }
-        if let Some(amount) = snapshot.gate_amount {
+        if let Some(amount) = snapshot.gate_amount.filter(|&amount| {
+            !current.idle
+                || !current.effects.valid
+                || !current.effects.gate.reduction_valid
+                || current.effects.gate.reduction_pct != amount
+        }) {
             steps.push_back(Step::Write(Cmd::GateAmount(amount)));
         }
-        steps.push_back(Step::Write(Cmd::Gate(snapshot.gate_on)));
+        if !current.idle
+            || !current.effects.valid
+            || !current.effects.gate.on_known
+            || current.effects.gate.on != snapshot.gate_on
+        {
+            steps.push_back(Step::Write(Cmd::Gate(snapshot.gate_on)));
+        }
         Ok(Self {
             steps,
             target: snapshot,
-            preset,
+            preset: current.preset,
             readback: None,
             deadline: now + 30_000_000,
         })
@@ -378,6 +444,164 @@ mod tests {
         }
     }
 
+    fn writes_before_readback(plan: &mut Plan, view: &View) -> Vec<Cmd> {
+        let mut writes = Vec::new();
+        loop {
+            match plan.poll(view, 1) {
+                Progress::Write(Cmd::SceneRefresh) => return writes,
+                Progress::Write(command) => writes.push(command),
+                _ => panic!("Unexpected wait before readback"),
+            }
+        }
+    }
+
+    #[test]
+    fn identical_scene_sends_no_sound_writes_but_still_verifies() {
+        let mut view = fixture();
+        loaded_model(&mut view, 0);
+        let snapshot = Snapshot::capture(&view).unwrap();
+        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        assert!(writes_before_readback(&mut plan, &view).is_empty());
+        assert!(matches!(plan.poll(&view, 2), Progress::Waiting));
+        view.generation += 1;
+        assert!(matches!(
+            plan.poll(&view, 3),
+            Progress::Write(Cmd::SceneFxRefresh)
+        ));
+        view.generation += 1;
+        assert!(matches!(plan.poll(&view, 4), Progress::Complete));
+    }
+
+    #[test]
+    fn bypass_only_scene_sends_exactly_one_sound_write() {
+        let mut view = fixture();
+        loaded_model(&mut view, 0);
+        let mut snapshot = Snapshot::capture(&view).unwrap();
+        snapshot.effects[0].enabled = true;
+        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        let writes = writes_before_readback(&mut plan, &view);
+        assert!(matches!(
+            writes.as_slice(),
+            [Cmd::Block { slot: 0, on: true }]
+        ));
+    }
+
+    #[test]
+    fn parameter_only_scene_sends_only_the_changed_parameter() {
+        let mut view = fixture();
+        loaded_model(&mut view, 0);
+        let mut snapshot = Snapshot::capture(&view).unwrap();
+        snapshot.effects[0].parameters[0] = 0.9;
+        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        let writes = writes_before_readback(&mut plan, &view);
+        assert!(matches!(
+            writes.as_slice(),
+            [Cmd::Param(ParamWrite {
+                block: 0,
+                wire: 0,
+                ..
+            })]
+        ));
+    }
+
+    #[test]
+    fn scalar_delta_keeps_every_changed_control_and_uses_verified_amp() {
+        let mut view = fixture();
+        view.amp.have_cab_slot = true;
+        view.amp.cab_slot = 1;
+        view.cab.output = Some(0.5);
+        view.cab.high_pass = Some(0.0);
+        view.cab.low_pass = Some(1.0);
+        view.effects.gate.reduction_valid = true;
+        let mut snapshot = Snapshot::capture(&view).unwrap();
+        snapshot.amp[0] = view.verified_amp.gain.wrapping_add(1);
+        view.amp.gain = snapshot.amp[0];
+        snapshot.capture_volume = Some(view.verified_amp.capture_volume.wrapping_add(1));
+        snapshot.cab.as_mut().unwrap()[0] = 0.6;
+        snapshot.gate_amount = Some(50);
+        snapshot.gate_on = true;
+        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        let writes = writes_before_readback(&mut plan, &view);
+        assert!(matches!(
+            writes.as_slice(),
+            [
+                Cmd::AmpKnob { knob: 0, .. },
+                Cmd::CaptureVolume(_),
+                Cmd::CabParam {
+                    which: nano_wire::editor::CabFloat::Level,
+                    ..
+                },
+                Cmd::GateAmount(50),
+                Cmd::Gate(true)
+            ]
+        ));
+    }
+
+    #[test]
+    fn stale_verified_amp_cannot_hide_recent_live_edits() {
+        let mut view = fixture();
+        let snapshot = Snapshot::capture(&view).unwrap();
+        view.amp.gain = view.amp.gain.wrapping_add(1);
+        view.amp.capture_volume = view.amp.capture_volume.wrapping_add(1);
+        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        let writes = writes_before_readback(&mut plan, &view);
+        assert!(matches!(
+            writes.as_slice(),
+            [Cmd::AmpKnob { knob: 0, .. }, Cmd::CaptureVolume(_)]
+        ));
+    }
+
+    #[test]
+    fn changed_model_restores_all_parameters_even_if_old_values_match() {
+        let mut view = fixture();
+        loaded_model(&mut view, 0);
+        let snapshot = Snapshot::capture(&view).unwrap();
+        let count = snapshot.effects[0].parameters.len();
+        view.effects.blocks[0].model_id_raw[0] ^= 0xff;
+        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        assert!(matches!(
+            plan.poll(&view, 1),
+            Progress::Write(Cmd::FxModelId { block: 0, .. })
+        ));
+        assert!(matches!(plan.poll(&view, 2), Progress::Waiting));
+        loaded_model(&mut view, 0);
+        let writes = writes_before_readback(&mut plan, &view);
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|cmd| matches!(cmd, Cmd::Param(_)))
+                .count(),
+            count
+        );
+    }
+
+    #[test]
+    fn loading_state_cannot_suppress_required_writes() {
+        let mut view = fixture();
+        loaded_model(&mut view, 0);
+        let snapshot = Snapshot::capture(&view).unwrap();
+        let count = snapshot.effects[0].parameters.len();
+        view.idle = false;
+        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        assert!(matches!(plan.poll(&view, 1), Progress::Waiting));
+        view.idle = true;
+        let writes = writes_before_readback(&mut plan, &view);
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|cmd| matches!(cmd, Cmd::Param(_)))
+                .count(),
+            count
+        );
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|cmd| matches!(cmd, Cmd::AmpKnob { .. }))
+                .count(),
+            5
+        );
+    }
+
     #[test]
     fn capture_rejects_unknown_or_missing_values_and_keeps_bypassed_parameters() {
         let mut view = fixture();
@@ -401,8 +625,8 @@ mod tests {
         let mut view = fixture();
         loaded_model(&mut view, 0);
         let snapshot = Snapshot::capture(&view).unwrap();
-        let mut plan = Plan::scene(snapshot.clone(), 1, 0).unwrap();
         view.effects.blocks[0].params_loaded = false;
+        let mut plan = Plan::scene(snapshot.clone(), &view, 0).unwrap();
         assert!(matches!(
             plan.poll(&view, 1),
             Progress::Write(Cmd::FxModelId { block: 0, .. })
