@@ -17,26 +17,24 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - **Bluetooth devices** live in Settings → Bluetooth: tap a device to connect, or use its button to connect or forget it.
 - Parameter cells (amp and FX) use the settings-row gray to stand out from the main background.
 - **Pedals page** (header three-dot menu → Pedals) — General controls the EXP/MIDI jack and shows expression status; Sweeps edits per-preset heel/toe assignments; Bypass edits expression switch assignments; Calibration guides pedal calibration. Audio meters and USB playback level remain in Settings → Audio.
-- **MIDI learn page** (header three-dot menu → MIDI) — 15 horizontally scrollable tabs: Controls; Presets 1–16, 17–32, 33–48, 49–64; Captures; Scenes/Gig; Amp/Cab; FX switches/models; FX presets; and a parameter tab for each of Pre FX 1, Pre FX 2, Post FX 1, Post FX 2, Post FX 3. Categories contain at most 27 actions; each FX parameter tab has 24. Tap Learn on an action, then send a BLE-MIDI note, CC, or program change. Learn the same message on several rows to control multiple targets; Clear removes only that row's binding. Changing tabs or closing the page cancels learning. Bulk clearing lives in Settings → General. Buttons cover FX block on/off, gate, tuner, tap tempo, preset/capture step, direct preset 1–64 and capture 1–25 selection, FX model step, save, and explicit input/output/tuner mute/unmute. CC-only parameters cover all five amp controls, capture volume, cab level/high-pass/low-pass, gate amount, USB playback level, and up to 24 displayed knobs per FX block (only knobs present on the current model apply). CC 0 does not trigger button actions; it still sets continuous parameters to their minimum. Repeated CC values for a pending parameter are coalesced; different targets are retained. Saved in flash with readback verification; old MIDI bindings keep their existing action assignments.
+- **MIDI learn page** (header three-dot menu → MIDI) — 14 horizontally scrollable tabs: Controls; Presets 1–16, 17–32, 33–48, 49–64; Captures; Scenes/Gig; Amp/Cab; FX switches/models; and a parameter tab for each of Pre FX 1, Pre FX 2, Post FX 1, Post FX 2, Post FX 3. Categories contain at most 27 actions; each FX parameter tab has 24. Tap Learn on an action, then send a BLE-MIDI note, CC, or program change. Learn the same message on several rows to control multiple targets; Clear removes only that row's binding. Changing tabs or closing the page cancels learning. Bulk clearing lives in Settings → General. Buttons cover FX block on/off, gate, tuner, tap tempo, preset/capture step, direct preset 1–64 and capture 1–25 selection, FX model step, save, and explicit input/output/tuner mute/unmute. CC-only parameters cover all five amp controls, capture volume, cab level/high-pass/low-pass, gate amount, USB playback level, and up to 24 displayed knobs per FX block (only knobs present on the current model apply). CC 0 does not trigger button actions; it still sets continuous parameters to their minimum. Repeated CC values for a pending parameter are coalesced; different targets are retained. Saved in flash with readback verification.
 - **Preset manager** — browse presets in 12-slot tabs and use the three-dot menu to rename (on-screen keyboard; 4–64 ASCII letters, digits, spaces, `-`, `_`, unique), delete, move, or copy to any slot. Overwriting an occupied slot asks for confirmation
-- **Performance controls** — eight named scenes per Nano preset, four FX presets per model shared across compatible effect slots, and a large-button scene gig view. Touch and MIDI recalls share staged, transient restoration; controller data is saved in internal flash. Sets/custom banks are deferred.
+- **Scenes** — eight named scenes per Nano preset, available from the scene selector and large-button Gig view. Touch and MIDI recalls share staged, transient restoration; scene data is saved in internal flash. Sets/custom banks are deferred.
 - Open preset lists update in place when the refreshed catalog arrives after a rename, delete, move, or copy.
-- Refresh and Nano preset Save live in Settings → General → Tools next to Tuner (Save is highlighted with unsaved changes); the header has a scene selector and a vertical three-dot menu with Gig mode, MIDI, Pedals, and Settings, in that order. An asterisk after the current Nano preset title marks unsaved Nano edits.
+- Refresh and Nano preset Save live in Settings → General → Tools next to Tuner (Save is highlighted with unsaved changes); the header has a background-free scene selector (hold a selected scene for Rename, Save, or Delete) and a vertical three-dot menu with Gig mode, a separator, then MIDI, Pedals, and Settings. BPM text and icon are white. An asterisk after the current Nano preset title marks unsaved Nano edits.
 - In portrait the FX chain sits at the bottom of the screen, below the page content.
 - Tap an FX chain tab to select it, hold it to toggle bypass, or double-tap it to open model selection. The Amp tab remains selection-only.
 - Preset three-dot menus have a 64px-wide, full-row-height touch target separate from preset selection.
 - Selecting a preset keeps the preset list open and moves its highlight, so presets can be auditioned back to back.
-- The main screen has the same 14px edge padding as Settings; the Amp page's capture and cab cards have no outline, center their icon, slot and name, and wrap names to two lines before truncating with "…".
+- All full-screen pages, including Welcome, share 12px edge padding. The tuner keeps the editor header above its tuning display and controls, including when opened from Gig mode. The Amp page's capture and cab cards have no outline, center their icon, slot and name, and wrap names to two lines before truncating with "…".
 - Preset popup names wrap to three lines on taller cards, and capture and cab names wrap to two; the rename keyboard has a blinking cursor, keys light up while pressed, holding backspace repeats (400ms delay, then every 60ms), and long names keep their end visible.
 - While the rename keyboard is open, touch is polled every 10ms instead of 50ms; duplicate-name validation scans the stored catalog without allocating copies.
 - The software renderer has no occlusion culling, so screens covered by the keyboard or a full-screen panel are hidden rather than redrawn underneath it. The header title elides long preset names.
 - Long item names and popup titles truncate with an ellipsis within their available space; cards that support multiple lines keep wrapping before truncation. Full names remain stored.
 - Flash commits pause RGB scan-out at vertical blank and restart with freshly filled bounce buffers, avoiding repeated strips while the refill core is parked. Journal saves erase only sectors needed for the new record.
 - Touch and MIDI sound edits mark the Nano preset dirty locally as well as accepting Nano dirty notifications, so the header asterisk does not depend on receiving an edit notification.
-- FX preset recalls update parameters without changing the current FX on/off state, even if the saved preset has a different bypass state. Same-model recalls do not reload the model. Scene recalls still restore bypass.
 - The header reads the Nano's initial unsaved flag from current-state field 41, so already-dirty presets show an asterisk on connection without another edit.
 - FX parameter labels use 19px text; amp labels remain 17px and parameter values remain 24px.
-- FX preset asterisks sit beside the label, remaining visible when long names are elided.
 - **Expression calibration** — guided reset, pedal sweep, and save flow; the screen shows the sampled range before saving
 - **Protocol responses** — handles Nano preset-change requests and surfaces supported write acknowledgements
 
@@ -59,7 +57,7 @@ It retains the default NVS and application start addresses and adds a 128 KiB
 MIDI configuration; do not erase the entire chip if you want to retain
 existing MIDI assignments and screen layout.
 
-Scenes and FX presets additionally use a checked 2 MiB `performance` partition at 10 MiB.
+Scenes additionally use a checked 2 MiB `scenes` partition at 10 MiB.
 Reflash with the updated table when upgrading; existing partitions keep their offsets.
 
 Monitor (keep DTR/RTS off on Waveshare):
@@ -103,7 +101,7 @@ Host-test MIDI learn, multi-target queues, and binding-record compatibility:
 cargo +stable test --manifest-path firmware/tests/midi/Cargo.toml --target x86_64-unknown-linux-gnu
 ```
 
-## Performance and MIDI configuration
+## Scenes and MIDI configuration
 
 ### Scenes
 
@@ -122,7 +120,7 @@ to other scenes. Renaming changes only the stored name, not the sound.
 Saving, deleting and recalling scenes take effect without confirmation dialogs.
 Eight MIDI Learn actions recall scenes of the current Nano preset.
 
-New scene and FX preset names are limited to **16 ASCII characters** (letters,
+New scene names are limited to **16 ASCII characters** (letters,
 numbers, spaces, `-`, `_`, no outer spaces), unique within their collection.
 
 Scenes restore amp controls, capture volume when available, active cab EQ/level,
@@ -133,48 +131,29 @@ for model/parameter loading and fresh readback before reporting **Recall verifie
 Timeout/disconnect errors warn that sound may be partly updated; reload the
 original Nano preset to recover. Actual sound recall still requires hardware validation.
 
-### Named FX presets
-
-Each FX model has four named preset tabs immediately above its parameters.
-The collection follows the model, not its Pre/Post FX slot, and is shared across
-compatible slots and Nano presets. Switching models switches the displayed tabs.
-An empty **+** tab stores the current model's parameters with a name;
-tapping a populated tab recalls it into the current slot only, preserving its on/off state.
-The tabs stay visible while scrolling parameters, with an 8px gap below the row.
-An asterisk on the selected tab marks unsaved changes. Press and hold a tab for
-the **Save**, **Rename** and **Delete** dropdown (empty slots only enable Save),
-with a separator before Delete.
-Amp/cab/gate and other FX are unchanged. Replacing/deleting asks
-for confirmation. Saving, renaming or deleting updates that model's shared collection;
-deleting an entry does not move the other tabs. FX presets share `performance.json`
-and the scene restore/readback safeguards; they never save over Nano presets.
-
-Performance storage uses format version 3 with eight-slot `preset_scenes` and
-`model_presets`, keyed by the model's wire ID. **The first boot of this firmware
-permanently factory-resets all controller storage**: layout/settings, MIDI
-bindings, scenes, FX presets and legacy Sets. The entire `nvs`, `midi` and
-`performance` partitions are erased, including both journal generations.
+Scene storage uses format version 3 (`nano-scenes`) with eight-slot
+`preset_scenes`.
+**The first boot of this firmware permanently factory-resets all controller
+storage**: layout/settings, MIDI
+bindings, scenes and legacy Sets. The entire `nvs`, `midi` and `scenes`
+partitions are erased, including both journal generations.
 No legacy Set, binary MIDI or four-scene migration paths remain.
 The reset is verified and marked complete in the last NVS sector, so newly
 saved data survives subsequent boots. An interrupted or failed reset is logged
 and stops startup before settings are loaded; reboot retries the full reset.
 Nano Cortex's own presets/settings and the app/PHY partitions are not erased.
-The original 429 MIDI action IDs remain stable; four appended IDs recall scenes
-5-8, for 433 total actions and 279 active actions. Set actions and old shelf
-slots 5-32 are retired and do not execute. Old saved bindings are erased by the
-factory reset.
-The first four FX recall IDs per block now recall presets of the model currently
-loaded in that block. Performance JSON is encoded compactly; all 64 eight-scene
-collections plus four presets for every catalog model fit the storage limit.
+MIDI action IDs are compacted after removing the FX preset slots; the action
+table now contains 273 entries and 259 active actions. Set actions and old shelf
+slots 5-32 remain unavailable. Scene JSON is encoded
+compactly; all 64 eight-scene collections fit the storage limit.
 The JSON limit uses the full 1 MiB journal slot minus its 32-byte header, within
-the existing 2 MiB performance partition.
+the existing 2 MiB scenes partition.
 
-The desktop preview includes sample scenes, model-scoped FX preset collections
-and gig view. Hold an FX chain tab to select a model and switch collections.
+The desktop preview includes sample scenes and gig view.
 Run `./firmware/preview.sh` (or add `portrait`)
 and use the **FX**, **Scenes**, **Gig** and **Edited** developer shortcuts.
-Header/FX controls also work; saving and deleting update temporary preview data
-only, without connecting to a Nano or writing flash.
+Header/FX controls also work; scene changes update temporary preview data only,
+without connecting to a Nano or writing flash.
 
 ### Gig view
 
@@ -190,7 +169,7 @@ Nano preset or persisted sound setting.
 
 ### Internal configuration storage
 
-MIDI assignments and performance data remain saved as checked JSON records in
+MIDI assignments and Scenes data remain saved as checked JSON records in
 internal flash. Configure them using the controller's touch UI or MIDI Learn.
 The USB configuration drive is deferred: this firmware does not expose editable
 files to a computer and has no import/export controls or serial backup commands.
@@ -202,20 +181,18 @@ Settings → General → Clear → **MIDI** asks for confirmation before removin
 learned assignments. Cancel leaves them unchanged. This does not change presets
 on the Nano.
 
-The right-aligned buttons in the same row include **Scenes** (all scenes across every Nano preset) and **FX presets**
-(all saved FX presets across every model). Each asks for confirmation and preserves
-the other categories and the current Nano sound. Save errors are shown below the row;
-failed performance clears retain the stored data and selections. Pedal assignments,
+The right-aligned button in the same row includes **Scenes** (all scenes across every
+Nano preset), and asks for confirmation before clearing them. Save errors are shown
+below the row; failed scene clears retain the stored data and selections. Pedal assignments,
 calibration, Bluetooth pairings and screen layout are not cleared.
 
 **Settings → General → Autosave** is off by default and persisted with the screen
 layout. When enabled, edits made through touch or MIDI restart a five-second idle
-timer. It overwrites the selected dirty scene and selected dirty FX presets using
-their existing names, then saves the current dirty Nano preset. No empty controller
+timer. It overwrites the selected dirty scene using its existing name, then saves
+the current dirty Nano preset. No empty controller
 slots are created. Autosave waits for state transfers/recalls to finish and for
 tuner exit; changing Nano presets, disconnecting or recalling a controller preset
 cancels the pending timer. Enabling it applies to subsequent edits.
-Shared FX presets with conflicting edits in multiple blocks are not overwritten.
 Errors are displayed in General; a failed autosave requires another edit to retry.
 The Nano save status reports the request being sent, not an unverified success.
 
@@ -253,7 +230,7 @@ instead of constructing the entire action list when the page opens.
 
 To isolate UI failures from Bluetooth, build with
 `./firmware/build.sh --features ui-only`. This diagnostic retains the touch UI,
-MIDI/performance configuration loading and display interrupts, but skips radio
+MIDI/scene configuration loading and display interrupts, but skips radio
 initialization. It cannot connect to the Nano or footswitch. Build without this
 feature to resume normal control; configuration partition offsets are unchanged.
 

@@ -270,7 +270,7 @@ where
         async {
             if let Err(error) = runner.run_with_handler(&hunt).await {
                 log::error!("ble runner stopped: {error:?}");
-                crate::performance::report(
+                crate::scenes::report(
                     "Bluetooth runner stopped; restart controller and check serial log",
                 );
             }
@@ -518,11 +518,11 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
                 crate::state::feed_c305_bytes(note.as_ref());
             }
             Ok(Either::Second(write)) => {
-                if crate::performance::busy() {
-                    crate::performance::report("Slider ignored while performance recall is running");
+                if crate::scenes::busy() {
+                    crate::scenes::report("Slider ignored while scene recall is running");
                     continue;
                 }
-                crate::performance::sound_edited();
+                crate::scenes::sound_edited();
                 let mut buf = [0u8; 24];
                 let n = slider_payload(write, &mut buf);
                 if n > 0 {
@@ -545,28 +545,28 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
             }
             Err(_) => {}
         }
-        while !crate::performance::busy() {
+        while !crate::scenes::busy() {
             let Some(cmd) = crate::link::pop_cmd() else { break; };
             apply_cmd(cmd);
             flush_writes(client, c304.handle, c304_no_rsp).await;
         }
-        if let Some(cmd) = crate::performance::poll() {
+        if let Some(cmd) = crate::scenes::poll() {
             apply_cmd(cmd);
             flush_writes(client, c304.handle, c304_no_rsp).await;
         }
         if LIBRARY_WANTED.load(core::sync::atomic::Ordering::Relaxed)
             && crate::state::nano_rx_mode_get() == 0
-            && !crate::performance::busy()
+            && !crate::scenes::busy()
         {
             LIBRARY_WANTED.store(false, core::sync::atomic::Ordering::Relaxed);
             let sent = crate::state::nano_state_request_library();
             log::info!("Library request sent={sent}");
         }
         if let Some(param) = crate::link::take_param() {
-            if crate::performance::busy() {
-                crate::performance::report("Parameter edit ignored while performance recall is running");
+            if crate::scenes::busy() {
+                crate::scenes::report("Parameter edit ignored while scene recall is running");
             } else {
-                crate::performance::effect_edited(usize::from(param.block));
+                crate::scenes::sound_edited();
                 if !crate::fx::nano_fx_write_param_normalized(
                     u32::from(param.block),
                     param.wire,
@@ -577,19 +577,19 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
             }
         }
         crate::state::poll();
-        if crate::performance::autosave_due() {
-            let result = crate::performance::autosave_selected();
+        if crate::scenes::autosave_due() {
+            let result = crate::scenes::autosave_selected();
             match result {
-                Err(error) => crate::performance::report(error),
+                Err(error) => crate::scenes::report(error),
                 Ok(()) => {
                     if crate::state::nano_state_preset_dirty() {
                         if crate::state::nano_state_save_preset() {
-                            crate::performance::report("Autosave sent to Nano");
+                            crate::scenes::report("Autosave sent to Nano");
                         } else {
-                            crate::performance::report("Autosave failed: Nano preset save was refused");
+                            crate::scenes::report("Autosave failed: Nano preset save was refused");
                         }
                     } else {
-                        crate::performance::report("Autosaved selected controller presets");
+                        crate::scenes::report("Autosave complete");
                     }
                 }
             }
@@ -602,7 +602,7 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
 pub static LIBRARY_WANTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 fn apply_cmd(cmd: crate::link::Cmd) {
-    if !crate::performance::busy() && matches!(&cmd,
+    if !crate::scenes::busy() && matches!(&cmd,
         crate::link::Cmd::Param(_) | crate::link::Cmd::Block { .. }
         | crate::link::Cmd::Model { .. } | crate::link::Cmd::ModelAt { .. }
         | crate::link::Cmd::Gate(_) | crate::link::Cmd::GateAmount(_)
@@ -610,74 +610,53 @@ fn apply_cmd(cmd: crate::link::Cmd) {
         | crate::link::Cmd::CabParam { .. } | crate::link::Cmd::Capture(_)
         | crate::link::Cmd::CaptureAt(_) | crate::link::Cmd::CabAt(_)
     ) {
-        crate::performance::sound_edited();
-        match &cmd {
-            crate::link::Cmd::Param(param) => crate::performance::effect_edited(usize::from(param.block)),
-            crate::link::Cmd::Block { slot, .. } => crate::performance::effect_edited(usize::from(*slot)),
-            crate::link::Cmd::Model { block, .. } | crate::link::Cmd::ModelAt { block, .. } =>
-                crate::performance::effect_edited(usize::from(*block)),
-            _ => {}
-        }
+        crate::scenes::sound_edited();
     }
     match cmd {
         crate::link::Cmd::Gig(enabled) => crate::ui::show_gig(enabled),
-        crate::link::Cmd::FxPresetRecall { index, block, model } => {
-            if model.as_ref().is_some_and(|model| crate::performance::fx_model(usize::from(block)).as_ref() != Some(model)) {
-                crate::performance::report("FX model changed; choose its preset again");
-            } else if let Err(error) = crate::performance::recall_fx(usize::from(index), usize::from(block)) {
-                crate::performance::report(error);
-            } else { SLIDER.reset(); crate::link::take_param(); }
-        }
-        crate::link::Cmd::FxPresetCapture { index, block, preset, name, model } => {
-            if preset != crate::state::nano_state_preset_slot() {
-                crate::performance::report("Nano preset changed; reopen FX preset saving");
-            } else if let Err(error) = crate::performance::capture_fx(usize::from(index), usize::from(block), &name, &model) {
-                crate::performance::report(error);
-            }
-        }
         crate::link::Cmd::SceneRecall(index) => {
-            if let Err(error) = crate::performance::recall_scene(usize::from(index)) { crate::performance::report(error); }
+            if let Err(error) = crate::scenes::recall_scene(usize::from(index)) { crate::scenes::report(error); }
             else { SLIDER.reset(); crate::link::take_param(); }
         }
         crate::link::Cmd::SceneRecallAt { preset, scene } => {
             if preset != crate::state::nano_state_preset_slot() {
-                crate::performance::report("Nano preset changed; reopen the scene selector");
-            } else if let Err(error) = crate::performance::recall_scene(usize::from(scene)) {
-                crate::performance::report(error);
+                crate::scenes::report("Nano preset changed; reopen the scene selector");
+            } else if let Err(error) = crate::scenes::recall_scene(usize::from(scene)) {
+                crate::scenes::report(error);
             } else { SLIDER.reset(); crate::link::take_param(); }
         }
         crate::link::Cmd::SceneCapture { preset, scene, name } => {
-            if let Err(error) = crate::performance::capture_scene(preset, usize::from(scene), &name) {
-                crate::performance::report(error);
+            if let Err(error) = crate::scenes::capture_scene(preset, usize::from(scene), &name) {
+                crate::scenes::report(error);
             }
         }
-        crate::link::Cmd::PerformanceRefresh => {
+        crate::link::Cmd::SceneRefresh => {
             crate::fx::nano_fx_clear_model_trust();
-            crate::state::nano_state_request_preset_refresh("Performance recall");
+            crate::state::nano_state_request_preset_refresh("Scene recall");
         }
-        crate::link::Cmd::PerformanceFxRefresh => {
+        crate::link::Cmd::SceneFxRefresh => {
             crate::fx::nano_fx_refresh_all();
-            if let Some(slot) = crate::performance::view().amp.active_cab_slot() {
+            if let Some(slot) = crate::scenes::view().amp.active_cab_slot() {
                 if !crate::state::nano_state_read_cab_settings(slot) {
-                    crate::performance::cancel("Cab readback request failed; sound may be partially updated");
+                    crate::scenes::cancel("Cab readback request failed; sound may be partially updated");
                 }
             }
         }
         crate::link::Cmd::FxModelId { block, id } => {
             let sent = crate::fx::models::find_model(&id)
                 .is_some_and(|model| crate::fx::nano_fx_write_block_model(u32::from(block), model));
-            if !sent { crate::performance::cancel("FX model recall refused; sound may be partially updated"); }
+            if !sent { crate::scenes::cancel("FX model recall refused; sound may be partially updated"); }
         }
         crate::link::Cmd::Gate(on) => {
             if !crate::fx::nano_fx_write_gate_enabled(on) {
                 log::warn!("Gate toggle write failed");
-                crate::performance::cancel("Gate recall failed; sound may be partially updated");
+                crate::scenes::cancel("Gate recall failed; sound may be partially updated");
             }
         }
         crate::link::Cmd::GateAmount(pct) => {
             if !crate::fx::nano_fx_write_gate_reduction(pct) {
                 log::warn!("MIDI gate amount write failed");
-                crate::performance::cancel("Gate amount recall failed; sound may be partially updated");
+                crate::scenes::cancel("Gate amount recall failed; sound may be partially updated");
             }
         }
         crate::link::Cmd::TunerToggle => crate::ui::midi_toggle_tuner(),
@@ -689,7 +668,7 @@ fn apply_cmd(cmd: crate::link::Cmd) {
         crate::link::Cmd::Param(param) => {
             if !crate::fx::nano_fx_write_param_normalized(u32::from(param.block), param.wire, param.norm) {
                 log::warn!("MIDI FX parameter write failed");
-                crate::performance::cancel("FX parameter recall failed; sound may be partially updated");
+                crate::scenes::cancel("FX parameter recall failed; sound may be partially updated");
             }
         }
         crate::link::Cmd::Tuner(on) => {
@@ -713,7 +692,7 @@ fn apply_cmd(cmd: crate::link::Cmd) {
         crate::link::Cmd::Block { slot, on } => {
             if !crate::fx::nano_fx_write_block_enabled(u32::from(slot), on) {
                 log::warn!("FX toggle write failed");
-                crate::performance::cancel("FX bypass recall failed; sound may be partially updated");
+                crate::scenes::cancel("FX bypass recall failed; sound may be partially updated");
             }
         }
         crate::link::Cmd::Model { block, delta } => step_model(block, delta),
@@ -793,19 +772,19 @@ fn apply_cmd(cmd: crate::link::Cmd) {
         crate::link::Cmd::CabParam { which, normalized } => {
             if !crate::state::nano_state_write_cab_float(which, normalized) {
                 log::warn!("Cab parameter write failed");
-                crate::performance::cancel("Cab recall failed; sound may be partially updated");
+                crate::scenes::cancel("Cab recall failed; sound may be partially updated");
             }
         }
         crate::link::Cmd::AmpKnob { knob, raw } => {
             if !crate::state::nano_state_write_amp_knob(u32::from(knob), raw) {
                 log::warn!("MIDI amp control write failed");
-                crate::performance::cancel("Amp recall failed; sound may be partially updated");
+                crate::scenes::cancel("Amp recall failed; sound may be partially updated");
             }
         }
         crate::link::Cmd::CaptureVolume(raw) => {
             if !crate::state::nano_state_write_capture_volume(raw) {
                 log::warn!("MIDI capture volume write failed");
-                crate::performance::cancel("Capture level recall failed; sound may be partially updated");
+                crate::scenes::cancel("Capture level recall failed; sound may be partially updated");
             }
         }
         crate::link::Cmd::ExpressionSave { slot, assignments } => {
@@ -931,7 +910,7 @@ async fn flush_writes<C: Controller, P: PacketPool>(
             }
             Err(error) => {
                 log::warn!("C304 write failed: {error:?}");
-                crate::performance::cancel("Bluetooth write failed; recall may be partially applied");
+                crate::scenes::cancel("Bluetooth write failed; recall may be partially applied");
             }
         }
     }

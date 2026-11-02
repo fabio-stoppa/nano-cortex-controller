@@ -1,6 +1,6 @@
 //! Persists screen layout and autosave preferences in the first NVS sector.
 //!
-//! Current MIDI and performance configuration live in separate partitions.
+//! Current MIDI and scene configuration live in separate partitions.
 //! The last NVS sector marks completion of the controller-wide storage reset.
 
 use alloc::{string::String, vec};
@@ -130,14 +130,14 @@ pub fn initialize() -> Result<bool, &'static str> {
     };
     let nvs = find("nvs", 3 * SECTOR)?;
     let midi = find("midi", json_record::CAPACITY)?;
-    let performance = find("performance", PERFORMANCE_SLOT * 2)?;
+    let scenes = find("scenes", SCENES_SLOT * 2)?;
     let nvs_size = nvs.len();
     let midi_size = midi.len();
-    let performance_size = performance.len();
+    let scenes_size = scenes.len();
     let ranges = [
         (nvs.offset(), nvs_size),
         (midi.offset(), midi_size),
-        (performance.offset(), performance_size),
+        (scenes.offset(), scenes_size),
     ];
     for (index, &(offset, size)) in ranges.iter().enumerate() {
         let end = offset.checked_add(size).ok_or("Controller reset partition range overflow")?;
@@ -171,7 +171,7 @@ pub fn initialize() -> Result<bool, &'static str> {
     reset::initialize(
         &mut Regions { flash: &flash, entry: nvs }, nvs_size,
         &mut Regions { flash: &flash, entry: midi }, midi_size,
-        &mut Regions { flash: &flash, entry: performance }, performance_size,
+        &mut Regions { flash: &flash, entry: scenes }, scenes_size,
     )
 }
 
@@ -227,17 +227,17 @@ pub fn save_midi_json(json: &str) -> Result<(), &'static str> {
     with_json("midi", json_record::CAPACITY, |storage| json_record::save(storage, json))
 }
 
-const PERFORMANCE_SLOT: u32 = 1024 * 1024;
+const SCENES_SLOT: u32 = 1024 * 1024;
 
-pub fn load_performance_json() -> Result<Option<String>, &'static str> {
-    with_json("performance", PERFORMANCE_SLOT * 2, |storage| {
-        json_record::load_sized(storage, PERFORMANCE_SLOT, crate::performance::data::MAX_JSON)
+pub fn load_scenes_json() -> Result<Option<String>, &'static str> {
+    with_json("scenes", SCENES_SLOT * 2, |storage| {
+        json_record::load_sized(storage, SCENES_SLOT, crate::scenes::data::MAX_JSON)
     })
 }
 
-pub fn save_performance_json(json: &str) -> Result<(), &'static str> {
+pub fn save_scenes_json(json: &str) -> Result<(), &'static str> {
     let _pause = crate::bounce::FlashPause::begin()?;
-    with_json("performance", PERFORMANCE_SLOT * 2, |storage| {
-        json_record::save_sized(storage, json, PERFORMANCE_SLOT, crate::performance::data::MAX_JSON)
+    with_json("scenes", SCENES_SLOT * 2, |storage| {
+        json_record::save_sized(storage, json, SCENES_SLOT, crate::scenes::data::MAX_JSON)
     })
 }

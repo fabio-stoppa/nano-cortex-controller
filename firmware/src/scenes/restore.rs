@@ -182,15 +182,10 @@ pub enum Progress {
 
 pub struct Plan {
     steps: VecDeque<Step>,
-    target: Target,
+    target: Snapshot,
     preset: u8,
     readback: Option<(u32, Option<u32>)>,
     deadline: i64,
-}
-
-enum Target {
-    Scene(Snapshot),
-    Effect { block: usize, effect: Effect },
 }
 
 fn enqueue_effect(steps: &mut VecDeque<Step>, block: usize, effect: &Effect) {
@@ -251,29 +246,7 @@ impl Plan {
         steps.push_back(Step::Write(Cmd::Gate(snapshot.gate_on)));
         Ok(Self {
             steps,
-            target: Target::Scene(snapshot),
-            preset,
-            readback: None,
-            deadline: now + 30_000_000,
-        })
-    }
-
-    pub fn effect(
-        effect: Effect,
-        block: usize,
-        preset: u8,
-        now: i64,
-    ) -> Result<Self, &'static str> {
-        if block >= 5 {
-            return Err("Invalid FX preset target block");
-        }
-        effect.validate(block)?;
-        let mut steps = VecDeque::new();
-        enqueue_effect(&mut steps, block, &effect);
-        steps.retain(|step| !matches!(step, Step::Write(Cmd::Block { .. })));
-        Ok(Self {
-            steps,
-            target: Target::Effect { block, effect },
+            target: snapshot,
             preset,
             readback: None,
             deadline: now + 30_000_000,
@@ -325,23 +298,16 @@ impl Plan {
         match self.readback {
             None => {
                 self.readback = Some((view.generation, None));
-                Progress::Write(Cmd::PerformanceRefresh)
+                Progress::Write(Cmd::SceneRefresh)
             }
             Some((generation, None)) if generation != view.generation => {
                 self.readback = Some((generation, Some(view.cab_generation)));
-                Progress::Write(Cmd::PerformanceFxRefresh)
+                Progress::Write(Cmd::SceneFxRefresh)
             }
             Some((generation, Some(cab_generation)))
                 if generation != view.generation
-                    && match &self.target {
-                        Target::Scene(snapshot) => {
-                            (snapshot.cab.is_none() || view.cab_generation != cab_generation)
-                                && snapshot.matches(view)
-                        }
-                        Target::Effect { block, effect } => {
-                            effect.parameters_match(&view.effects.blocks[*block])
-                        }
-                    } =>
+                    && (self.target.cab.is_none() || view.cab_generation != cab_generation)
+                    && self.target.matches(view) =>
             {
                 Progress::Complete
             }
@@ -444,7 +410,7 @@ mod tests {
         let mut parameters = 0;
         loop {
             match plan.poll(&view, 3) {
-                Progress::Write(Cmd::PerformanceRefresh) => break,
+                Progress::Write(Cmd::SceneRefresh) => break,
                 Progress::Write(Cmd::Param(_)) => parameters += 1,
                 Progress::Write(_) => {}
                 _ => panic!("Unexpected progress before state readback"),
@@ -458,7 +424,7 @@ mod tests {
         view.generation += 1;
         assert!(matches!(
             plan.poll(&view, 5),
-            Progress::Write(Cmd::PerformanceFxRefresh)
+            Progress::Write(Cmd::SceneFxRefresh)
         ));
         view.effects.blocks[0].params_loaded = false;
         assert!(matches!(plan.poll(&view, 6), Progress::Waiting));
@@ -477,77 +443,6 @@ mod tests {
         view.verified_amp = view.amp;
         assert!(matches!(plan.poll(&view, 8), Progress::Complete));
         assert!(matches!(plan.poll(&view, 30_000_000), Progress::Failed(_)));
-    }
-
-    #[test]
-    fn fx_recall_preserves_bypass_even_when_saved_state_differs() {
-        for enabled in [false, true] {
-            let mut view = fixture();
-            loaded_model(&mut view, 0);
-            view.effects.blocks[0].on = enabled;
-            let mut effect = Effect::capture(&view.effects.blocks[0], 0).unwrap();
-            effect.parameters[0] = 0.8;
-            let mut plan = Plan::effect(effect.clone(), 0, 1, 0).unwrap();
-            loop {
-                match plan.poll(&view, 1) {
-                    Progress::Write(Cmd::PerformanceRefresh) => break,
-                    Progress::Write(Cmd::Param(_)) => {}
-                    Progress::Write(Cmd::FxModelId { .. } | Cmd::Block { .. }) =>
-                        panic!("Same-model recall must not reload or toggle the effect"),
-                    _ => panic!("Unexpected recall step"),
-                }
-            }
-            effect = Effect::capture(&view.effects.blocks[0], 0).unwrap();
-            effect.enabled = !enabled;
-            let mut plan = Plan::effect(effect, 0, 1, 0).unwrap();
-            loop {
-                match plan.poll(&view, 1) {
-                    Progress::Write(Cmd::PerformanceRefresh) => break,
-                    Progress::Write(Cmd::Param(_)) => {}
-                    Progress::Write(Cmd::Block { .. }) => panic!("FX preset changed bypass"),
-                    Progress::Write(Cmd::FxModelId { .. }) => panic!("Model was unnecessarily reloaded"),
-                    _ => panic!("Unexpected recall step"),
-                }
-            }
-            view.generation += 1;
-            assert!(matches!(plan.poll(&view, 2), Progress::Write(Cmd::PerformanceFxRefresh)));
-            view.generation += 1;
-            assert!(matches!(plan.poll(&view, 3), Progress::Complete),
-                "Saved bypass must not be required for FX recall verification");
-            assert_eq!(view.effects.blocks[0].on, enabled);
-        }
-    }
-
-    #[test]
-    fn fx_recall_only_writes_compatible_target_and_verifies_it_independently() {
-        let mut view = fixture();
-        loaded_model(&mut view, 0);
-        let effect = Effect::capture(&view.effects.blocks[0], 0).unwrap();
-        let incompatible = (0..5)
-            .find(|&block| effect.validate(block).is_err())
-            .expect("Pre effect needs an incompatible block");
-        assert!(Plan::effect(effect.clone(), incompatible, 1, 0).is_err());
-        assert!(Plan::effect(effect.clone(), 5, 1, 0).is_err());
-        let mut plan = Plan::effect(effect, 0, 1, 0).unwrap();
-        loop {
-            match plan.poll(&view, 1) {
-                Progress::Write(Cmd::PerformanceRefresh) => break,
-                Progress::Write(Cmd::FxModelId { block: 0, .. })
-                | Progress::Write(Cmd::Param(ParamWrite { block: 0, .. }))
-                | Progress::Write(Cmd::Block { slot: 0, .. }) => {}
-                _ => panic!("FX preset wrote unrelated controls"),
-            }
-        }
-        view.generation += 1;
-        assert!(matches!(
-            plan.poll(&view, 2),
-            Progress::Write(Cmd::PerformanceFxRefresh)
-        ));
-        view.amp.valid = false;
-        view.effects.blocks[1].valid = false;
-        assert!(matches!(plan.poll(&view, 3), Progress::Complete));
-        view.preset = 2;
-        assert!(matches!(plan.poll(&view, 4), Progress::Failed(_)));
     }
 
     #[test]

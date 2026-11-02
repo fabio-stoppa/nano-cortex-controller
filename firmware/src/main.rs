@@ -21,7 +21,7 @@ mod link;
 mod memsafe;
 mod midi;
 mod panel;
-mod performance;
+mod scenes;
 mod screen;
 mod settings;
 mod state;

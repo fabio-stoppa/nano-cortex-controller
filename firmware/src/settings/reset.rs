@@ -20,11 +20,11 @@ pub fn initialize(
     nvs_size: u32,
     midi: &mut impl Storage,
     midi_size: u32,
-    performance: &mut impl Storage,
-    performance_size: u32,
+    scenes: &mut impl Storage,
+    scenes_size: u32,
 ) -> Result<bool, &'static str> {
     if nvs_size < 3 * SECTOR
-        || [nvs_size, midi_size, performance_size]
+        || [nvs_size, midi_size, scenes_size]
             .iter()
             .any(|size| *size == 0 || size % SECTOR != 0)
     {
@@ -37,7 +37,7 @@ pub fn initialize(
         return Ok(false);
     }
     erase_verified(midi, midi_size)?;
-    erase_verified(performance, performance_size)?;
+    erase_verified(scenes, scenes_size)?;
     erase_verified(nvs, nvs_size)?;
     nvs.write(marker_offset, RESET_MARKER)?;
     nvs.read(marker_offset, &mut marker)?;
@@ -104,40 +104,40 @@ mod tests {
     fn erases_all_data_and_both_journal_generations_only_once() {
         let mut nvs = Flash::dirty(6 * SECTOR);
         let mut midi = Flash::dirty(32 * SECTOR);
-        let mut performance = Flash::dirty(512 * SECTOR);
+        let mut scenes = Flash::dirty(512 * SECTOR);
         assert!(initialize(
             &mut nvs,
             6 * SECTOR,
             &mut midi,
             32 * SECTOR,
-            &mut performance,
+            &mut scenes,
             512 * SECTOR
         )
         .unwrap());
         assert!(midi.bytes.iter().all(|byte| *byte == 0xff));
-        assert!(performance.bytes.iter().all(|byte| *byte == 0xff));
+        assert!(scenes.bytes.iter().all(|byte| *byte == 0xff));
         assert!(nvs.bytes[..5 * SECTOR as usize]
             .iter()
             .all(|byte| *byte == 0xff));
-        let operations = (nvs.operations, midi.operations, performance.operations);
+        let operations = (nvs.operations, midi.operations, scenes.operations);
         nvs.bytes[0] = 42;
         midi.bytes[0] = 43;
-        performance.bytes[0] = 44;
+        scenes.bytes[0] = 44;
         assert!(!initialize(
             &mut nvs,
             6 * SECTOR,
             &mut midi,
             32 * SECTOR,
-            &mut performance,
+            &mut scenes,
             512 * SECTOR
         )
         .unwrap());
         assert_eq!(
             operations,
-            (nvs.operations, midi.operations, performance.operations)
+            (nvs.operations, midi.operations, scenes.operations)
         );
         assert_eq!(
-            (nvs.bytes[0], midi.bytes[0], performance.bytes[0]),
+            (nvs.bytes[0], midi.bytes[0], scenes.bytes[0]),
             (42, 43, 44)
         );
     }
@@ -151,18 +151,18 @@ mod tests {
                 }
                 let mut nvs = Flash::dirty(3 * SECTOR);
                 let mut midi = Flash::dirty(SECTOR);
-                let mut performance = Flash::dirty(SECTOR);
+                let mut scenes = Flash::dirty(SECTOR);
                 match target {
                     0 => nvs.fail = Some(failure),
                     1 => midi.fail = Some(failure),
-                    _ => performance.fail = Some(failure),
+                    _ => scenes.fail = Some(failure),
                 }
                 assert!(initialize(
                     &mut nvs,
                     3 * SECTOR,
                     &mut midi,
                     SECTOR,
-                    &mut performance,
+                    &mut scenes,
                     SECTOR
                 )
                 .is_err());
@@ -172,20 +172,20 @@ mod tests {
                 );
                 nvs.fail = None;
                 midi.fail = None;
-                performance.fail = None;
+                scenes.fail = None;
                 assert!(initialize(
                     &mut nvs,
                     3 * SECTOR,
                     &mut midi,
                     SECTOR,
-                    &mut performance,
+                    &mut scenes,
                     SECTOR
                 )
                 .unwrap());
                 assert!(midi
                     .bytes
                     .iter()
-                    .chain(&performance.bytes)
+                    .chain(&scenes.bytes)
                     .all(|byte| *byte == 0xff));
             }
         }
@@ -195,18 +195,18 @@ mod tests {
     fn invalid_geometry_never_erases_any_partition() {
         let mut nvs = Flash::dirty(3 * SECTOR);
         let mut midi = Flash::dirty(SECTOR);
-        let mut performance = Flash::dirty(SECTOR);
+        let mut scenes = Flash::dirty(SECTOR);
         assert!(initialize(
             &mut nvs,
             2 * SECTOR,
             &mut midi,
             SECTOR,
-            &mut performance,
+            &mut scenes,
             SECTOR
         )
         .is_err());
         assert_eq!(
-            (nvs.operations, midi.operations, performance.operations),
+            (nvs.operations, midi.operations, scenes.operations),
             (0, 0, 0)
         );
     }

@@ -279,7 +279,7 @@ fn handle_editor_message(data: &[u8]) -> bool {
             if status == Some(1) {
                 crate::state::preset_ack_completed();
             } else if status.is_some() {
-                crate::performance::cancel("Nano rejected preset selection");
+                crate::scenes::cancel("Nano rejected preset selection");
             }
         }
         let label = match response {

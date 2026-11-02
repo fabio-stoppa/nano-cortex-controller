@@ -2,11 +2,6 @@
 // Not part of the firmware build. Run with ./firmware/preview.sh
 import { AppWindow, ModelItem, BtDevice, MidiRow } from "app.slint";
 
-struct PreviewFxPresets {
-    names: [string],
-    assigned: [bool],
-}
-
 component DevChip inherits Rectangle {
     in property <string> label;
     in property <bool> active;
@@ -34,28 +29,15 @@ export component Preview inherits AppWindow {
     portrait: root.preview-portrait;
     property <int> demo-save-kind: 0;
     property <int> demo-save-slot: 0;
-    property <int> demo-save-model: 0;
     property <[int]> demo-block-models: [0, 1, 2, 3, 4];
-    property <int> demo-model-index: root.demo-block-models[root.fx-preset-block];
+    property <int> demo-block-index: root.chain == 0 ? 0 : root.chain == 1 ? 1 : root.chain == 3 ? 2 : root.chain == 4 ? 3 : 4;
+    property <int> demo-model-index: root.demo-block-models[root.demo-block-index];
     property <[string]> demo-model-names: ["Analog Delay", "Room", "Gentle chorus", "Compressor", "Parametric EQ", "Digital Delay"];
     property <[string]> demo-scenes: ["Clean", "Lead", "Ambient", "", "Crunch", "Solo", "", ""];
-    property <[PreviewFxPresets]> demo-effects: [
-        { names: ["Slapback", "Solo delay", "Wide echo", "+ 4"], assigned: [true, true, true, false] },
-        { names: ["Small room", "Long hall", "+ 3", "+ 4"], assigned: [true, true, false, false] },
-        { names: ["Gentle chorus", "Wide chorus", "+ 3", "+ 4"], assigned: [true, true, false, false] },
-        { names: ["Light comp", "Sustain", "+ 3", "+ 4"], assigned: [true, true, false, false] },
-        { names: ["Flat EQ", "Mid boost", "+ 3", "+ 4"], assigned: [true, true, false, false] },
-        { names: ["Digital slap", "+ 2", "+ 3", "+ 4"], assigned: [true, false, false, false] },
-    ];
-    fx-preset-block: root.chain == 0 ? 0 : root.chain == 1 ? 1 : root.chain == 3 ? 2 : root.chain == 4 ? 3 : 4;
-    fx-preset-model: "preview-model-" + root.demo-model-index;
-    fx-presets: root.demo-effects[root.demo-model-index].names;
-    fx-preset-assigned: root.demo-effects[root.demo-model-index].assigned;
-    changed demo-model-index => { root.fx-preset-selected = -1; root.fx-preset-dirty = false; }
-    performance-open: root.popup == "scenes";
+    scene-library-open: root.popup == "scenes";
     gig-open: root.popup == "gig";
     changed popup => {
-        root.performance-open = root.popup == "scenes";
+        root.scene-library-open = root.popup == "scenes";
         root.gig-open = root.popup == "gig";
         root.settings-open = root.popup == "settings" || root.popup == "bluetooth"
             || root.popup == "midi" || root.popup == "pedals";
@@ -64,10 +46,10 @@ export component Preview inherits AppWindow {
         root.kbd-open = root.popup == "rename" || root.demo-save-kind != 0;
     }
     scene-preset: 2;
-    scene-title: "2 - Summer Drive scenes";
+    scene-title: "2: Summer Drive scenes";
     scene-assigned: [root.demo-scenes[0] != "", root.demo-scenes[1] != "", root.demo-scenes[2] != "", root.demo-scenes[3] != "",
         root.demo-scenes[4] != "", root.demo-scenes[5] != "", root.demo-scenes[6] != "", root.demo-scenes[7] != ""];
-    performance-scenes: [
+    scene-library-scenes: [
         root.demo-scenes[0] == "" ? "(empty)" : root.demo-scenes[0],
         root.demo-scenes[1] == "" ? "(empty)" : root.demo-scenes[1],
         root.demo-scenes[2] == "" ? "(empty)" : root.demo-scenes[2],
@@ -77,27 +59,23 @@ export component Preview inherits AppWindow {
         root.demo-scenes[6] == "" ? "(empty)" : root.demo-scenes[6],
         root.demo-scenes[7] == "" ? "(empty)" : root.demo-scenes[7],
     ];
-    performance-scene: 0;
-    scene-label: root.performance-scene >= 0 ? root.demo-scenes[root.performance-scene] + (root.scene-dirty ? " *" : "") : "Scene";
-    performance-notice: "Preview only - saved changes last until the preview closes.";
-    gig-scenes: root.performance-scenes;
+    scene-library-scene: 0;
+    scene-label: root.scene-library-scene >= 0 ? root.demo-scenes[root.scene-library-scene] + (root.scene-dirty ? " *" : "") : "Scene";
+    scene-library-notice: "Preview only - saved changes last until the preview closes.";
+    gig-scenes: root.scene-library-scenes;
     gig-scene-assigned: root.scene-assigned;
-    gig-scene: root.performance-scene;
+    gig-scene: root.scene-library-scene;
     callback demo-recall-scene(int);
     demo-recall-scene(index) => {
-        root.performance-scene = index;
+        root.scene-library-scene = index;
         root.scene-dirty = false;
-        root.fx-preset-selected = -1;
     }
     callback demo-name(int, int);
     demo-name(kind, index) => {
         root.demo-save-kind = kind;
         root.demo-save-slot = index;
-        root.demo-save-model = root.demo-model-index;
-        root.kbd-title = kind == 1 ? "Save scene" : kind == 4 ? "Rename scene" : kind == 3 ? "Rename FX preset" : "Save FX preset";
-        root.kbd-text = kind == 1 || kind == 4
-            ? (root.demo-scenes[index] == "" ? "Scene " + (index + 1) : root.demo-scenes[index])
-            : (root.fx-preset-assigned[index] ? root.fx-presets[index] : "FX " + (index + 1));
+        root.kbd-title = kind == 1 ? "Save scene" : "Rename scene";
+        root.kbd-text = root.demo-scenes[index] == "" ? "Scene " + (index + 1) : root.demo-scenes[index];
         root.kbd-error = "";
         root.kbd-open = true;
     }
@@ -216,7 +194,7 @@ export component Preview inherits AppWindow {
     on-4: true;
     tuner-active: root.page == 2;
     tuner-has-pitch: true;
-    tuner-note: "E";
+    tuner-note: "F#";
     tuner-cents: "+12.0 ct";
     tuner-pos: 0.62;
     bpm-text: "120 BPM";
@@ -276,7 +254,6 @@ export component Preview inherits AppWindow {
         root.popup = "none";
         root.chain = index;
         root.page = index == 2 ? 0 : 1;
-        root.fx-preset-selected = -1;
     }
     chain-double(index) => {
         if index != 2 {
@@ -292,29 +269,22 @@ export component Preview inherits AppWindow {
         else if index == 4 { root.on-4 = !root.on-4; }
         else if index == 5 { root.on-5 = !root.on-5; }
     }
-    performance-opened => { root.popup = "scenes"; }
-    performance-scene-recall(index) => { root.demo-recall-scene(index); }
+    scene-library-opened => { root.popup = "scenes"; }
+    header-scene-action(action) => {
+        if action == 0 { root.scene-library-scene-rename(root.scene-library-scene); }
+        else if action == 1 { root.scene-library-scene-store(root.scene-library-scene); }
+        else { root.scene-library-scene-clear(root.scene-library-scene); }
+    }
+    scene-library-scene-recall(index) => { root.demo-recall-scene(index); }
     gig-scene-recall(index) => { root.demo-recall-scene(index); }
-    performance-scene-store(index) => { root.demo-name(1, index); }
-    performance-scene-rename(index) => { root.demo-name(4, index); }
-    performance-scene-clear(index) => {
+    scene-library-scene-store(index) => { root.demo-name(1, index); }
+    scene-library-scene-rename(index) => { root.demo-name(4, index); }
+    scene-library-scene-clear(index) => {
         root.demo-scenes[index] = "";
-        if root.performance-scene == index { root.performance-scene = -1; root.scene-dirty = false; }
+        if root.scene-library-scene == index { root.scene-library-scene = -1; root.scene-dirty = false; }
     }
-    fx-preset-recall(index) => {
-        root.fx-preset-selected = index;
-        root.fx-preset-dirty = false;
-        root.scene-dirty = root.performance-scene >= 0;
-    }
-    fx-preset-store(index) => { root.demo-name(2, index); }
-    fx-preset-rename(index) => { root.demo-name(3, index); }
-    fx-preset-delete(index) => {
-        root.demo-effects[root.demo-model-index].names[index] = "+ " + (index + 1);
-        root.demo-effects[root.demo-model-index].assigned[index] = false;
-        if root.fx-preset-selected == index { root.fx-preset-selected = -1; root.fx-preset-dirty = false; }
-    }
-    param-changed(index, amount) => { root.scene-dirty = root.performance-scene >= 0; root.fx-preset-dirty = root.fx-preset-selected >= 0; }
-    slider-moved(index, amount) => { root.scene-dirty = root.performance-scene >= 0; }
+    param-changed(index, amount) => { root.scene-dirty = root.scene-library-scene >= 0; }
+    slider-moved(index, amount) => { root.scene-dirty = root.scene-library-scene >= 0; }
     tuner-tapped => { root.page = root.page == 2 ? (root.chain == 2 ? 0 : 1) : 2; }
     tempo-tapped => { root.tap-mode = !root.tap-mode; }
     tools-opened => { root.popup = root.tools-section == 2 ? "midi" : root.tools-section == 1 ? "pedals" : "settings"; }
@@ -335,27 +305,11 @@ export component Preview inherits AppWindow {
         root.demo-midi-fx[1].assigned = "";
         root.clear-status = "MIDI bindings cleared (preview only)";
     }
-    callback demo-clear-fx(int);
-    demo-clear-fx(index) => {
-        root.demo-effects[index].names = ["+ 1", "+ 2", "+ 3", "+ 4"];
-        root.demo-effects[index].assigned = [false, false, false, false];
-    }
-    performance-clear-all(kind) => {
-        if kind == 2 {
-            root.demo-scenes = ["", "", "", "", "", "", "", ""];
-            root.performance-scene = -1;
-            root.scene-dirty = false;
-        } else {
-            root.demo-clear-fx(0);
-            root.demo-clear-fx(1);
-            root.demo-clear-fx(2);
-            root.demo-clear-fx(3);
-            root.demo-clear-fx(4);
-            root.demo-clear-fx(5);
-            root.fx-preset-selected = -1;
-            root.fx-preset-dirty = false;
-        }
-        root.clear-status = kind == 2 ? "All scenes cleared (preview only)" : "All FX presets cleared (preview only)";
+    scene-library-clear-all(kind) => {
+        root.demo-scenes = ["", "", "", "", "", "", "", ""];
+        root.scene-library-scene = -1;
+        root.scene-dirty = false;
+        root.clear-status = "All scenes cleared (preview only)";
     }
     preset-list-tapped => { root.popup = "preset"; }
     model-preset-action-chosen(index, action) => {
@@ -375,13 +329,6 @@ export component Preview inherits AppWindow {
         if root.demo-save-kind == 1 || root.demo-save-kind == 4 {
             root.demo-scenes[root.demo-save-slot] = root.kbd-text;
             if root.demo-save-kind == 1 { root.demo-recall-scene(root.demo-save-slot); }
-        } else if root.demo-save-kind == 2 || root.demo-save-kind == 3 {
-            root.demo-effects[root.demo-save-model].names[root.demo-save-slot] = root.kbd-text;
-            root.demo-effects[root.demo-save-model].assigned[root.demo-save-slot] = true;
-            if root.demo-save-kind == 2 {
-                root.fx-preset-selected = root.demo-save-slot;
-                root.fx-preset-dirty = false;
-            }
         } else {
             root.popup = "none";
         }
@@ -396,11 +343,11 @@ export component Preview inherits AppWindow {
     }
     model-list-tapped => { root.popup = "model"; }
     model-stepped(delta) => {
-        root.demo-block-models[root.fx-preset-block] =
-            mod(root.demo-model-index + delta + root.demo-effects.length, root.demo-effects.length);
+        root.demo-block-models[root.demo-block-index] =
+            mod(root.demo-model-index + delta + root.demo-model-names.length, root.demo-model-names.length);
     }
     model-chosen(index) => {
-        if root.page == 1 { root.demo-block-models[root.fx-preset-block] = clamp(index, 0, root.demo-effects.length - 1); }
+        if root.page == 1 { root.demo-block-models[root.demo-block-index] = clamp(index, 0, root.demo-model-names.length - 1); }
         root.popup = "none";
     }
     capture-list-tapped => { root.popup = "capture"; }
@@ -421,7 +368,7 @@ export component Preview inherits AppWindow {
             root.popup = "none";
         }
     }
-    changed performance-open => { if !root.performance-open && root.popup == "scenes" { root.popup = root.gig-open ? "gig" : "none"; } }
+    changed scene-library-open => { if !root.scene-library-open && root.popup == "scenes" { root.popup = root.gig-open ? "gig" : "none"; } }
     changed gig-open => {
         if root.gig-open { root.popup = "gig"; }
         else if root.popup == "gig" { root.popup = "none"; }
@@ -446,7 +393,6 @@ export component Preview inherits AppWindow {
                     root.popup = "none";
                     root.chain = p.chain;
                     root.page = p.page;
-                    root.fx-preset-selected = -1;
                 }
             }
             for p in [{ l: "Scenes", v: "scenes" }, { l: "Gig", v: "gig" }]: DevChip {
@@ -458,11 +404,10 @@ export component Preview inherits AppWindow {
             }
             DevChip {
                 label: "Edited";
-                active: root.scene-dirty || root.fx-preset-dirty;
+                active: root.scene-dirty;
                 clicked => {
                     root.save-dirty = !root.save-dirty;
                     root.scene-dirty = !root.scene-dirty;
-                    if root.fx-preset-selected >= 0 { root.fx-preset-dirty = !root.fx-preset-dirty; }
                 }
             }
         }

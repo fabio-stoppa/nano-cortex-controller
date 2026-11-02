@@ -36,23 +36,19 @@ const CAPTURE_START: usize = PRESET_START + 64;
 const MUTE_START: usize = CAPTURE_START + 25;
 const BANK_START: usize = MUTE_START + 6;
 const SCENE_START: usize = BANK_START + 14;
-const FX_PRESET_START: usize = SCENE_START + 4;
-const GIG_START: usize = FX_PRESET_START + BLOCKS * crate::performance::data::FX_PRESETS;
+const GIG_START: usize = SCENE_START + 4;
 const EXTRA_SCENE_START: usize = GIG_START + 2;
-pub const ACTION_COUNT: usize = EXTRA_SCENE_START + crate::performance::data::SCENES - 4;
+pub const ACTION_COUNT: usize = EXTRA_SCENE_START + crate::scenes::data::SCENES - 4;
 
 pub fn active_action(index: usize) -> bool {
-    index < ACTION_COUNT
-        && !(BANK_START..SCENE_START).contains(&index)
-        && !(FX_PRESET_START + BLOCKS * crate::performance::data::FX_PRESETS_PER_MODEL..GIG_START)
-            .contains(&index)
+    index < ACTION_COUNT && !(BANK_START..SCENE_START).contains(&index)
 }
 
 pub fn visible_action(row: usize) -> Option<usize> {
     (0..ACTION_COUNT).filter(|index| active_action(*index)).nth(row)
 }
 
-/// Category IDs match the MIDI tabs; stored action IDs never change.
+/// Category IDs match the MIDI tabs.
 pub fn action_category(index: usize) -> i32 {
     if (PRESET_START..CAPTURE_START).contains(&index) {
         1 + ((index - PRESET_START) / 16) as i32
@@ -60,7 +56,7 @@ pub fn action_category(index: usize) -> i32 {
         || (BLOCKS + 5..BLOCKS + 7).contains(&index)
     {
         5
-    } else if index >= GIG_START || (SCENE_START..FX_PRESET_START).contains(&index) {
+    } else if index >= SCENE_START {
         6
     } else if (LEGACY_ACTION_COUNT..EXISTING_ACTION_COUNT).contains(&index)
         || index == BLOCKS
@@ -69,12 +65,10 @@ pub fn action_category(index: usize) -> i32 {
         7
     } else if index < BLOCKS || (MODEL_START..PRESET_START).contains(&index) {
         8
-    } else if (FX_PRESET_START..GIG_START).contains(&index) {
-        9
     } else if (BLOCKS + TRIGGERS..LEGACY_ACTION_COUNT).contains(&index) {
-        10 + ((index - BLOCKS - TRIGGERS) / KNOBS_PER_BLOCK) as i32
+        9 + ((index - BLOCKS - TRIGGERS) / KNOBS_PER_BLOCK) as i32
     } else if (EXTRA_KNOBS_START..GATE_AMOUNT).contains(&index) {
-        10 + ((index - EXTRA_KNOBS_START) / EXTRA_KNOBS) as i32
+        9 + ((index - EXTRA_KNOBS_START) / EXTRA_KNOBS) as i32
     } else {
         0
     }
@@ -199,11 +193,8 @@ pub fn action_name(index: usize) -> String {
         format!("Recall bank slot {}", index - BANK_START - 1)
     } else if index < SCENE_START {
         format!("Select bank {}", index - BANK_START - 5)
-    } else if index < FX_PRESET_START {
-        format!("Recall scene {}", index - SCENE_START + 1)
     } else if index < GIG_START {
-        let offset = index - FX_PRESET_START;
-        format!("Current model preset {} in {}", offset / BLOCKS + 1, BLOCK_NAMES[offset % BLOCKS])
+        format!("Recall scene {}", index - SCENE_START + 1)
     } else if index < EXTRA_SCENE_START {
         String::from(if index == GIG_START { "Enter gig view" } else { "Exit gig view" })
     } else {
@@ -628,11 +619,8 @@ pub fn command(index: usize, value: u8, continuous: bool) -> Option<Cmd> {
         }
     } else if index < SCENE_START {
         None
-    } else if index < FX_PRESET_START {
-        Some(Cmd::SceneRecall((index - SCENE_START) as u8))
     } else if index < GIG_START {
-        let offset = index - FX_PRESET_START;
-        Some(Cmd::FxPresetRecall { index: (offset / BLOCKS) as u8, block: (offset % BLOCKS) as u8, model: None })
+        Some(Cmd::SceneRecall((index - SCENE_START) as u8))
     } else if index < EXTRA_SCENE_START {
         Some(Cmd::Gig(index == GIG_START))
     } else {

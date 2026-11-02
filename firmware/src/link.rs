@@ -30,13 +30,11 @@ pub(crate) const COMMAND_CAPACITY: usize = 512;
 
 pub enum Cmd {
     Gig(bool),
-    FxPresetRecall { index: u8, block: u8, model: Option<Vec<u8>> },
-    FxPresetCapture { index: u8, block: u8, preset: u8, name: alloc::string::String, model: Vec<u8> },
     SceneRecallAt { preset: u8, scene: u8 },
     SceneRecall(u8),
     SceneCapture { preset: u8, scene: u8, name: alloc::string::String },
-    PerformanceRefresh,
-    PerformanceFxRefresh,
+    SceneRefresh,
+    SceneFxRefresh,
     FxModelId { block: u8, id: Vec<u8> },
     Gate(bool),
     GateAmount(u8),
@@ -127,7 +125,7 @@ static PARAM: Mutex<CriticalSectionRawMutex, RefCell<Option<ParamWrite>>> =
 pub fn set_up(up: bool) {
     UP.store(up, Ordering::Release);
     if !up {
-        crate::performance::disconnected();
+        crate::scenes::disconnected();
         OUT.lock(|q| q.borrow_mut().clear());
         CMDS.lock(|q| q.borrow_mut().clear());
         PARAM.lock(|p| *p.borrow_mut() = None);

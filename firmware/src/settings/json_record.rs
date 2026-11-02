@@ -326,9 +326,9 @@ mod tests {
     }
 
     #[test]
-    fn performance_geometry_round_trip_and_interrupted_commit() {
+    fn scenes_geometry_round_trip_and_interrupted_commit() {
         let size = 1024 * 1024;
-        let maximum = crate::performance::data::MAX_JSON;
+        let maximum = crate::scenes::data::MAX_JSON;
         let mut original = flash();
         original.bytes.resize(size as usize * 2, 0xff);
         let json = " ".repeat(maximum);

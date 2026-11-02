@@ -37,7 +37,7 @@ slint::include_modules!();
 
 mod lines;
 mod presets;
-mod performance;
+mod scenes_ui;
 use lines::PartialLines;
 
 struct Backend {
@@ -138,10 +138,10 @@ fn ensure() {
         app.set_layout_mode(mode);
     }
     crate::midi::load();
-    crate::performance::load();
+    crate::scenes::load();
     let autosave = crate::settings::load_autosave();
     app.set_autosave_enabled(autosave);
-    crate::performance::set_autosave(autosave);
+    crate::scenes::set_autosave(autosave);
     app.on_autosave_toggled({
         let weak = app.as_weak();
         move |enabled| {
@@ -149,17 +149,17 @@ fn ensure() {
             match crate::settings::save_autosave(enabled) {
                 Ok(()) => {
                     app.set_autosave_enabled(enabled);
-                    crate::performance::set_autosave(enabled);
+                    crate::scenes::set_autosave(enabled);
                     app.set_autosave_status("".into());
                 }
                 Err(error) => {
-                    crate::performance::report(error);
+                    crate::scenes::report(error);
                     app.set_autosave_status(error.into());
                 }
             }
         }
     });
-    performance::register(&app);
+    scenes_ui::register(&app);
     let weak = app.as_weak();
     app.on_chain_tapped({
         let weak = weak.clone();
@@ -305,25 +305,24 @@ fn ensure() {
             }
         }
     });
-    app.on_performance_clear_all({
+    app.on_scene_library_clear_all({
         let weak = weak.clone();
         move |kind| {
             let result = match kind {
-                2 => crate::performance::clear_all_scenes(),
-                3 => crate::performance::clear_all_fx(),
+                2 => crate::scenes::clear_all_scenes(),
                 _ => Err("Invalid clear action"),
             };
             let message = match result {
-                Ok(()) => if kind == 2 { "All scenes cleared" } else { "All FX presets cleared" },
+                Ok(()) => "All scenes cleared",
                 Err(error) => {
-                    crate::performance::report(error);
+                    crate::scenes::report(error);
                     error
                 }
             };
             if let Some(app) = weak.upgrade() {
                 app.set_clear_status_kind(kind);
                 app.set_clear_status(message.into());
-                performance::refresh(&app, true);
+                scenes_ui::refresh(&app, true);
             }
         }
     });
@@ -521,16 +520,16 @@ fn ensure() {
             let mut text = String::from(app.get_kbd_text().as_str());
             if key.as_str() == "\u{8}" {
                 text.pop();
-            } else if key.len() == 1 && text.len() < if app.get_performance_name_action() != 0 {
-                crate::performance::data::NAME_LIMIT
+            } else if key.len() == 1 && text.len() < if app.get_scene_library_name_action() != 0 {
+                crate::scenes::data::NAME_LIMIT
             } else {
                 nano_wire::editor::PRESET_NAME_LIMIT
             } {
                 text.push_str(key.as_str());
             }
             app.set_kbd_text(text.as_str().into());
-            app.set_kbd_error(if app.get_performance_name_action() != 0 {
-                crate::performance::data::name_error(&text)
+            app.set_kbd_error(if app.get_scene_library_name_action() != 0 {
+                crate::scenes::data::name_error(&text)
             } else {
                 preset_name_error(&text)
             }.into());
@@ -543,8 +542,8 @@ fn ensure() {
                 return;
             };
             let name = String::from(app.get_kbd_text().as_str());
-            if app.get_performance_name_action() != 0 {
-                performance::accept_name(&app, &name);
+            if app.get_scene_library_name_action() != 0 {
+                scenes_ui::accept_name(&app, &name);
                 return;
             }
             if preset_name_error(&name).is_empty() {
@@ -556,17 +555,13 @@ fn ensure() {
         }
     });
     app.on_confirm_accepted({
-        let weak = weak.clone();
         move || {
-            if let Some(app) = weak.upgrade() {
-                if performance::confirm(&app) { return; }
-            }
             match CONFIRM.load(Ordering::Relaxed) {
-        CONFIRM_DELETE => {
-            crate::link::push_cmd(Cmd::PresetDelete(ACTION_SLOT.load(Ordering::Relaxed)));
-        }
-        kind @ (LIST_MOVE | LIST_COPY) => run_transfer(kind),
-        _ => {}
+                CONFIRM_DELETE => {
+                    crate::link::push_cmd(Cmd::PresetDelete(ACTION_SLOT.load(Ordering::Relaxed)));
+                }
+                kind @ (LIST_MOVE | LIST_COPY) => run_transfer(kind),
+                _ => {}
             }
         }
     });
@@ -1080,10 +1075,10 @@ static MIDI_TAB_SHOWN: core::sync::atomic::AtomicI32 = core::sync::atomic::Atomi
 
 /// Repaints the MIDI page when its bindings change and saves new ones.
 pub fn refresh_midi() {
-    if let Some(ui) = state().as_ref() { performance::refresh(&ui.app, false); }
+    if let Some(ui) = state().as_ref() { scenes_ui::refresh(&ui.app, false); }
     if let Some(ui) = state().as_ref() {
         if ui.app.get_autosave_enabled() {
-            ui.app.set_autosave_status(crate::performance::notice().into());
+            ui.app.set_autosave_status(crate::scenes::notice().into());
         }
     }
     crate::midi::persist();
@@ -1275,7 +1270,7 @@ pub fn show_gig(enabled: bool) {
     ensure();
     let ui = state().as_mut().unwrap();
     ui.app.invoke_gig_mode_set(enabled);
-    performance::refresh(&ui.app, true);
+    scenes_ui::refresh(&ui.app, true);
     ui.window.request_redraw();
 }
 
@@ -1295,7 +1290,7 @@ pub fn refresh_preset_catalog() {
     ensure();
     let names = crate::state::nano_state_preset_names();
     let ui = state().as_mut().unwrap();
-    performance::refresh(&ui.app, true);
+    scenes_ui::refresh(&ui.app, true);
     presets::refresh_preset_rows(&ui.app, &names);
     ui.window.request_redraw();
 }
