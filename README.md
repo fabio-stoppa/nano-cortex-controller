@@ -106,6 +106,32 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 
 ## Build and flash
 
+The root `Makefile` consolidates the common project commands:
+
+```bash
+make                      # show help (does not build or flash)
+make build                # build release firmware, including BLE dependency patches
+make flash                # flash the existing build without rebuilding
+make run                  # build, flash, and monitor
+make monitor              # serial monitor only; close it before flashing
+make preview              # live landscape desktop preview
+make preview-portrait     # live portrait desktop preview
+make test                 # host protocol + MIDI/scene/connection tests; no UI renderer
+make test-ui              # explicitly run UI renderer regression tests
+make test-all             # all host tests, including UI renderer
+make flash PORT=/dev/ttyACM0 BAUD=115200
+```
+
+`PORT` defaults to `NANO_PORT` or the flash helper's automatic detection.
+`BAUD` controls flashing only and defaults to `NANO_BAUD` or 921600.
+Host tests default to `HOST_TARGET=x86_64-unknown-linux-gnu`; override it for
+another host architecture. `make test-protocol` and `make test-midi` run the
+individual host suites. Desktop preview requires
+`cargo +stable install slint-viewer --version 1.13.1 --locked` and a graphical
+desktop session.
+
+The existing scripts remain available:
+
 ```bash
 ./flash.sh build           # or: (cd firmware && ./build.sh)
 ./flash.sh flash           # 921600 baud; NANO_BAUD=115200 ./flash.sh flash for flaky cables
