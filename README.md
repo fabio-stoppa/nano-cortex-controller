@@ -20,6 +20,9 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - C305 receive processing runs alongside the serialized C304 writer, including
   during setup writes and touch/MIDI bursts. Command batches yield cooperatively;
   scene commands keep their existing ordering and verified readback.
+- Disconnect clears command/write queues, slider signals, deferred library reads,
+  reassembly, timers, and connection snapshots. Offline device edits are refused,
+  so they cannot replay against a later connection.
 - **Preset, effects, and tuner** — the same behavior as the old ESP-IDF app, driven by Embassy deadlines (`firmware/src/state`, `firmware/src/fx`, `firmware/src/tuner`)
 - **800×480 LCD** — Slint UI drawn into the RGB panel (`firmware/src/ui.rs`)
 - **Category-colored FX tabs** — guitar OD orange, bass OD amber, compressor yellow, pitch magenta, filter lime, wah green, utility pink, modulation purple, delay cyan, and reverb blue. Colors match the saturation and brightness of the blue and amp-red accents in both orientations; bypassed FX retain black backgrounds with category-colored labels.

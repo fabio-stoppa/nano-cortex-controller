@@ -393,6 +393,9 @@ where
         // out of the parent future's stack frame.
         select(Box::pin(nano_session(stack, hunt, radio)), NANO_RESTART.wait()).await;
         crate::link::set_up(false);
+        SLIDER.reset();
+        LIBRARY_WANTED.store(false, Ordering::Relaxed);
+        crate::state::nano_state_reset();
         crate::screen::nano_ui_set_ble_connected(false);
         reset_state(true);
         log::warn!("nano link ended, scanning again");
@@ -638,6 +641,8 @@ async fn nano_commands<C: Controller, P: PacketPool>(
     c304_no_rsp: bool,
 ) {
     stage(connection::Stage::Loading);
+    SLIDER.reset();
+    LIBRARY_WANTED.store(false, Ordering::Relaxed);
     crate::link::set_up(true);
     crate::screen::nano_ui_set_ble_connected(true);
     let initial_snapshot = crate::state::snapshot_generation();

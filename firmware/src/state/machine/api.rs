@@ -41,6 +41,14 @@ pub fn nano_state_reset() {
     crate::fx::nano_fx_reset();
     cancel_tempo_auto_exit();
     let s = st();
+    s.verified_amp = super::ctx::amp_zero();
+    s.fe_len = 0;
+    s.preset_catalog = preset_catalog_zero();
+    s.library_catalog = LibraryCatalog::default();
+    s.preset_slot = 0;
+    s.preset_name.clear();
+    s.preset_dirty = false;
+    s.foot_slots = [-1; 4];
     s.tempo_mode_active = false;
     s.tempo_ignore_exit_echo_us = 0;
     s.tap_count = 0;
@@ -72,6 +80,7 @@ pub fn nano_state_reset() {
     crate::screen::nano_ui_clear_tool_meters();
     crate::screen::nano_ui_set_calibration(false, None, None);
     crate::screen::nano_ui_set_protocol_status("");
+    crate::screen::nano_ui_library_updated();
 }
 
 pub fn nano_state_library_snapshot() -> LibraryCatalog {

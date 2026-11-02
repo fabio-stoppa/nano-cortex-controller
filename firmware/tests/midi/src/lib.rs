@@ -810,6 +810,13 @@ mod tests {
         assert!(link::pop_write().is_none());
         assert!(link::take_param().is_none());
         assert!(!link::push_midi([0].into_iter(), 127, false));
+        link::push_cmd(link::Cmd::Save);
+        link::set_param(1, 2, 0.75);
+        assert!(!link::write(&[1]));
+        link::set_up(true);
+        assert!(link::pop_cmd().is_none());
+        assert!(link::pop_write().is_none());
+        assert!(link::take_param().is_none());
     }
 
     #[test]

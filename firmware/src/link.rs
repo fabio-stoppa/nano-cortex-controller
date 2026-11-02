@@ -160,6 +160,10 @@ pub fn pop_write() -> Option<Vec<u8>> {
 }
 
 pub fn push_cmd(cmd: Cmd) {
+    if !connected() && !matches!(&cmd, Cmd::Gig(_)) {
+        log::warn!("Controller command refused while Nano disconnected");
+        return;
+    }
     CMDS.lock(|queue| {
         let mut queue = queue.borrow_mut();
         if queue.len() >= COMMAND_CAPACITY {
@@ -236,6 +240,10 @@ pub fn clear_midi() {
 
 /// Latest effect-cell drag. Moves overwrite each other so a sweep does not fill the command queue.
 pub fn set_param(block: u8, wire: u8, norm: f32) {
+    if !connected() {
+        log::warn!("Parameter edit refused while Nano disconnected");
+        return;
+    }
     PARAM.lock(|slot| {
         *slot.borrow_mut() = Some(ParamWrite { block, wire, norm });
     });
