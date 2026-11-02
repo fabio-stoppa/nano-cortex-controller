@@ -635,6 +635,10 @@ pub fn nano_state_amp_ready() -> bool {
     st().amp.valid
 }
 
+pub fn nano_state_verified_amp() -> NanoAmpC {
+    amp_copy(&st().verified_amp)
+}
+
 /// Consistent copy for the UI task (seqlock). Returns false when amp is not valid.
 pub fn nano_state_snapshot_amp(out: &mut NanoAmpC) -> bool {
     AMP_SEQ.read(|| {

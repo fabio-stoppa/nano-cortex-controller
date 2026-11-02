@@ -47,6 +47,34 @@ pub(super) fn refresh(app: &AppWindow, force: bool) {
     app.set_performance_bank(crate::performance::bank() as i32);
     app.set_performance_slot(crate::performance::slot().map_or(-1, |index| index as i32));
     app.set_performance_notice(crate::performance::notice().into());
+    app.set_performance_busy(crate::performance::busy());
+    app.set_gig_assigned(slint::ModelRc::new(slint::VecModel::from(
+        crate::performance::slots()
+            .iter()
+            .map(Option::is_some)
+            .collect::<alloc::vec::Vec<_>>(),
+    )));
+    let scenes = crate::performance::scenes(crate::performance::slot().unwrap_or(usize::MAX));
+    app.set_gig_scene_assigned(slint::ModelRc::new(slint::VecModel::from(
+        scenes
+            .iter()
+            .map(Option::is_some)
+            .collect::<alloc::vec::Vec<_>>(),
+    )));
+    app.set_gig_scenes(slint::ModelRc::new(slint::VecModel::from(
+        scenes
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| {
+                slint::SharedString::from(format!(
+                    "{}: {}",
+                    index + 1,
+                    name.as_deref().unwrap_or("(empty)")
+                ))
+            })
+            .collect::<alloc::vec::Vec<_>>(),
+    )));
+    app.set_gig_scene(crate::performance::scene().map_or(-1, |index| index as i32));
     let presets = crate::performance::fx_presets()
         .into_iter()
         .enumerate()
@@ -106,6 +134,16 @@ fn naming(app: &AppWindow, action: i32, bank: i32, text: &str) {
 }
 
 pub(super) fn register(app: &AppWindow) {
+    app.on_gig_bank_stepped(|delta| {
+        outcome(crate::performance::step_bank(delta.clamp(-1, 1) as i8))
+    });
+    app.on_gig_scene_recall(|index| {
+        if !crate::link::connected() {
+            crate::performance::report("Connect the Nano before recalling a scene");
+            return;
+        }
+        crate::link::push_cmd(Cmd::SceneRecall(index as u8));
+    });
     app.on_fx_presets_opened({
         let weak = app.as_weak();
         move || {

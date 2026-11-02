@@ -425,6 +425,8 @@ pub(super) fn parse_state_buffer() {
     let amp_complete = parsed_amp.is_some();
     if let Some(amp) = parsed_amp {
         s.amp = NanoAmpC::from(&amp);
+        // Verification must not use optimistic knob values or capture-volume fallbacks.
+        if !truncated { s.verified_amp = NanoAmpC::from(&amp); }
         /*
          * Field 44 often sits in the missing mid-dump gap. Keep a previously
          * known capture volume (notify / write / earlier full dump); only seed

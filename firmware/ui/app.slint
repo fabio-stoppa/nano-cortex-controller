@@ -2404,6 +2404,98 @@ component ConnectingOverlay inherits Rectangle {
     }
 }
 
+component GigButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> highlight: false;
+    in property <bool> enabled: true;
+    callback tapped();
+    background: !root.enabled ? #202020 : root.highlight ? #1a3af8 : #303030;
+    border-radius: Radius.default;
+    Text {
+        text: root.label;
+        color: root.enabled ? #ffffff : #777777;
+        font-size: 22px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: word-wrap;
+    }
+    TouchArea { enabled: root.enabled; clicked => { root.tapped(); } }
+}
+
+component GigPanel inherits Rectangle {
+    in property <bool> portrait;
+    in property <bool> connected;
+    in property <bool> busy;
+    in property <string> bank-name;
+    in property <bool> have-banks;
+    in property <string> preset;
+    in property <string> notice;
+    in property <[string]> slots;
+    in property <[bool]> assigned;
+    in property <int> slot: -1;
+    in property <[string]> scenes;
+    in property <[bool]> scene-assigned;
+    in property <int> scene: -1;
+    callback bank-stepped(int);
+    callback recall(int);
+    callback scene-recall(int);
+    callback tuner();
+    callback tempo();
+    callback editor();
+    background: Surface.background;
+    TouchArea {}
+    VerticalLayout {
+        padding: 14px;
+        spacing: 8px;
+        HorizontalLayout {
+            height: 56px;
+            spacing: 8px;
+            GigButton { width: 82px; label: "Prev"; enabled: root.have-banks && !root.busy; tapped => { root.bank-stepped(-1); } }
+            Text { text: root.bank-name; font-size: 24px; font-weight: 700; color: #ffffff; horizontal-stretch: 1; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+            GigButton { width: 82px; label: "Next"; enabled: root.have-banks && !root.busy; tapped => { root.bank-stepped(1); } }
+            GigButton { width: 88px; label: "Editor"; tapped => { root.editor(); } }
+        }
+        Text { text: root.preset; font-size: 22px; font-weight: 700; color: #ffffff; overflow: elide; }
+        Text { text: root.connected ? root.notice : "Disconnected - connect the Nano to play"; color: #909090; font-size: 14px; wrap: word-wrap; }
+        slot-grid := Rectangle {
+            min-height: 160px;
+            vertical-stretch: 1;
+            background: transparent;
+            for label[index] in root.slots: GigButton {
+                width: (slot-grid.width - 8px) / 2;
+                height: (slot-grid.height - 8px) / 2;
+                x: mod(index, 2) * (self.width + 8px);
+                y: floor(index / 2) * (self.height + 8px);
+                label: label;
+                highlight: root.slot == index;
+                enabled: root.connected && !root.busy && root.assigned[index];
+                tapped => { root.recall(index); }
+            }
+        }
+        scene-grid := Rectangle {
+            height: root.portrait ? 160px : 80px;
+            background: transparent;
+            for label[index] in root.scenes: GigButton {
+                width: root.portrait ? (scene-grid.width - 8px) / 2 : (scene-grid.width - 24px) / 4;
+                height: root.portrait ? (scene-grid.height - 8px) / 2 : scene-grid.height;
+                x: (root.portrait ? mod(index, 2) : index) * (self.width + 8px);
+                y: root.portrait ? floor(index / 2) * (self.height + 8px) : 0px;
+                label: label;
+                highlight: root.scene == index;
+                enabled: root.connected && !root.busy && root.scene-assigned[index];
+                tapped => { root.scene-recall(index); }
+            }
+        }
+        HorizontalLayout {
+            height: 60px;
+            spacing: 8px;
+            GigButton { label: "Tuner"; enabled: root.connected && !root.busy; tapped => { root.tuner(); } }
+            GigButton { label: "Tap tempo"; enabled: root.connected && !root.busy; tapped => { root.tempo(); } }
+        }
+    }
+}
+
 component FxPresetPanel inherits Rectangle {
     in property <[string]> presets;
     in property <int> block: 0;
@@ -2465,6 +2557,7 @@ component BankPanel inherits Rectangle {
     callback assign(int);
     callback clear(int);
     callback fx-presets();
+    callback gig();
     background: Surface.background;
     TouchArea {}
     VerticalLayout {
@@ -2479,6 +2572,7 @@ component BankPanel inherits Rectangle {
             spacing: 8px;
             HeaderButton { label: "Add bank (max 8)"; height: 40px; tapped => { root.add(); } }
             HeaderButton { label: "FX presets"; height: 40px; tapped => { root.fx-presets(); } }
+            HeaderButton { label: "Gig"; height: 40px; tapped => { root.gig(); } }
         }
         if !root.scenes-open: bank-list := Flickable {
             height: min(152px, root.banks.length * 76px);
@@ -3002,6 +3096,28 @@ export component AppWindow inherits Window {
     callback fx-preset-recall(int);
     callback fx-preset-store(int);
     callback fx-preset-delete(int);
+    in-out property <bool> gig-open: false;
+    in-out property <bool> performance-busy: false;
+    in-out property <[bool]> gig-assigned: [];
+    in-out property <[string]> gig-scenes: [];
+    in-out property <[bool]> gig-scene-assigned: [];
+    in-out property <int> gig-scene: -1;
+    callback gig-bank-stepped(int);
+    callback gig-scene-recall(int);
+    callback gig-mode-set(bool);
+    gig-mode-set(enabled) => {
+        root.gig-open = enabled;
+        root.settings-open = false;
+        root.performance-open = false;
+        root.fx-presets-open = false;
+        root.model-open = false;
+        root.confirm-open = false;
+        root.kbd-open = false;
+        root.performance-confirm-action = 0;
+        root.performance-name-action = 0;
+        root.performance-delete-bank = -1;
+        root.midi-clear-confirm = false;
+    }
     callback performance-scenes-opened(int);
     callback performance-scene-recall(int);
     callback performance-scene-store(int);
@@ -3045,7 +3161,7 @@ export component AppWindow inherits Window {
     // The software renderer draws everything under an overlay, so hide what an
     // opaque or full-screen layer covers.
     // Confirmations are cards over whatever is open, so they do not hide it.
-    property <bool> popup-open: root.kbd-open || root.model-open || root.settings-open || root.usb-storage-open || root.performance-open;
+    property <bool> popup-open: root.kbd-open || root.model-open || root.settings-open || root.usb-storage-open || root.performance-open || root.fx-presets-open || root.gig-open;
     property <bool> main-covered: root.popup-open || root.page == 2 || root.connecting;
 
     Rectangle {
@@ -3374,6 +3490,7 @@ export component AppWindow inherits Window {
 
     if root.performance-open && !root.usb-storage-open && !root.model-open: BankPanel {
         width: root.width; height: root.height;
+        visible: !root.kbd-open && !root.fx-presets-open;
         banks: root.performance-banks; slots: root.performance-slots;
         bank: root.performance-bank; current-slot: root.performance-slot;
         notice: root.performance-notice;
@@ -3382,6 +3499,7 @@ export component AppWindow inherits Window {
         scenes-opened(index) => { root.performance-scenes-opened(index); }
         scenes-closed => { root.performance-edit-slot = -1; }
         fx-presets => { root.fx-presets-opened(); }
+        gig => { root.gig-mode-set(true); }
         scene-recall(index) => { root.performance-scene-recall(index); }
         scene-store(index) => { root.performance-scene-store(index); }
         scene-clear(index) => { root.midi-clear-confirm = false; root.performance-scene-clear(index); }
@@ -3393,6 +3511,25 @@ export component AppWindow inherits Window {
         recall(index) => { root.performance-recall(index); }
         assign(index) => { root.performance-assign(index); }
         clear(index) => { root.performance-clear(index); }
+    }
+
+    if root.gig-open && root.page != 2 && !root.usb-storage-open: GigPanel {
+        width: root.width; height: root.height;
+        portrait: root.portrait;
+        connected: !root.connecting;
+        busy: root.performance-busy;
+        bank-name: root.performance-banks.length > 0 ? root.performance-banks[root.performance-bank] : "No banks";
+        have-banks: root.performance-banks.length > 0;
+        preset: root.preset;
+        notice: root.performance-notice;
+        slots: root.performance-slots; assigned: root.gig-assigned; slot: root.performance-slot;
+        scenes: root.gig-scenes; scene-assigned: root.gig-scene-assigned; scene: root.gig-scene;
+        bank-stepped(delta) => { root.gig-bank-stepped(delta); }
+        recall(index) => { root.performance-recall(index); }
+        scene-recall(index) => { root.gig-scene-recall(index); }
+        tuner => { root.tuner-tapped(); }
+        tempo => { root.tempo-tapped(); }
+        editor => { root.gig-mode-set(false); }
     }
 
     if root.fx-presets-open: FxPresetPanel {
@@ -3473,7 +3610,7 @@ export component AppWindow inherits Window {
         closed => { root.kbd-open = false; root.performance-name-action = 0; }
     }
 
-    if root.connecting && !root.usb-storage-open && !root.performance-open: ConnectingOverlay {
+    if root.connecting && !root.usb-storage-open && !root.performance-open && !root.fx-presets-open && !root.gig-open: ConnectingOverlay {
         amp-state: root.conn-amp;
         foot-state: root.conn-foot;
         loading: root.load-status;

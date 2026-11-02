@@ -31,7 +31,7 @@ pub use machine::{
     nano_state_preset_name_taken, nano_state_request_library, nano_state_request_lists,
     nano_state_request_preset_refresh, nano_state_transfer_preset,
     nano_state_request_tuner_sync, nano_state_reset, nano_state_save_preset,
-    nano_state_select_preset, nano_state_set_tuner_reference, nano_state_snapshot_amp,
+    nano_state_select_preset, nano_state_set_tuner_reference, nano_state_snapshot_amp, nano_state_verified_amp,
     nano_state_step_capture, nano_state_step_preset, nano_state_tempo_active,
     nano_state_tempo_enter, nano_state_tempo_exit, nano_state_tempo_tap, nano_state_tools_open,
     nano_state_tuner_settings, nano_state_tuner_watch_update, nano_state_write_amp_knob,

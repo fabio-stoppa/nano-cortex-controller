@@ -257,6 +257,7 @@ pub fn view() -> View {
     }
     View {
         amp,
+        verified_amp: crate::state::nano_state_verified_amp(),
         effects,
         cab,
         generation: crate::state::snapshot_generation(),
@@ -330,8 +331,11 @@ pub fn capture_scene(
     index: usize,
     name: &str,
 ) -> Result<(), &'static str> {
-    if !crate::link::connected() || crate::tuner::nano_tuner_is_active() {
+    if busy() || !crate::link::connected() || crate::tuner::nano_tuner_is_active() {
         return Err("Connect the Nano and exit tuner before saving a scene");
+    }
+    if with(|state| state.bank != bank || state.slot != Some(slot)) {
+        return Err("Play and verify this bank slot before storing its scene");
     }
     let expected = with(|state| {
         state
@@ -420,7 +424,26 @@ pub fn recall_scene(index: usize) -> Result<(), &'static str> {
 }
 
 pub fn poll() -> Option<crate::link::Cmd> {
-    let mut pending = with(|state| state.pending.take())?;
+    let preset = crate::state::nano_state_preset_slot();
+    let mut pending = with(|state| {
+        if state.pending.is_none()
+            && state.slot.is_some_and(|slot| {
+                state
+                    .config
+                    .as_ref()
+                    .and_then(|config| config.banks.get(state.bank))
+                    .and_then(|bank| bank.slots.get(slot))
+                    .copied()
+                    .flatten()
+                    != Some(preset)
+            })
+        {
+            state.slot = None;
+            state.scene = None;
+            state.version = state.version.wrapping_add(1);
+        }
+        state.pending.take()
+    })?;
     let current = view();
     let now = crate::clock::now_us();
     let result = match &mut pending {
@@ -484,6 +507,23 @@ pub fn poll() -> Option<crate::link::Cmd> {
 
 pub fn fx_presets() -> Vec<Option<data::FxPreset>> {
     with(|state| state.config().fx_presets.to_vec())
+}
+
+pub fn disconnected() {
+    cancel("Nano disconnected; recall may be partially applied");
+    with(|state| {
+        state.slot = None;
+        state.scene = None;
+        state.version = state.version.wrapping_add(1);
+    });
+}
+
+pub fn sound_edited() {
+    with(|state| {
+        if state.scene.take().is_some() {
+            state.version = state.version.wrapping_add(1);
+        }
+    });
 }
 
 pub fn capture_fx(index: usize, block: usize, name: &str) -> Result<(), &'static str> {

@@ -29,6 +29,7 @@ static CMDS: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<Cmd>>> =
 pub(crate) const COMMAND_CAPACITY: usize = 512;
 
 pub enum Cmd {
+    Gig(bool),
     FxPresetRecall { index: u8, block: u8 },
     FxPresetCapture { index: u8, block: u8, name: alloc::string::String },
     SceneRecall(u8),
@@ -128,7 +129,7 @@ static PARAM: Mutex<CriticalSectionRawMutex, RefCell<Option<ParamWrite>>> =
 pub fn set_up(up: bool) {
     UP.store(up, Ordering::Release);
     if !up {
-        crate::performance::cancel("Nano disconnected; pending recall cancelled");
+        crate::performance::disconnected();
         OUT.lock(|q| q.borrow_mut().clear());
         CMDS.lock(|q| q.borrow_mut().clear());
         PARAM.lock(|p| *p.borrow_mut() = None);

@@ -37,7 +37,8 @@ const MUTE_START: usize = CAPTURE_START + 25;
 const BANK_START: usize = MUTE_START + 6;
 const SCENE_START: usize = BANK_START + 14;
 const FX_PRESET_START: usize = SCENE_START + 4;
-pub const ACTION_COUNT: usize = FX_PRESET_START + BLOCKS * crate::performance::data::FX_PRESETS;
+const GIG_START: usize = FX_PRESET_START + BLOCKS * crate::performance::data::FX_PRESETS;
+pub const ACTION_COUNT: usize = GIG_START + 2;
 
 const BLOCK_NAMES: [&str; BLOCKS] = [
     "Pre FX 1",
@@ -160,9 +161,11 @@ pub fn action_name(index: usize) -> String {
         format!("Select bank {}", index - BANK_START - 5)
     } else if index < FX_PRESET_START {
         format!("Recall scene {}", index - SCENE_START + 1)
-    } else {
+    } else if index < GIG_START {
         let offset = index - FX_PRESET_START;
         format!("FX preset {} into {}", offset / BLOCKS + 1, BLOCK_NAMES[offset % BLOCKS])
+    } else {
+        String::from(if index == GIG_START { "Enter gig view" } else { "Exit gig view" })
     }
 }
 
@@ -612,9 +615,11 @@ pub fn command(index: usize, value: u8, continuous: bool) -> Option<Cmd> {
         Some(Cmd::BankAt((index - BANK_START - 6) as u8))
     } else if index < FX_PRESET_START {
         Some(Cmd::SceneRecall((index - SCENE_START) as u8))
-    } else {
+    } else if index < GIG_START {
         let offset = index - FX_PRESET_START;
         Some(Cmd::FxPresetRecall { index: (offset / BLOCKS) as u8, block: (offset % BLOCKS) as u8 })
+    } else {
+        Some(Cmd::Gig(index == GIG_START))
     }
 }
 

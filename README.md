@@ -19,8 +19,9 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - **Bluetooth Tools page** — reads and edits per-preset expression sweeps and bypass assignments, calibrates the pedal, reads cab settings, shows live input/output/expression meters, and reads or changes the EXP/MIDI jack and USB playback level
 - **MIDI learn page** (Tools → MIDI) — tap Learn on an action, then send a BLE-MIDI note, CC, or program change. Learn the same message on several rows to control multiple targets; Clear removes only that row's binding. Buttons cover FX block on/off, gate, tuner, tap tempo, preset/capture step, direct preset 1–64 and capture 1–25 selection, FX model step, save, and explicit input/output/tuner mute/unmute. CC-only parameters cover all five amp controls, capture volume, cab level/high-pass/low-pass, gate amount, USB playback level, and up to 24 displayed knobs per FX block (only knobs present on the current model apply). CC 0 does not trigger button actions; it still sets continuous parameters to their minimum. Repeated CC values for a pending parameter are coalesced; different targets are retained. Saved in flash with readback verification; old MIDI bindings keep their existing action assignments.
 - **Preset manager** — browse presets in 12-slot tabs and use the three-dot menu to rename (on-screen keyboard; 4–64 ASCII letters, digits, spaces, `-`, `_`, unique), delete, move, or copy to any slot. Overwriting an occupied slot asks for confirmation
+- **Performance controls** — eight custom banks, four named scenes per bank slot, a 32-slot named FX shelf, and a large-button gig view. Touch and MIDI recalls share staged, transient restoration; controller data lives in editable `performance.json`.
 - Open preset lists update in place when the refreshed catalog arrives after a rename, delete, move, or copy.
-- Refresh and Save live in Settings → General → Tools next to Tuner (Save is highlighted with unsaved changes); the header only keeps the settings gear.
+- Refresh and Save live in Settings → General → Tools next to Tuner (Save is highlighted with unsaved changes); the header keeps Banks and the settings gear.
 - In portrait the FX chain sits at the bottom of the screen, below the page content.
 - Preset three-dot menus have a 64px-wide, full-row-height touch target separate from preset selection.
 - Selecting a preset keeps the preset list open and moves its highlight, so presets can be auditioned back to back.
@@ -107,6 +108,9 @@ deletion asks for confirmation and never deletes Nano presets.
 
 MIDI Learn includes next/previous bank, four bank-slot recalls and direct bank
 selection. Existing action IDs remain unchanged. Banks persist in controller flash.
+
+### Scenes
+
 Each assigned slot has four named **Scenes**: play the slot, adjust the sound and
 tap **Store**. Replacing/deleting scenes, or changing an assignment that has scenes,
 asks for confirmation. Scene recall also has four MIDI Learn actions.
@@ -119,7 +123,8 @@ for model/parameter loading and fresh readback before reporting **Recall verifie
 Timeout/disconnect errors warn that sound may be partly updated; play the original
 bank slot to recover. Actual sound recall still requires hardware validation.
 
-The USB drive exposes `performance.json` beside `midi.json` (512 KiB maximum).
+### Named FX presets
+
 **Banks → FX presets** opens a 32-slot shelf. Choose the source/target block using
 the five buttons, then **Store** its current model, parameters and bypass with a
 name. **Play** recalls into that compatible block only; amp/cab/gate and other FX
@@ -128,6 +133,21 @@ asks for confirmation. Slots stay fixed when deleted, preserving the MIDI Learn
 actions for each shelf-slot/target-block pair. FX presets share `performance.json`
 and the scene restore/readback safeguards; they never save over Nano presets.
 
+### Gig view
+
+Tap **Banks → Gig** for large bank-slot and scene buttons. **Prev/Next** step banks
+without loading a sound; play a slot before its scenes. Loading/verification
+disables recall controls, and unassigned/empty/disconnected recalls are disabled.
+Tuner **EXIT** returns to gig view; **Tap tempo** uses the existing tempo control.
+**Editor** explicitly leaves gig view. MIDI Learn also includes enter/exit gig
+actions; the bank/slot/scene actions work in either view. Layouts support both
+landscape and portrait. Changing the Nano preset externally or disconnecting
+clears stale slot/scene selection. Gig view itself is a temporary UI mode, not a
+Nano preset or persisted sound setting.
+
+### USB configuration drive
+
+The USB drive exposes `performance.json` beside `midi.json` (512 KiB maximum).
 Both files must remain on the drive, and both are validated before saving on eject.
 An invalid file leaves both configurations unchanged. Records are committed
 independently; if a flash error occurs after performance saves but before MIDI saves,
@@ -141,7 +161,7 @@ on the Nano.
 2. Open Settings → MIDI → **USB drive: midi.json**, or tap **USB drive** on the
    connecting screen (no Nano Cortex connection required).
 3. The computer sees a small **NANO MIDI** FAT12 drive. Open, edit, copy, or
-   replace `midi.json` with your file manager/text editor. `README.TXT` on the
+   replace `midi.json` and `performance.json` with your file manager/text editor. `README.TXT` on the
    drive lists every action ID and whether it requires CC.
 4. **Safely eject** the drive using the computer's eject command. The controller
    validates the file and reports whether it was saved. On Linux, use Eject /

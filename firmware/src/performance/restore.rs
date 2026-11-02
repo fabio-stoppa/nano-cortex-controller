@@ -6,6 +6,7 @@ use nano_wire::types::{CabSettings, NanoAmpC};
 
 pub struct View {
     pub amp: NanoAmpC,
+    pub verified_amp: NanoAmpC,
     pub effects: NanoFxState,
     pub cab: CabSettings,
     pub generation: u32,
@@ -127,22 +128,17 @@ impl Snapshot {
     }
 
     pub fn matches(&self, view: &View) -> bool {
-        let actual = [
-            view.amp.gain,
-            view.amp.level,
-            view.amp.bass,
-            view.amp.mid,
-            view.amp.treble,
-        ];
+        let amp = &view.verified_amp;
+        let actual = [amp.gain, amp.level, amp.bass, amp.mid, amp.treble];
         view.idle
-            && view.amp.valid
+            && amp.valid
             && self
                 .amp
                 .iter()
                 .zip(actual)
                 .all(|(&expected, actual)| expected.abs_diff(actual) <= 1)
             && self.capture_volume.is_none_or(|expected| {
-                view.amp.have_capture_volume && expected.abs_diff(view.amp.capture_volume) <= 1
+                amp.have_capture_volume && expected.abs_diff(amp.capture_volume) <= 1
             })
             && self.cab.is_none_or(|expected| {
                 [view.cab.output, view.cab.high_pass, view.cab.low_pass]
@@ -340,6 +336,7 @@ mod tests {
     fn fixture() -> View {
         let mut view = View {
             amp: NanoAmpC::from(&nano_wire::types::Amp::default()),
+            verified_amp: NanoAmpC::from(&nano_wire::types::Amp::default()),
             effects: NanoFxState::reset_with_ids(),
             cab: CabSettings::default(),
             generation: 1,
@@ -349,6 +346,7 @@ mod tests {
         };
         view.amp.valid = true;
         view.amp.have_capture_volume = true;
+        view.verified_amp = view.amp;
         view.effects.valid = true;
         view.effects.gate = NanoGate {
             on: false,
@@ -449,6 +447,12 @@ mod tests {
             "Wrong actual parameter accepted"
         );
         view.effects.blocks[0].params[0].normalized = snapshot.effects[0].parameters[0];
+        view.verified_amp.gain = view.amp.gain.wrapping_add(10);
+        assert!(
+            matches!(plan.poll(&view, 8), Progress::Waiting),
+            "Optimistic amp values masked failed raw readback"
+        );
+        view.verified_amp = view.amp;
         assert!(matches!(plan.poll(&view, 8), Progress::Complete));
         assert!(matches!(plan.poll(&view, 30_000_000), Progress::Failed(_)));
     }

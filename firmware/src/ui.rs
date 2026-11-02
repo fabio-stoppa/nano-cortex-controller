@@ -1203,6 +1203,14 @@ pub fn show_gate_amount(norm: f32) {
     ui.window.request_redraw();
 }
 
+pub fn show_gig(enabled: bool) {
+    ensure();
+    let ui = state().as_mut().unwrap();
+    ui.app.invoke_gig_mode_set(enabled);
+    performance::refresh(&ui.app, true);
+    ui.window.request_redraw();
+}
+
 pub fn show_preset(name: &str) {
     ensure();
     let ui = state().as_mut().unwrap();
@@ -1218,6 +1226,7 @@ pub fn refresh_preset_catalog() {
     ensure();
     let names = crate::state::nano_state_preset_names();
     let ui = state().as_mut().unwrap();
+    performance::refresh(&ui.app, true);
     presets::refresh_preset_rows(&ui.app, &names);
     ui.window.request_redraw();
 }

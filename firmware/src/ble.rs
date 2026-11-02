@@ -513,6 +513,7 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
                     crate::performance::report("Slider ignored while performance recall is running");
                     continue;
                 }
+                crate::performance::sound_edited();
                 let mut buf = [0u8; 24];
                 let n = slider_payload(write, &mut buf);
                 if n > 0 {
@@ -555,12 +556,15 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
         if let Some(param) = crate::link::take_param() {
             if crate::performance::busy() {
                 crate::performance::report("Parameter edit ignored while performance recall is running");
-            } else if !crate::fx::nano_fx_write_param_normalized(
-                u32::from(param.block),
-                param.wire,
-                param.norm,
-            ) {
-                log::warn!("FX parameter edit refused");
+            } else {
+                crate::performance::sound_edited();
+                if !crate::fx::nano_fx_write_param_normalized(
+                    u32::from(param.block),
+                    param.wire,
+                    param.norm,
+                ) {
+                    log::warn!("FX parameter edit refused");
+                }
             }
         }
         crate::state::poll();
@@ -572,7 +576,19 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
 pub static LIBRARY_WANTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 fn apply_cmd(cmd: crate::link::Cmd) {
+    if !crate::performance::busy() && matches!(&cmd,
+        crate::link::Cmd::Param(_) | crate::link::Cmd::Block { .. }
+        | crate::link::Cmd::Model { .. } | crate::link::Cmd::ModelAt { .. }
+        | crate::link::Cmd::Gate(_) | crate::link::Cmd::GateAmount(_)
+        | crate::link::Cmd::AmpKnob { .. } | crate::link::Cmd::CaptureVolume(_)
+        | crate::link::Cmd::CabParam { .. } | crate::link::Cmd::Capture(_)
+        | crate::link::Cmd::CaptureAt(_) | crate::link::Cmd::CabAt(_)
+        | crate::link::Cmd::Preset(_) | crate::link::Cmd::PresetAt(_)
+    ) {
+        crate::performance::sound_edited();
+    }
     match cmd {
+        crate::link::Cmd::Gig(enabled) => crate::ui::show_gig(enabled),
         crate::link::Cmd::FxPresetRecall { index, block } => {
             if let Err(error) = crate::performance::recall_fx(usize::from(index), usize::from(block)) {
                 crate::performance::report(error);
@@ -593,6 +609,7 @@ fn apply_cmd(cmd: crate::link::Cmd) {
             }
         }
         crate::link::Cmd::PerformanceRefresh => {
+            crate::fx::nano_fx_clear_model_trust();
             crate::state::nano_state_request_preset_refresh("Performance recall");
         }
         crate::link::Cmd::PerformanceFxRefresh => {

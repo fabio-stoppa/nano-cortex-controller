@@ -767,7 +767,9 @@ mod tests {
             app.set_confirm_label("Delete".into());
             app.set_confirm_open(true);
             window.request_redraw();
-            window.draw_if_needed(|renderer| { renderer.render(&mut pixels, width as usize); });
+            window.draw_if_needed(|renderer| {
+                renderer.render(&mut pixels, width as usize);
+            });
             let position = LogicalPosition::new(width as f32 - 160.0, 186.0);
             window.dispatch_event(WindowEvent::PointerPressed {
                 position,
@@ -786,6 +788,146 @@ mod tests {
             app.set_fx_presets_open(false);
         }
         app.set_performance_open(false);
+        app.set_connecting(false);
+        app.set_portrait(false);
+        window.set_size(PhysicalSize::new(800, 480));
+    }
+
+    fn check_gig_screen(app: &AppWindow, window: &MinimalSoftwareWindow) {
+        let slots = Rc::new(std::cell::Cell::new((0, -1)));
+        let scenes = Rc::new(std::cell::Cell::new((0, -1)));
+        let banks = Rc::new(std::cell::Cell::new(0));
+        let tempo = Rc::new(std::cell::Cell::new(0));
+        app.on_performance_recall({
+            let slots = slots.clone();
+            move |index| slots.set((slots.get().0 + 1, index))
+        });
+        app.on_gig_scene_recall({
+            let scenes = scenes.clone();
+            move |index| scenes.set((scenes.get().0 + 1, index))
+        });
+        app.on_gig_bank_stepped({
+            let banks = banks.clone();
+            move |_| banks.set(banks.get() + 1)
+        });
+        app.on_tempo_tapped({
+            let tempo = tempo.clone();
+            move || tempo.set(tempo.get() + 1)
+        });
+        app.on_tuner_tapped({
+            let weak = app.as_weak();
+            move || {
+                if let Some(app) = weak.upgrade() {
+                    let active = app.get_page() != 2;
+                    app.set_page(if active { 2 } else { 0 });
+                    app.set_tuner_active(active);
+                }
+            }
+        });
+        app.set_preset("1 Clean".into());
+        app.set_performance_slots(slint::ModelRc::new(slint::VecModel::from(
+            (1..=4)
+                .map(|index| format!("Slot {index} Clean").into())
+                .collect::<Vec<_>>(),
+        )));
+        app.set_gig_assigned(slint::ModelRc::new(slint::VecModel::from(vec![true; 4])));
+        app.set_gig_scenes(slint::ModelRc::new(slint::VecModel::from(
+            (1..=4)
+                .map(|index| format!("Scene {index}").into())
+                .collect::<Vec<_>>(),
+        )));
+        app.set_gig_scene_assigned(slint::ModelRc::new(slint::VecModel::from(vec![true; 4])));
+        app.set_settings_open(true);
+        app.set_performance_open(true);
+        app.set_fx_presets_open(true);
+        app.set_model_open(true);
+        app.set_confirm_open(true);
+        app.set_kbd_open(true);
+        app.invoke_gig_mode_set(true);
+        assert!(app.get_gig_open());
+        assert!(
+            !app.get_settings_open() && !app.get_performance_open() && !app.get_fx_presets_open()
+        );
+        assert!(!app.get_model_open() && !app.get_confirm_open() && !app.get_kbd_open());
+        let tap = |x, y| {
+            let position = LogicalPosition::new(x, y);
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+        };
+        let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
+        for (width, height, portrait) in [(800, 480, false), (480, 800, true)] {
+            app.set_portrait(portrait);
+            window.set_size(PhysicalSize::new(width, height));
+            app.set_connecting(false);
+            app.set_page(0);
+            app.invoke_gig_mode_set(true);
+            let mut draw = || {
+                window.request_redraw();
+                window.draw_if_needed(|renderer| {
+                    renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                    renderer.render(&mut pixels, width as usize);
+                });
+            };
+            draw();
+            let before = slots.get().0;
+            tap(100.0, 141.0);
+            tap(100.0, 217.0);
+            assert_eq!(
+                slots.get(),
+                (before + 2, 0),
+                "Gig slot target is smaller than 76 pixels tall"
+            );
+            tap(width as f32 - 60.0, if portrait { 500.0 } else { 270.0 });
+            assert_eq!(slots.get(), (before + 3, 3), "Last gig slot inaccessible");
+            let before = scenes.get().0;
+            tap(width as f32 - 60.0, if portrait { 675.0 } else { 360.0 });
+            assert_eq!(scenes.get(), (before + 1, 3), "Last scene inaccessible");
+            let before = banks.get();
+            tap(45.0, 40.0);
+            tap(width as f32 - 145.0, 40.0);
+            assert_eq!(banks.get(), before + 2);
+            tap(80.0, height as f32 - 45.0);
+            assert_eq!(app.get_page(), 2);
+            assert!(app.get_gig_open());
+            draw();
+            tap(width as f32 - 55.0, height as f32 - 40.0);
+            assert_eq!(app.get_page(), 0, "Tuner exit did not return to gig view");
+            assert!(app.get_gig_open());
+            draw();
+            let before = tempo.get();
+            tap(width as f32 - 70.0, height as f32 - 45.0);
+            assert_eq!(tempo.get(), before + 1);
+            let before = (slots.get(), scenes.get(), banks.get(), tempo.get());
+            app.set_performance_busy(true);
+            draw();
+            tap(45.0, 40.0);
+            tap(100.0, 160.0);
+            tap(width as f32 - 60.0, if portrait { 675.0 } else { 360.0 });
+            tap(80.0, height as f32 - 45.0);
+            tap(width as f32 - 70.0, height as f32 - 45.0);
+            assert_eq!(
+                (slots.get(), scenes.get(), banks.get(), tempo.get()),
+                before,
+                "Busy recall controls remained active"
+            );
+            assert_eq!(app.get_page(), 0);
+            app.set_performance_busy(false);
+            app.set_connecting(true);
+            draw();
+            tap(100.0, 160.0);
+            assert_eq!(slots.get(), before.0, "Disconnected recall remained active");
+            tap(width as f32 - 55.0, 40.0);
+            assert!(
+                !app.get_gig_open(),
+                "Editor exit was covered by connecting overlay"
+            );
+        }
         app.set_connecting(false);
         app.set_portrait(false);
         window.set_size(PhysicalSize::new(800, 480));
@@ -1086,6 +1228,7 @@ mod tests {
         check_midi_clear_confirmation(&app, &window);
         check_usb_storage_screen(&app, &window);
         check_bank_screen(&app, &window);
+        check_gig_screen(&app, &window);
         let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
 
         for (width, height, rotation, portrait) in [

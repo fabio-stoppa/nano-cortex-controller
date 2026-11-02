@@ -71,6 +71,9 @@ mod state {
     std::thread_local! {
         pub static AMP: core::cell::RefCell<NanoAmpC> = core::cell::RefCell::new(NanoAmpC::from(&Amp::default()));
     }
+    pub fn nano_state_verified_amp() -> NanoAmpC {
+        AMP.with(|amp| *amp.borrow())
+    }
     pub fn nano_state_snapshot_amp(out: &mut NanoAmpC) -> bool {
         AMP.with(|amp| {
             *out = *amp.borrow();
@@ -168,6 +171,12 @@ mod tests {
         midi::persist();
         settings::SAVES.store(0, Ordering::Relaxed);
         fx::SNAPSHOT.with(|s| *s.borrow_mut() = fx::types::NanoFxState::zeroed());
+        state::PRESET.store(1, Ordering::Relaxed);
+        state::GENERATION.store(1, Ordering::Relaxed);
+        state::ACK.store(0, Ordering::Relaxed);
+        state::AMP.with(|amp| {
+            *amp.borrow_mut() = nano_wire::types::NanoAmpC::from(&nano_wire::types::Amp::default())
+        });
     }
 
     fn index(name: &str) -> usize {
@@ -259,6 +268,8 @@ mod tests {
         });
         state::PRESET.store(1, Ordering::Relaxed);
         state::ACK.store(0, Ordering::Relaxed);
+        assert!(performance::capture_scene(0, 0, 0, "Clean").is_err());
+        performance::recall_slot(0).unwrap();
         performance::capture_scene(0, 0, 0, "Clean").unwrap();
         assert_eq!(performance::scenes(0)[0].as_deref(), Some("Clean"));
         let before = performance::export_json().unwrap();
@@ -285,6 +296,19 @@ mod tests {
         assert!(!performance::busy());
         performance::recall_scene(0).unwrap();
         assert!(performance::busy());
+        for _ in 0..64 {
+            if matches!(performance::poll(), Some(link::Cmd::PerformanceRefresh)) {
+                state::GENERATION.fetch_add(1, Ordering::Relaxed);
+            }
+            if !performance::busy() {
+                break;
+            }
+        }
+        assert!(!performance::busy());
+        assert_eq!(performance::scene(), Some(0));
+        performance::sound_edited();
+        assert!(performance::scene().is_none());
+        performance::recall_scene(0).unwrap();
         performance::cancel("Test interruption");
         assert!(performance::scene().is_none());
         performance::assign_slot(0, Some(2)).unwrap();
@@ -329,6 +353,59 @@ mod tests {
             })
         ));
         assert!(link::COMMAND_CAPACITY > midi::ACTION_COUNT);
+    }
+
+    #[test]
+    fn gig_midi_modes_and_external_preset_changes_clear_stale_selection() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        assert!(matches!(
+            midi::command(427, 127, false),
+            Some(link::Cmd::Gig(true))
+        ));
+        assert!(matches!(
+            midi::command(428, 127, false),
+            Some(link::Cmd::Gig(false))
+        ));
+        *settings::PERFORMANCE.lock().unwrap() = None;
+        performance::load();
+        performance::add_bank("Gig").unwrap();
+        performance::assign_slot(0, Some(1)).unwrap();
+        performance::recall_slot(0).unwrap();
+        assert_eq!(performance::slot(), Some(0));
+        state::PRESET.store(2, Ordering::Relaxed);
+        performance::poll();
+        assert_eq!(performance::slot(), None);
+        state::PRESET.store(1, Ordering::Relaxed);
+        performance::recall_slot(0).unwrap();
+        link::set_up(false);
+        assert_eq!(performance::slot(), None);
+        assert!(performance::scene().is_none());
+    }
+
+    #[test]
+    fn all_new_actions_fit_the_editable_json_and_atomic_multi_target_queue() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        for action in 0..midi::ACTION_COUNT {
+            learn_cc(action, 127);
+        }
+        let json = midi::export_json().unwrap();
+        assert!(
+            json.len() <= 48 * 1024,
+            "Full mapping exceeds midi.json capacity"
+        );
+        let decoded: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            decoded["bindings"].as_array().unwrap().len(),
+            midi::ACTION_COUNT
+        );
+        cc(127, 127);
+        assert_eq!(
+            queued().len(),
+            midi::ACTION_COUNT,
+            "Shared message lost a mapped action"
+        );
     }
 
     #[test]
@@ -505,7 +582,7 @@ mod tests {
     fn expanded_actions_and_endpoints_keep_legacy_indices() {
         let _guard = LOCK.lock().unwrap();
         reset();
-        assert_eq!(midi::ACTION_COUNT, 427);
+        assert_eq!(midi::ACTION_COUNT, 429);
         assert_eq!(midi::action_name(13), "Pre FX 1 knob 1");
         assert_eq!(midi::action_name(33), "Amp gain");
         assert_eq!(midi::action_name(41), "Cab low-pass");

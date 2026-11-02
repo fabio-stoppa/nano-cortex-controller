@@ -105,6 +105,7 @@ pub(super) fn c_label(label: &str) -> CString {
 pub(super) struct State {
     pub(super) mode: u32,
     pub(super) amp: NanoAmpC,
+    pub(super) verified_amp: NanoAmpC,
     pub(super) cap_vol_kept: u8,
     pub(super) cap_vol_kept_valid: bool,
     pub(super) master_write_us: i64,
@@ -176,6 +177,7 @@ impl State {
         Self {
             mode: NANO_RX_IDLE,
             amp: amp_zero(),
+            verified_amp: amp_zero(),
             cap_vol_kept: 128,
             cap_vol_kept_valid: false,
             master_write_us: 0,
