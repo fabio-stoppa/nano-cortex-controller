@@ -1356,38 +1356,44 @@ pub fn try_parse_bpm_notify(data: &[u8]) -> Option<u16> {
 }
 
 pub fn log_bytes(tag: &str, label: &str, data: &[u8]) {
+    if !log::log_enabled!(target: tag, log::Level::Debug) {
+        return;
+    }
     let mut hex = String::new();
     for b in data.iter().take(24) {
         hex.push_str(&format!("{b:02X} "));
     }
-    log::info!(target: tag, "{label}: {hex}");
+    log::debug!(target: tag, "{label}: {hex}");
 }
 
 pub fn log_bytes_full(tag: &str, label: &str, data: &[u8]) {
+    if !log::log_enabled!(target: tag, log::Level::Debug) {
+        return;
+    }
     if data.is_empty() {
-        log::info!(target: tag, "{label}: (empty)");
+        log::debug!(target: tag, "{label}: (empty)");
         return;
     }
     let mut line = format!("{label}: ");
     for b in data {
         if line.len() > 100 {
-            log::info!(target: tag, "{line}");
+            log::debug!(target: tag, "{line}");
             line = "  ... ".into();
         }
         line.push_str(&format!("{b:02X} "));
     }
     if !line.is_empty() {
-        log::info!(target: tag, "{line}");
+        log::debug!(target: tag, "{line}");
     }
 }
 
 pub fn log_amp(tag: &str, amp: &Amp) {
     if !amp.valid {
-        log::info!(target: tag, "Amp: (not parsed yet)");
+        log::debug!(target: tag, "Amp: (not parsed yet)");
         return;
     }
     let pct = |raw: u8| (u32::from(raw) * 100 + 127) / 255;
-    log::info!(
+    log::debug!(
         target: tag,
         "Amp — Gain: {}% Level: {}% CapVol: {}% Bass: {}% Mid: {}% Treble: {}%  (raw {}/{}/{}/{}/{}/{})",
         pct(amp.gain),
@@ -1406,18 +1412,24 @@ pub fn log_amp(tag: &str, amp: &Amp) {
 }
 
 pub fn log_bpm_hunt(tag: &str, data: &[u8]) {
-    log::info!(target: tag, "BPM hunt: scan {}-byte state blob (rust)", data.len());
+    if !log::log_enabled!(target: tag, log::Level::Debug) {
+        return;
+    }
+    log::debug!(target: tag, "BPM hunt: scan {}-byte state blob (rust)", data.len());
     if let Some(bpm) = parse_bpm(data) {
-        log::info!(target: tag, "BPM hunt: parsed BPM={bpm}");
+        log::debug!(target: tag, "BPM hunt: parsed BPM={bpm}");
     }
 }
 
 pub fn log_bpm_raw_scan(tag: &str, label: &str, data: &[u8]) {
-    log::info!(target: tag, "BPM raw scan [{label}]: {} bytes (rust)", data.len());
+    log::debug!(target: tag, "BPM raw scan [{label}]: {} bytes (rust)", data.len());
 }
 
 pub fn log_proto_fields(tag: &str, label: &str, data: &[u8]) {
-    log::info!(
+    if !log::log_enabled!(target: tag, log::Level::Debug) {
+        return;
+    }
+    log::debug!(
         target: tag,
         "STATE {label} — protobuf scan ({} bytes, rust)",
         data.len()
@@ -1438,7 +1450,7 @@ pub fn log_proto_fields(tag: &str, label: &str, data: &[u8]) {
                 let Some((val, next)) = read_varint(data, i) else {
                     break;
                 };
-                log::info!(target: tag, "STATE {label}   f{field} w0 varint {val}");
+                log::debug!(target: tag, "STATE {label}   f{field} w0 varint {val}");
                 i = next;
             }
             1 => {
@@ -1455,29 +1467,32 @@ pub fn log_proto_fields(tag: &str, label: &str, data: &[u8]) {
                 if i > data.len() {
                     break;
                 }
-                log::info!(target: tag, "STATE {label}   f{field} w2 bytes len={flen}");
+                log::debug!(target: tag, "STATE {label}   f{field} w2 bytes len={flen}");
             }
             5 => {
                 if i + 4 > data.len() {
                     break;
                 }
                 let f = f32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
-                log::info!(target: tag, "STATE {label}   f{field} w5 float={f}");
+                log::debug!(target: tag, "STATE {label}   f{field} w5 float={f}");
                 i += 4;
             }
             _ => break,
         }
     }
-    log::info!(target: tag, "STATE {label} — scan done ({entries} entries)");
+    log::debug!(target: tag, "STATE {label} — scan done ({entries} entries)");
 }
 
 pub fn log_tuner_state_fields(tag: &str, data: &[u8]) {
+    if !log::log_enabled!(target: tag, log::Level::Debug) {
+        return;
+    }
     let f45 = field_varint(data, 45);
     let f48 = field_varint(data, 48);
     let f49 = field_varint(data, 49);
     let f50 = field_varint(data, 50);
     let f51 = field_varint(data, 51);
-    log::info!(
+    log::debug!(
         target: tag,
         "Tuner preset: f45={} f48={} f49={} f50={} f51={}",
         f45.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),

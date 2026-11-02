@@ -261,11 +261,14 @@ pub(super) fn scan_gate_bypass_field54(data: &[u8]) -> Option<u32> {
 /* ------------------------------------------------------------ model apply */
 
 fn log_model_id_hex(label: &str, raw: &[u8]) {
+    if !log::log_enabled!(target: TAG, log::Level::Debug) {
+        return;
+    }
     let mut hex = String::new();
     for b in raw.iter().take(11) {
         hex.push_str(&format!("{b:02X}"));
     }
-    info!(target: TAG, "{label} model field raw: {hex}");
+    debug!(target: TAG, "{label} model field raw: {hex}");
 }
 
 pub(super) fn store_catalog_model_id(block: &mut NanoFxBlock, model: &NanoFxModelDef) {
