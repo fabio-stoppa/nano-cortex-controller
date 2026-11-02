@@ -40,6 +40,8 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
   their GATT write completes and **acknowledged** only on a Nano response;
   acknowledgements explicitly remain unverified unless a matching readback
   proves the result. Scene recall retains its existing verified-readback result.
+- Failed Nano connections retry with 1, 2, 4, 8, 16, then 30-second backoff.
+  The welcome screen's Retry now action cancels the wait and starts immediately.
 - Raw BLE packet dumps and per-write/slider logs are debug-only. Info logging
   retains setup stages and ten-second/per-disconnect RX, TX, and write-failure
   totals; failures remain errors. TX counts transport sends, not verified edits.

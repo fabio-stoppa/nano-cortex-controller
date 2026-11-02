@@ -599,6 +599,7 @@ fn ensure() {
             crate::ble::forget(index as usize);
         }
     });
+    app.on_retry_now(move || crate::ble::retry_now());
     app.on_library_tapped(move || crate::link::push_cmd(Cmd::Library));
     app.on_param_changed(move |cell, amount| send_fx_param(cell, amount));
     app.on_layout_tapped({

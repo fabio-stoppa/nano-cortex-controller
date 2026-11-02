@@ -14,7 +14,7 @@ use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetDataLength, LeSetScanPa
 use bt_hci::controller::ControllerCmdSync;
 use core::cell::{Cell, RefCell};
 use embassy_futures::join::{join, join3};
-use embassy_futures::select::select;
+use embassy_futures::select::{select, Either};
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
@@ -33,6 +33,12 @@ pub fn submit_slider(edit: SliderWrite) {
     } else {
         log::warn!("Touch edit queue full; control {} update refused", edit.id);
     }
+}
+
+pub fn retry_now() {
+    stage(connection::Stage::Searching);
+    crate::ui::set_connection_error("");
+    NANO_RESTART.signal(());
 }
 
 fn take_slider() -> Option<SliderWrite> {
@@ -438,6 +444,7 @@ where
         + ControllerCmdSync<LeSetDataLength>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 {
+    let mut backoff_secs = 1;
     loop {
         NANO_RESTART.reset();
         RX_PACKETS.store(0, Ordering::Relaxed);
@@ -445,11 +452,14 @@ where
         WRITE_FAILURES.store(0, Ordering::Relaxed);
         // GATT construction has large temporary buffers. Keep session polling
         // out of the parent future's stack frame.
-        select(
-            Box::pin(nano_session(stack, hunt, radio)),
-            NANO_RESTART.wait(),
-        )
-        .await;
+        let restarted = matches!(
+            select(
+                Box::pin(nano_session(stack, hunt, radio)),
+                NANO_RESTART.wait(),
+            )
+            .await,
+            Either::Second(())
+        );
         traffic_summary();
         crate::link::set_up(false);
         clear_sliders();
@@ -462,7 +472,22 @@ where
         stage(connection::Stage::Searching);
         reset_state(true);
         log::warn!("nano link ended, scanning again");
-        Timer::after(Duration::from_secs(2)).await;
+        if restarted {
+            backoff_secs = 1;
+            continue;
+        }
+        log::info!("Nano reconnect retry in {backoff_secs}s");
+        match select(
+            Timer::after(Duration::from_secs(u64::from(backoff_secs))),
+            NANO_RESTART.wait(),
+        )
+        .await
+        {
+            Either::First(()) => {
+                backoff_secs = connection::next_reconnect_backoff_secs(backoff_secs)
+            }
+            Either::Second(()) => backoff_secs = 1,
+        }
     }
 }
 
@@ -1320,10 +1345,12 @@ async fn flush_writes<C: Controller, P: PacketPool>(
             Ok(()) => {
                 log::debug!("C304 write {} bytes", packet.len());
                 log_pkt("C304 TX", &packet, None);
-                if let Some(label) = label.as_deref().filter(|label| operation_status_label(label)) {
-                    let status = alloc::format!(
-                        "{label}: sent; awaiting Nano acknowledgement or readback"
-                    );
+                if let Some(label) = label
+                    .as_deref()
+                    .filter(|label| operation_status_label(label))
+                {
+                    let status =
+                        alloc::format!("{label}: sent; awaiting Nano acknowledgement or readback");
                     crate::screen::nano_ui_set_protocol_status(&status);
                 }
                 embassy_futures::yield_now().await;

@@ -27,6 +27,15 @@ pub async fn run_io(receive: impl Future<Output = ()>, commands: impl Future<Out
 }
 
 pub const TOUCH_CONTROL_COUNT: usize = 8;
+pub const MAX_RECONNECT_BACKOFF_SECS: u8 = 30;
+
+pub const fn next_reconnect_backoff_secs(current: u8) -> u8 {
+    if current >= MAX_RECONNECT_BACKOFF_SECS / 2 {
+        MAX_RECONNECT_BACKOFF_SECS
+    } else {
+        current * 2
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SliderWrite {
@@ -213,5 +222,17 @@ mod tests {
         assert_eq!(edits.pop(), Some(SliderWrite { id: 3, raw: 77 }));
         edits.clear();
         assert_eq!(edits.pop(), None);
+    }
+
+    #[test]
+    fn reconnect_backoff_doubles_and_caps() {
+        let mut delay = 1;
+        let mut seen = [0; 6];
+        for value in &mut seen {
+            *value = delay;
+            delay = next_reconnect_backoff_secs(delay);
+        }
+        assert_eq!(seen, [1, 2, 4, 8, 16, 30]);
+        assert_eq!(next_reconnect_backoff_secs(30), 30);
     }
 }

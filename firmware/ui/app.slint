@@ -2453,6 +2453,7 @@ component ConnectingOverlay inherits Rectangle {
     in property <string> version: "";
     callback scene-library();
     callback usb-storage();
+    callback retry-now();
     background: #1e1e1e;
     TouchArea {}
     VerticalLayout {
@@ -2524,6 +2525,12 @@ component ConnectingOverlay inherits Rectangle {
             horizontal-alignment: center;
             wrap: word-wrap;
             visible: root.error != "";
+        }
+        if root.error != "": HeaderButton {
+            width: 140px;
+            height: 40px;
+            label: "Retry now";
+            tapped => { root.retry-now(); }
         }
         Rectangle { height: 6px; }
         Text {
@@ -3256,6 +3263,7 @@ export component AppWindow inherits Window {
     callback midi-clear-all();
     callback midi-clear-all-requested();
     callback usb-storage-requested();
+    callback retry-now();
     callback usb-storage-cancel();
     callback usb-storage-restart();
     in-out property <bool> usb-storage-open: false;
@@ -4046,6 +4054,7 @@ export component AppWindow inherits Window {
         version: root.app-version;
         scene-library => { root.scene-library-opened(); }
         usb-storage => { root.usb-storage-requested(); }
+        retry-now => { root.retry-now(); }
     }
 
 }
