@@ -640,7 +640,7 @@ where
     drop(scan);
     drop(scanner);
     let cooldown = if !nano && NANO_READY.load(Ordering::Relaxed) {
-        Duration::from_secs(5)
+        Duration::from_secs(2)
     } else if !nano && NANO_SEARCHING.load(Ordering::Relaxed) {
         Duration::from_millis(100)
     } else {

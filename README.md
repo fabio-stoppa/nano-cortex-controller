@@ -29,8 +29,8 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
   characteristics and descriptors are discovered once and reused for all writes.
   Handles and the unsubscribed C306 mirror never survive a disconnected session.
 - Nano connect/discovery/subscription/loading preempts new footswitch scans. Once
-  Nano is Ready, footswitch scanning drops to a 500 ms window every 5.5 seconds,
-  preserving second-client discovery with lower radio duty.
+  Nano is Ready, footswitch scanning uses a 500 ms window every 2.5 seconds,
+  reducing discovery latency while preserving Nano setup priority.
 - Touch slider updates coalesce independently by control in a bounded queue;
   sweeping one slider cannot evict the latest value of another control.
 - The C304 writer serves queued live-value controls before background requests,
