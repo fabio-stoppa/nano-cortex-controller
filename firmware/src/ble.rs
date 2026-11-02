@@ -941,7 +941,8 @@ async fn nano_commands<C: Controller, P: PacketPool>(
             report_failure(Operation::Loading, &missing);
             return;
         }
-        if with_timeout(Duration::from_millis(10), SLIDER.wait())
+        let slider_wait_ms = if crate::scenes::busy() { 2 } else { 10 };
+        if with_timeout(Duration::from_millis(slider_wait_ms), SLIDER.wait())
             .await
             .is_ok()
         {
