@@ -180,6 +180,10 @@ computer and tap **USB drive** on the connection screen, or
 **Settings → General → Configuration → USB drive** when connected.
 Bluetooth control and MIDI editing pause until the controller is restarted.
 Use a data cable; a separate USB-to-serial port does not expose the drive.
+Close any serial monitor (including the firmware monitor) before entering USB
+mode: keeping it open can prevent the drive from appearing. If **NANO CONFIG**
+does not appear, close the monitor, restart the controller and re-enter USB mode.
+The USB screen shows this warning; it does not detect whether a monitor is open.
 
 The computer mounts a disposable 3 MiB FAT12 volume named **NANO CONFIG** containing:
 

@@ -857,6 +857,11 @@ mod tests {
             let scene_library_clears = scene_library_clears.clone();
             move |kind| scene_library_clears.borrow_mut().push(kind)
         });
+        let preferences_cleared = Rc::new(std::cell::Cell::new(0));
+        app.on_preferences_clear_all({
+            let preferences_cleared = preferences_cleared.clone();
+            move || preferences_cleared.set(preferences_cleared.get() + 1)
+        });
         let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
         let red = ((0xf8u16 >> 3) << 11) | ((0x28u16 >> 2) << 5) | (0x1au16 >> 3);
         let click = |x, y| {
@@ -913,7 +918,33 @@ mod tests {
                     button_span = 0;
                 }
             }
-            click(width as f32 - 180.0, 426.0);
+            window.dispatch_event(WindowEvent::PointerScrolled {
+                position: LogicalPosition::new(width as f32 / 2.0, 300.0),
+                delta_x: 0.0,
+                delta_y: -100_000.0,
+            });
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                renderer.render(&mut pixels, width as usize);
+                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            });
+            let (button_y, buttons) = (100..height as usize).rev().find_map(|y| {
+                let mut spans = Vec::new();
+                let mut start = None;
+                for x in 0..width as usize {
+                    if pixels[y * width as usize + x].0 == 0 {
+                        start.get_or_insert(x);
+                    } else if let Some(left) = start.take() {
+                        if (64..=140).contains(&(x - left)) {
+                            spans.push((left + x) as f32 / 2.0);
+                        }
+                    }
+                }
+                (spans.len() == 3).then_some((y as f32, spans))
+            }).expect("Clear row must expose three reachable buttons");
+            click(buttons[0], button_y);
             assert!(app.get_confirm_open(), "clear MIDI missed portrait={portrait}");
             assert_eq!(app.get_confirm_title(), "Clear all MIDI bindings?");
             window.request_redraw();
@@ -967,8 +998,12 @@ mod tests {
                 "MIDI confirmation triggered preset operation"
             );
             let midi_clears_before = cleared.get();
-            for (kind, button_x, title) in [(2, width as f32 - 76.0, "Clear all scenes?")] {
+            for (kind, button_x, title) in [
+                (2, buttons[1], "Clear all scenes?"),
+                (3, buttons[2], "Reset controller preferences?"),
+            ] {
                 let before = scene_library_clears.borrow().len();
+                let preferences_before = preferences_cleared.get();
                 window.request_redraw();
                 window.draw_if_needed(|renderer| {
                     renderer.set_rendering_rotation(RenderingRotation::NoRotation);
@@ -976,7 +1011,7 @@ mod tests {
                     renderer.render(&mut pixels, width as usize);
                     renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
                 });
-                click(button_x, 426.0);
+                click(button_x, button_y);
                 assert!(app.get_confirm_open(), "clear button {kind} is unreachable");
                 assert_eq!(app.get_confirm_title(), title);
                 window.request_redraw();
@@ -991,6 +1026,7 @@ mod tests {
                 click(width as f32 - x, y);
                 assert!(!app.get_confirm_open());
                 assert_eq!(scene_library_clears.borrow().len(), before, "Cancel cleared data");
+                assert_eq!(preferences_cleared.get(), preferences_before);
                 app.invoke_clear_requested(kind);
                 window.request_redraw();
                 window.draw_if_needed(|renderer| {
@@ -1001,10 +1037,51 @@ mod tests {
                 });
                 click(x, y);
                 assert!(!app.get_confirm_open());
-                assert_eq!(scene_library_clears.borrow().as_slice().last(), Some(&kind));
-                assert_eq!(scene_library_clears.borrow().len(), before + 1);
+                if kind == 2 {
+                    assert_eq!(scene_library_clears.borrow().as_slice().last(), Some(&kind));
+                    assert_eq!(scene_library_clears.borrow().len(), before + 1);
+                    assert_eq!(preferences_cleared.get(), preferences_before);
+                } else {
+                    assert_eq!(scene_library_clears.borrow().len(), before);
+                    assert_eq!(preferences_cleared.get(), preferences_before + 1);
+                }
                 assert_eq!(cleared.get(), midi_clears_before, "Gig scene clear also cleared MIDI");
                 assert_eq!(preset_action.get(), 0);
+            }
+            for success in [true, false] {
+                window.request_redraw();
+                window.draw_if_needed(|renderer| {
+                    renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                    renderer.render(&mut pixels, width as usize);
+                    renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+                });
+                let before = pixels.clone();
+                app.invoke_clear_completed(success, "Configuration reset result".into());
+                window.request_redraw();
+                window.draw_if_needed(|renderer| {
+                    renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                    renderer.render(&mut pixels, width as usize);
+                    renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+                });
+                assert_ne!(pixels, before, "Missing result modal");
+                let fill = if success { 0x19df } else { red };
+                let points: Vec<_> = pixels.iter().enumerate()
+                    .filter(|(_, pixel)| pixel.0 == fill)
+                    .map(|(i, _)| (i % width as usize, i / width as usize))
+                    .collect();
+                assert!(!points.is_empty(), "Missing result modal OK button");
+                let left = points.iter().map(|p| p.0).min().unwrap();
+                let right = points.iter().map(|p| p.0).max().unwrap();
+                let top = points.iter().map(|p| p.1).min().unwrap();
+                let bottom = points.iter().map(|p| p.1).max().unwrap();
+                click((left + right) as f32 / 2.0, (top + bottom) as f32 / 2.0);
+                window.request_redraw();
+                window.draw_if_needed(|renderer| {
+                    renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                    renderer.render(&mut pixels, width as usize);
+                    renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+                });
+                assert_eq!(pixels, before, "OK must dismiss the result without changing the row");
             }
         }
         app.set_settings_open(false);

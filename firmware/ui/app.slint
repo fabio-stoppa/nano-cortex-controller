@@ -3806,8 +3806,8 @@ export component AppWindow inherits Window {
         background: Surface.background;
         TouchArea {}
         VerticalLayout {
-            padding: root.portrait ? 20px : 24px;
-            spacing: 16px;
+            padding: root.portrait ? 20px : 16px;
+            spacing: 12px;
             HorizontalLayout {
                 spacing: 14px;
                 Rectangle {
@@ -3842,12 +3842,12 @@ export component AppWindow inherits Window {
                 }
             }
             if !root.usb-storage-finished: Rectangle {
-                height: 126px;
+                height: 110px;
                 background: #262626;
                 border-radius: Radius.default;
                 VerticalLayout {
-                    padding: 16px;
-                    spacing: 12px;
+                    padding: 12px;
+                    spacing: 8px;
                     HorizontalLayout {
                         Text {
                             text: "NANO CONFIG";
@@ -3952,8 +3952,8 @@ export component AppWindow inherits Window {
             Text {
                 text: root.usb-storage-finished
                     ? "Restart to return to Bluetooth control."
-                    : "Bluetooth paused  /  Changes apply only after safe eject";
-                color: #909090;
+                    : "Bluetooth paused / Changes apply only after safe eject.\nClose the serial monitor. Drive missing? Restart, then re-enter USB mode.";
+                color: root.usb-storage-finished ? #909090 : #f8c11a;
                 font-size: 14px;
                 horizontal-alignment: center;
                 wrap: word-wrap;
