@@ -36,6 +36,10 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - The C304 writer serves queued live-value controls before background requests,
   keeps FIFO ordering within each class, and switches to strict FIFO during scene
   recall so its staged write order is preserved.
+- Save/copy/rename/delete/preset-change operations report **sent** only after
+  their GATT write completes and **acknowledged** only on a Nano response;
+  acknowledgements explicitly remain unverified unless a matching readback
+  proves the result. Scene recall retains its existing verified-readback result.
 - Raw BLE packet dumps and per-write/slider logs are debug-only. Info logging
   retains setup stages and ten-second/per-disconnect RX, TX, and write-failure
   totals; failures remain errors. TX counts transport sends, not verified edits.

@@ -300,9 +300,9 @@ fn handle_editor_message(data: &[u8]) -> bool {
             _ => "Bluetooth request",
         };
         let text = match status {
-            Some(1) => alloc::format!("{label}: OK"),
+            Some(1) => alloc::format!("{label}: acknowledged; readback not verified"),
             Some(code) => alloc::format!("{label}: rejected ({code})"),
-            None => alloc::format!("{label}: acknowledged"),
+            None => alloc::format!("{label}: acknowledged; readback not verified"),
         };
         info!(target: TAG, "{text}");
         s.protocol_status = text.clone();

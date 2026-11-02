@@ -6,6 +6,7 @@
 extern crate alloc;
 
 use alloc::collections::VecDeque;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::ffi::CStr;
@@ -23,6 +24,7 @@ static UP: AtomicBool = AtomicBool::new(false);
 struct QueuedWrite {
     data: Vec<u8>,
     live: bool,
+    label: Option<String>,
 }
 
 static OUT: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<QueuedWrite>>> =
@@ -141,7 +143,12 @@ pub fn connected() -> bool {
     UP.load(Ordering::Acquire)
 }
 
+#[allow(dead_code)]
 pub fn write(data: &[u8]) -> bool {
+    write_inner(None, data)
+}
+
+fn write_inner(label: Option<&CStr>, data: &[u8]) -> bool {
     if data.is_empty() || !connected() {
         return false;
     }
@@ -155,20 +162,27 @@ pub fn write(data: &[u8]) -> bool {
         queue.push_back(QueuedWrite {
             data: data.to_vec(),
             live,
+            label: label.and_then(|label| label.to_str().ok()).map(String::from),
         });
         true
     })
 }
 
-pub fn write_labeled(_label: &CStr, data: &[u8]) -> bool {
-    write(data)
+pub fn write_labeled(label: &CStr, data: &[u8]) -> bool {
+    write_inner(Some(label), data)
 }
 
+#[allow(dead_code)]
 pub fn pop_write() -> Option<Vec<u8>> {
-    pop_write_with_scene_busy(crate::scenes::busy())
+    pop_write_entry(crate::scenes::busy()).map(|(data, _)| data)
 }
 
+#[allow(dead_code)]
 pub fn pop_write_with_scene_busy(scene_busy: bool) -> Option<Vec<u8>> {
+    pop_write_entry(scene_busy).map(|(data, _)| data)
+}
+
+pub fn pop_write_entry(scene_busy: bool) -> Option<(Vec<u8>, Option<String>)> {
     OUT.lock(|queue| {
         let mut queue = queue.borrow_mut();
         let selected = if scene_busy {
@@ -176,7 +190,9 @@ pub fn pop_write_with_scene_busy(scene_busy: bool) -> Option<Vec<u8>> {
         } else {
             queue.iter().position(|write| write.live).unwrap_or(0)
         };
-        queue.remove(selected).map(|write| write.data)
+        queue
+            .remove(selected)
+            .map(|write| (write.data, write.label))
     })
 }
 

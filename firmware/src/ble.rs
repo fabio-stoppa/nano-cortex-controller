@@ -1314,12 +1314,18 @@ async fn flush_writes<C: Controller, P: PacketPool>(
     handle: u16,
     no_response_supported: bool,
 ) -> Result<(), ()> {
-    while let Some(packet) = crate::link::pop_write() {
+    while let Some((packet, label)) = crate::link::pop_write_entry(crate::scenes::busy()) {
         let result = write_packet(client, handle, no_response_supported, &packet).await;
         match result {
             Ok(()) => {
                 log::debug!("C304 write {} bytes", packet.len());
                 log_pkt("C304 TX", &packet, None);
+                if let Some(label) = label.as_deref().filter(|label| operation_status_label(label)) {
+                    let status = alloc::format!(
+                        "{label}: sent; awaiting Nano acknowledgement or readback"
+                    );
+                    crate::screen::nano_ui_set_protocol_status(&status);
+                }
                 embassy_futures::yield_now().await;
             }
             Err(error) => {
@@ -1330,6 +1336,19 @@ async fn flush_writes<C: Controller, P: PacketPool>(
         }
     }
     Ok(())
+}
+
+fn operation_status_label(label: &str) -> bool {
+    [
+        "Save preset",
+        "Copy preset",
+        "Rename preset",
+        "Delete preset",
+        "Preset change",
+        "Transfer preset",
+    ]
+    .iter()
+    .any(|prefix| label.starts_with(prefix))
 }
 
 fn slider_payload(write: SliderWrite, buf: &mut [u8]) -> usize {

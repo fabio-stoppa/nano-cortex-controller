@@ -891,6 +891,17 @@ mod tests {
     }
 
     #[test]
+    fn write_labels_survive_queueing_for_outcome_reporting() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        assert!(link::write_labeled(c"Delete preset 4", &[0x01, 0x02]));
+        assert_eq!(
+            link::pop_write_entry(false),
+            Some((vec![0x01, 0x02], Some(String::from("Delete preset 4"))))
+        );
+    }
+
+    #[test]
     fn bindings_persist_shared_keys_and_retry_failed_saves() {
         let _guard = LOCK.lock().unwrap();
         reset();
