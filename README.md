@@ -184,6 +184,21 @@ panic while retaining partial redraws and the existing touch mapping.
 
 ## Screen flicker and scan diagnostics
 
+BLE link/session futures are heap-pinned to avoid accumulating large GATT
+construction buffers in nested polling stack frames. The 16-packet notification
+queues are unchanged; reducing their capacity is not the stack-overflow fix.
+
+To isolate UI failures from Bluetooth, build with
+`./firmware/build.sh --features ui-only`. This diagnostic retains the touch UI,
+MIDI/performance configuration loading and display interrupts, but skips radio
+initialization. It cannot connect to the Nano or footswitch. Build without this
+feature to resume normal control; configuration partition offsets are unchanged.
+
+For a separate HCI comparison, use `./firmware/build.sh --features original-hci`
+without `ui-only`. This runs Bluetooth through the original `bt-hci`
+`ExternalController` instead of the serialized adapter. It is a diagnostic, not
+a verified fix for the previously observed command-slot borrow panic.
+
 Bluetooth HCI commands use a controller-local serialized adapter rather than
 bt-hci's `ExternalController` command-slot `RefCell`. Command responses are copied
 into owned buffers, command credits are respected, and a cancelled command's late

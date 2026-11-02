@@ -275,7 +275,7 @@ where
                 );
             }
         },
-        links(&stack, &hunt),
+        Box::pin(links(&stack, &hunt)),
         touch_loop(board),
     )
     .await;
@@ -299,7 +299,11 @@ where
         + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 {
     let radio = Radio::new(());
-    join(nano_loop(stack, hunt, &radio), foot_loop(stack, hunt, &radio)).await;
+    join(
+        Box::pin(nano_loop(stack, hunt, &radio)),
+        Box::pin(foot_loop(stack, hunt, &radio)),
+    )
+    .await;
 }
 
 async fn nano_loop<C>(stack: &Stack<'_, C, DefaultPacketPool>, hunt: &Hunt, radio: &Radio)
@@ -311,7 +315,9 @@ where
 {
     loop {
         NANO_RESTART.reset();
-        select(nano_session(stack, hunt, radio), NANO_RESTART.wait()).await;
+        // GATT construction has large temporary buffers. Keep session polling
+        // out of the parent future's stack frame.
+        select(Box::pin(nano_session(stack, hunt, radio)), NANO_RESTART.wait()).await;
         crate::link::set_up(false);
         crate::screen::nano_ui_set_ble_connected(false);
         reset_state(true);
@@ -329,7 +335,7 @@ where
 {
     loop {
         FOOT_RESTART.reset();
-        select(foot_session(stack, hunt, radio), FOOT_RESTART.wait()).await;
+        select(Box::pin(foot_session(stack, hunt, radio)), FOOT_RESTART.wait()).await;
         reset_state(false);
         log::warn!("footswitch link ended, scanning again");
         Timer::after(Duration::from_secs(1)).await;
@@ -424,7 +430,7 @@ where
         Err(_) => log::warn!("data length update failed"),
     };
 
-    let client = match GattClient::<C, DefaultPacketPool, 8>::new(stack, &conn).await {
+    let client = match Box::pin(GattClient::<C, DefaultPacketPool, 8>::new(stack, &conn)).await {
         Ok(client) => client,
         Err(_) => {
             log::warn!("nano gatt client failed");
@@ -953,7 +959,7 @@ async fn foot_link<C: Controller>(
     };
     mark(addr, 2);
     log::info!("footswitch connected");
-    let client = match GattClient::<C, DefaultPacketPool, 4>::new(stack, &conn).await {
+    let client = match Box::pin(GattClient::<C, DefaultPacketPool, 4>::new(stack, &conn)).await {
         Ok(client) => client,
         Err(_) => {
             log::warn!("footswitch gatt client failed");

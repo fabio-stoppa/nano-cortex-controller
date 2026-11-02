@@ -65,18 +65,32 @@ async fn main(_spawner: Spawner) {
         "internal heap free {}",
         esp_alloc::HEAP.free_caps(esp_alloc::MemoryCapability::Internal.into())
     );
-    // 8 KB sits on the controller's exchange memory and has aborted init before.
-    let ble_config = esp_radio::ble::Config::default().with_task_stack_size(16 * 1024);
-    log::info!("starting ble controller");
-    let connector = match esp_radio::ble::controller::BleConnector::new(rest.bt, ble_config) {
-        Ok(connector) => connector,
-        Err(err) => {
-            log::error!("ble controller init failed: {err:?}");
-            ble::touch_only(&mut board).await;
-            return;
-        }
-    };
-    log::info!("ble controller up");
-    let controller = hci::SerialController::new(connector);
-    ble::run(controller, &mut board).await;
+    #[cfg(feature = "ui-only")]
+    {
+        log::warn!("UI-only diagnostic: Bluetooth controller is disabled");
+        ble::touch_only(&mut board).await;
+    }
+    #[cfg(not(feature = "ui-only"))]
+    {
+        // 8 KB sits on the controller's exchange memory and has aborted init before.
+        let ble_config = esp_radio::ble::Config::default().with_task_stack_size(16 * 1024);
+        log::info!("starting ble controller");
+        let connector = match esp_radio::ble::controller::BleConnector::new(rest.bt, ble_config) {
+            Ok(connector) => connector,
+            Err(err) => {
+                log::error!("ble controller init failed: {err:?}");
+                ble::touch_only(&mut board).await;
+                return;
+            }
+        };
+        log::info!("ble controller up");
+        #[cfg(feature = "original-hci")]
+        let controller = {
+            log::warn!("Original-HCI diagnostic: using bt-hci ExternalController");
+            bt_hci::controller::ExternalController::<_, 20>::new(connector)
+        };
+        #[cfg(not(feature = "original-hci"))]
+        let controller = hci::SerialController::new(connector);
+        ble::run(controller, &mut board).await;
+    }
 }

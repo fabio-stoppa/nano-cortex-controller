@@ -55,6 +55,10 @@ trouble-host = { version = "0.7", default-features = false, features = [
 [features]
 # Count scan-out glitches in the display interrupts and log them.
 scan-diag = []
+# Run the complete touch UI without initializing the Bluetooth controller.
+ui-only = []
+# Compare Bluetooth startup with the original bt-hci command-slot controller.
+original-hci = []
 
 [build-dependencies]
 slint-build = "=1.13.1"
