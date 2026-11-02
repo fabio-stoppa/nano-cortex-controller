@@ -2671,7 +2671,6 @@ component GigButton inherits Rectangle {
     in property <string> label;
     in property <bool> highlight: false;
     in property <bool> enabled: true;
-    in property <bool> busy: false;
     callback tapped();
     background: root.highlight ? #1a3af8 : !root.enabled ? #202020 : #303030;
     border-radius: Radius.default;
@@ -2701,7 +2700,7 @@ component GigButton inherits Rectangle {
         wrap: word-wrap;
         overflow: elide;
     }
-    TouchArea { enabled: root.enabled && !root.busy; clicked => { root.tapped(); } }
+    TouchArea { enabled: root.enabled; clicked => { root.tapped(); } }
 }
 
 component GigHeader inherits PopupHeader {
@@ -2780,7 +2779,6 @@ component GigPanel inherits Rectangle {
                 number: index + 1;
                 highlight: root.scene == index;
                 enabled: root.connected && root.scene-assigned[index];
-                busy: root.busy;
                 tapped => { root.scene-recall(index); }
             }
         }
@@ -2865,6 +2863,7 @@ component ScenePanel inherits Rectangle {
     in property <bool> dirty;
     in property <string> title;
     in property <bool> enabled;
+    in property <bool> recall-enabled;
     in property <[bool]> assigned;
     in property <[string]> scenes;
     in property <int> scene: -1;
@@ -2898,7 +2897,7 @@ component ScenePanel inherits Rectangle {
                     x: 0px; y: 0px;
                     width: parent.width - 64px;
                     height: parent.height;
-                    enabled: root.enabled && root.assigned[index];
+                    enabled: root.recall-enabled && root.assigned[index];
                     clicked => { root.scene-recall(index); }
                 }
                 Text {
@@ -3988,6 +3987,7 @@ export component AppWindow inherits Window {
         menu-index <=> root.scene-menu-index;
         portrait: root.portrait;
         enabled: !root.connecting && !root.scene-library-busy;
+        recall-enabled: !root.connecting;
         assigned: root.scene-assigned;
         dirty: root.scene-dirty;
         scenes: root.scene-library-scenes; scene: root.scene-library-scene;

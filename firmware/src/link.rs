@@ -310,8 +310,34 @@ pub fn push_midi(actions: impl Iterator<Item = usize>, value: u8, continuous: bo
     })
 }
 
+#[allow(dead_code)]
 pub fn pop_cmd() -> Option<Cmd> {
     CMDS.lock(|queue| queue.borrow_mut().pop_front())
+}
+
+fn is_scene_recall(cmd: &Cmd) -> bool {
+    match cmd {
+        Cmd::SceneRecall(_) | Cmd::SceneRecallAt { .. } => true,
+        Cmd::MidiAction { index, .. } => crate::midi::scene_index(*index).is_some(),
+        _ => false,
+    }
+}
+
+pub fn pop_cmd_for_scene_busy(scene_busy: bool) -> Option<Cmd> {
+    CMDS.lock(|queue| {
+        let mut queue = queue.borrow_mut();
+        if scene_busy && !queue.front().is_some_and(is_scene_recall) {
+            return None;
+        }
+        let mut command = queue.pop_front()?;
+        if is_scene_recall(&command) {
+            // Never coalesce across another action (especially a preset change or save).
+            while queue.front().is_some_and(is_scene_recall) {
+                command = queue.pop_front()?;
+            }
+        }
+        Some(command)
+    })
 }
 
 pub fn clear_midi() {

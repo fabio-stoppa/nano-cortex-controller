@@ -574,6 +574,16 @@ fn dispatch(status: u8, data: [u8; 2]) {
     }
 }
 
+pub fn scene_index(index: usize) -> Option<u8> {
+    if (SCENE_START..GIG_START).contains(&index) {
+        Some((index - SCENE_START) as u8)
+    } else if (EXTRA_SCENE_START..ACTION_COUNT).contains(&index) {
+        Some((index - EXTRA_SCENE_START + 4) as u8)
+    } else {
+        None
+    }
+}
+
 /// Called on the Nano link task, so snapshots and writes share its ordering.
 pub fn command(index: usize, value: u8, continuous: bool) -> Option<Cmd> {
     if !active_action(index) || (continuous_action(index) && !continuous) {
@@ -658,12 +668,10 @@ pub fn command(index: usize, value: u8, continuous: bool) -> Option<Cmd> {
         }
     } else if index < SCENE_START {
         None
-    } else if index < GIG_START {
-        Some(Cmd::SceneRecall((index - SCENE_START) as u8))
-    } else if index < EXTRA_SCENE_START {
-        Some(Cmd::Gig(index == GIG_START))
+    } else if let Some(scene) = scene_index(index) {
+        Some(Cmd::SceneRecall(scene))
     } else {
-        Some(Cmd::SceneRecall((index - EXTRA_SCENE_START + 4) as u8))
+        Some(Cmd::Gig(index == GIG_START))
     }
 }
 

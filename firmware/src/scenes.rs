@@ -307,10 +307,23 @@ pub fn rename_scene(preset: usize, index: usize, name: &str) -> Result<(), &'sta
 }
 
 pub fn recall_scene(index: usize) -> Result<(), &'static str> {
-    if busy() || !crate::link::connected() || crate::tuner::nano_tuner_is_active() {
-        return Err("Wait for recall, connect the Nano and exit tuner first");
+    if !crate::link::connected() || crate::tuner::nano_tuner_is_active() {
+        return Err("Connect the Nano and exit tuner before recalling a scene");
     }
-    let current = view();
+    let mut current = view();
+    if with(|state| {
+        state.preset == current.preset
+            && state
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.index == index)
+    }) {
+        return Ok(());
+    }
+    if busy() {
+        // An interrupted recall can still have stale readback; restore all target values.
+        current.idle = false;
+    }
     let preset = current.preset;
     let snapshot = with(|state| -> Result<_, &'static str> {
         let collection = state
@@ -329,6 +342,7 @@ pub fn recall_scene(index: usize) -> Result<(), &'static str> {
     let started_us = crate::clock::now_us();
     let plan = Plan::scene(snapshot, &current, started_us)?;
     with(|state| {
+        state.preset = preset;
         state.pending = Some(Pending {
             index,
             plan,

@@ -97,7 +97,9 @@ pub(super) fn refresh(app: &AppWindow, force: bool) {
         app.set_scene_library_scenes(model);
     }
     app.set_scene_library_scene(if app.get_scene_preset() == i32::from(preset) {
-        selected.map_or(-1, |index| index as i32)
+        crate::scenes::recalling_scene()
+            .or(selected)
+            .map_or(-1, |index| index as i32)
     } else {
         -1
     });

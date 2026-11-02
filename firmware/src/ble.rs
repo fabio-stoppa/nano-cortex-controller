@@ -974,10 +974,10 @@ async fn nano_commands<C: Controller, P: PacketPool>(
             }
         }
         for _ in 0..8 {
-            if !ready || crate::scenes::busy() {
+            if !ready {
                 break;
             }
-            let Some(cmd) = crate::link::pop_cmd() else {
+            let Some(cmd) = crate::link::pop_cmd_for_scene_busy(crate::scenes::busy()) else {
                 break;
             };
             apply_cmd(cmd);

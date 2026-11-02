@@ -372,9 +372,8 @@ impl Plan {
                 self.readback = Some((generation, Some(view.cab_generation)));
                 Progress::Write(Cmd::SceneFxRefresh)
             }
-            Some((generation, Some(cab_generation)))
-                if generation != view.generation
-                    && (self.target.cab.is_none() || view.cab_generation != cab_generation)
+            Some((_, Some(cab_generation)))
+                if (self.target.cab.is_none() || view.cab_generation != cab_generation)
                     && self.target.matches(view) =>
             {
                 Progress::Complete
@@ -468,8 +467,29 @@ mod tests {
             plan.poll(&view, 3),
             Progress::Write(Cmd::SceneFxRefresh)
         ));
-        view.generation += 1;
         assert!(matches!(plan.poll(&view, 4), Progress::Complete));
+    }
+
+    #[test]
+    fn verification_needs_fresh_cab_but_not_another_preset_dump() {
+        let mut view = fixture();
+        view.amp.have_cab_slot = true;
+        view.amp.cab_slot = 1;
+        view.cab.output = Some(0.5);
+        view.cab.high_pass = Some(0.0);
+        view.cab.low_pass = Some(1.0);
+        let snapshot = Snapshot::capture(&view).unwrap();
+        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        assert!(writes_before_readback(&mut plan, &view).is_empty());
+        assert!(matches!(plan.poll(&view, 2), Progress::Waiting));
+        view.generation += 1;
+        assert!(matches!(
+            plan.poll(&view, 3),
+            Progress::Write(Cmd::SceneFxRefresh)
+        ));
+        assert!(matches!(plan.poll(&view, 4), Progress::Waiting));
+        view.cab_generation += 1;
+        assert!(matches!(plan.poll(&view, 5), Progress::Complete));
     }
 
     #[test]

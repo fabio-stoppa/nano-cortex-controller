@@ -408,6 +408,65 @@ mod tests {
     }
 
     #[test]
+    fn latest_scene_replaces_unverified_recall_and_restores_stale_values() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        *settings::SCENE_RECORD.lock().unwrap() = None;
+        scenes::load();
+        state::AMP.with(|amp| amp.borrow_mut().valid = true);
+        fx::SNAPSHOT.with(|snapshot| {
+            let mut view = snapshot.borrow_mut();
+            *view = types::NanoFxState::reset_with_ids();
+            view.valid = true;
+            view.gate.on_known = true;
+            for block in &mut view.blocks {
+                block.valid = true;
+            }
+        });
+        scenes::capture_scene(1, 0, "Clean").unwrap();
+        state::AMP.with(|amp| amp.borrow_mut().gain = 80);
+        scenes::capture_scene(1, 1, "Lead").unwrap();
+        scenes::recall_scene(0).unwrap();
+        assert!(matches!(
+            scenes::poll(),
+            Some(link::Cmd::AmpKnob { knob: 0, .. })
+        ));
+        // The first write is sent, but readback still describes Lead.
+        scenes::recall_scene(1).unwrap();
+        assert_eq!(scenes::recalling_scene(), Some(1));
+        assert_eq!(scenes::scene(), None);
+        assert!(matches!(
+            scenes::poll(),
+            Some(link::Cmd::AmpKnob { knob: 0, raw: 80 })
+        ));
+        let version = scenes::version();
+        scenes::recall_scene(1).unwrap();
+        assert_eq!(scenes::version(), version, "Repeated press must not restart recall");
+        assert!(matches!(
+            scenes::poll(),
+            Some(link::Cmd::AmpKnob { knob: 1, .. })
+        ));
+        assert!(scenes::recall_scene(5).is_err());
+        assert_eq!(
+            scenes::recalling_scene(),
+            Some(1),
+            "Empty slot must not cancel recall"
+        );
+        assert!(scenes::capture_scene(1, 2, "Busy").is_err());
+        assert!(scenes::rename_scene(1, 1, "Busy").is_err());
+        for _ in 0..64 {
+            if matches!(scenes::poll(), Some(link::Cmd::SceneRefresh)) {
+                state::GENERATION.fetch_add(1, Ordering::Relaxed);
+            }
+            if !scenes::busy() {
+                break;
+            }
+        }
+        assert!(!scenes::busy());
+        assert_eq!(scenes::scene(), Some(1));
+    }
+
+    #[test]
     fn scenes_are_preset_scoped_and_failed_saves_preserve_data() {
         let _guard = LOCK.lock().unwrap();
         reset();
@@ -874,6 +933,54 @@ mod tests {
         learn_cc(1, 8);
         midi::feed(&[0x80, 0x80, 0xb0, 7, 127, 0x81, 0xb0, 8, 127]);
         assert_eq!(queued(), [(0, 127), (1, 127)]);
+    }
+
+    #[test]
+    fn rapid_touch_and_footswitch_scenes_coalesce_during_recall() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        let first = index("Recall scene 1");
+        let sixth = index("Recall scene 6");
+        learn_cc(first, 7);
+        learn_cc(sixth, 8);
+        link::push_cmd(link::Cmd::SceneRecallAt {
+            preset: 1,
+            scene: 1,
+        });
+        cc(7, 127);
+        cc(8, 127);
+        cc(8, 0);
+        assert!(matches!(
+            link::pop_cmd_for_scene_busy(true),
+            Some(link::Cmd::MidiAction { index, .. }) if index == sixth
+        ));
+        assert!(link::pop_cmd().is_none());
+        cc(8, 127);
+        link::push_cmd(link::Cmd::SceneRecall(0));
+        assert!(matches!(
+            link::pop_cmd_for_scene_busy(true),
+            Some(link::Cmd::SceneRecall(0))
+        ));
+        assert!(link::pop_cmd().is_none());
+        link::push_cmd(link::Cmd::SceneRecall(1));
+        link::push_cmd(link::Cmd::PresetAt(2));
+        link::push_cmd(link::Cmd::SceneRecall(2));
+        assert!(matches!(
+            link::pop_cmd_for_scene_busy(true),
+            Some(link::Cmd::SceneRecall(1))
+        ));
+        assert!(link::pop_cmd_for_scene_busy(true).is_none());
+        assert!(matches!(
+            link::pop_cmd_for_scene_busy(false),
+            Some(link::Cmd::PresetAt(2))
+        ));
+        assert!(matches!(
+            link::pop_cmd_for_scene_busy(false),
+            Some(link::Cmd::SceneRecall(2))
+        ));
+        link::push_cmd(link::Cmd::SceneRecall(1));
+        link::set_up(false);
+        assert!(link::pop_cmd_for_scene_busy(true).is_none());
     }
 
     #[test]
