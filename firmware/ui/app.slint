@@ -352,26 +352,66 @@ component ChainRail inherits Rectangle {
 }
 
 component HeaderButton inherits Rectangle {
+    in property <bool> enabled: true;
     in property <string> label;
     in property <bool> hot: false;
     in property <bool> light: false;
     in property <bool> choice: false;
+    in property <bool> hold-enabled: false;
+    in property <bool> marked: false;
     callback tapped();
+    callback held();
+    property <bool> held-sent: false;
+    property <bool> hold-cancelled: false;
+    property <length> down-x;
+    property <length> down-y;
     preferred-width: btn-text.preferred-width + 36px;
     min-width: max(72px, self.preferred-width);
     height: 52px;
     background: choice ? (hot ? #404040 : transparent) : (light ? #ffffff : (hot ? #1a3af8 : #000000));
     border-radius: Radius.default;
     btn-text := Text {
+        width: root.width - (root.marked ? 20px : 0px);
         text: label;
+        overflow: elide;
         color: choice ? (hot ? #ffffff : #666666) : (light ? #000000 : (hot ? #ffffff : #e0e0e0));
         font-size: 16px;
         font-weight: 700;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
-    TouchArea {
-        clicked => { root.tapped(); }
+    if root.marked: Text {
+        x: root.width - 20px;
+        width: 16px;
+        text: "*";
+        color: #ffffff;
+        font-size: 16px;
+        font-weight: 700;
+        vertical-alignment: center;
+    }
+    Timer {
+        interval: 450ms;
+        running: root.hold-enabled && button-touch.pressed && root.enabled && !root.held-sent && !root.hold-cancelled;
+        triggered => { root.held-sent = true; root.held(); }
+    }
+    button-touch := TouchArea {
+        enabled: root.enabled;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.held-sent = false;
+                root.hold-cancelled = false;
+                root.down-x = self.mouse-x;
+                root.down-y = self.mouse-y;
+            }
+            if event.kind == PointerEventKind.cancel
+                || (event.kind == PointerEventKind.move
+                    && (abs(self.mouse-x - root.down-x) > 14px || abs(self.mouse-y - root.down-y) > 14px)) {
+                root.hold-cancelled = true;
+            }
+        }
+        clicked => {
+            if !root.hold-enabled || (!root.held-sent && !root.hold-cancelled) { root.tapped(); }
+        }
     }
 }
 
@@ -934,6 +974,8 @@ component SettingsButton inherits Rectangle {
 }
 
 component HeaderBar inherits Rectangle {
+    in property <string> scene-label: "Scene";
+    in property <bool> scene-enabled: true;
     in property <bool> portrait;
     in property <int> page;
     in property <string> preset;
@@ -973,7 +1015,7 @@ component HeaderBar inherits Rectangle {
         spacing: 8px;
         // Both side groups share one width so the preset name stays centered.
         VCenter {
-            width: portrait ? 134px : 214px;
+            width: portrait ? 174px : 254px;
             TouchArea {
                 height: 44px;
                 clicked => { root.tempo-tapped(); }
@@ -1038,9 +1080,10 @@ component HeaderBar inherits Rectangle {
             spacing: portrait ? 8px : 14px;
             width: portrait ? 134px : 214px;
             VCenter { HeaderButton {
-                label: "Banks";
-                min-width: 72px;
-                preferred-width: 72px;
+                label: root.scene-label;
+                min-width: 110px;
+                preferred-width: 110px;
+                enabled: root.scene-enabled;
                 height: 44px;
                 tapped => { root.performance-tapped(); }
             } }
@@ -1396,6 +1439,16 @@ component AmpPanel inherits Rectangle {
 }
 
 component FxPanel inherits Rectangle {
+    in property <[string]> presets;
+    in property <[bool]> preset-assigned;
+    in property <int> selected-preset: -1;
+    in property <bool> preset-dirty: false;
+    in-out property <int> menu-index: -1;
+    in property <bool> preset-enabled;
+    callback preset-recall(int);
+    callback preset-store(int);
+    callback preset-rename(int);
+    callback preset-delete(int);
     in property <string> n0;
     in property <string> v0;
     in property <float> a0;
@@ -1476,14 +1529,39 @@ component FxPanel inherits Rectangle {
     property <length> cell-width: (root.width - 4px - 24px) / 4;
     background: transparent;
     clip: true;
+    HorizontalLayout {
+        x: 2px;
+        y: 2px;
+        width: root.width - 4px;
+        height: 40px;
+        spacing: 4px;
+        for name[index] in root.presets: HeaderButton {
+            height: 40px;
+            label: name;
+            marked: root.selected-preset == index && root.preset-dirty;
+            min-width: 0px;
+            preferred-width: 0px;
+            horizontal-stretch: 1;
+            hot: root.selected-preset == index;
+            enabled: root.preset-enabled;
+            hold-enabled: true;
+            held => { root.menu-index = index; }
+            tapped => {
+                if root.preset-assigned[index] { root.preset-recall(index); }
+                else { root.preset-store(index); }
+            }
+        }
+    }
     Flickable {
+        y: 50px;
         width: 100%;
-        height: 100%;
+        height: max(0px, root.height - 50px);
         viewport-y: 0px;
         VerticalLayout {
             width: parent.width;
             alignment: start;
             padding: 2px;
+            padding-top: 0px;
             spacing: 8px;
             if root.n0 != "-" || root.n1 != "-" || root.n2 != "-" || root.n3 != "-": HorizontalLayout {
                 width: 100%;
@@ -1609,6 +1687,48 @@ component FxPanel inherits Rectangle {
                 if root.n23 != "-": ParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n23; value: root.v23; amount: root.a23;
                     changed(v) => { root.param-changed(23, v); }
+                }
+            }
+        }
+    }
+    if root.menu-index >= 0: Rectangle {
+        TouchArea { clicked => { root.menu-index = -1; } }
+        Rectangle {
+            x: clamp(2px + root.menu-index * (root.width - 4px + 4px) / max(root.presets.length, 1), 2px, max(2px, root.width - self.width - 2px));
+            y: 46px;
+            width: min(220px, root.width - 4px);
+            height: 180px;
+            background: #303030;
+            border-radius: Radius.default;
+            for action in 3: Rectangle {
+                x: 4px;
+                y: action * 60px;
+                width: parent.width - 8px;
+                height: 60px;
+                property <bool> action-enabled: root.preset-enabled && (action == 0 || root.preset-assigned[root.menu-index]);
+                Text {
+                    x: 12px;
+                    text: action == 0 ? "Save" : action == 1 ? "Rename" : "Delete";
+                    color: parent.action-enabled ? #f0f0f0 : #666666;
+                    font-size: 18px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                if action == 2: Rectangle {
+                    x: 8px;
+                    y: parent.height - 1px;
+                    width: parent.width - 16px;
+                    height: 1px;
+                    background: #ffffff30;
+                }
+                TouchArea {
+                    enabled: parent.action-enabled;
+                    clicked => {
+                        if action == 0 { root.preset-store(root.menu-index); }
+                        else if action == 1 { root.preset-rename(root.menu-index); }
+                        else { root.preset-delete(root.menu-index); }
+                        root.menu-index = -1;
+                    }
                 }
             }
         }
@@ -1874,26 +1994,30 @@ component MidiPanel inherits Rectangle {
             vertical-stretch: 1;
             viewport-width: self.width;
             viewport-height: root.rows.length * 76px;
-            for row[i] in root.rows: OptionRow {
+            property <int> first-row: min(max(0, root.rows.length - 1), max(0, floor(-self.viewport-y / 76px)));
+            property <int> visible-rows: min(root.rows.length - self.first-row, ceil(self.height / 76px) + 1);
+            for offset in midi-list.visible-rows: action-row := OptionRow {
+                property <int> action-index: midi-list.first-row + offset;
+                property <MidiRow> action: root.rows[self.action-index];
                 x: 0px;
-                y: i * 76px;
+                y: self.action-index * 76px;
                 width: midi-list.width - (midi-list.viewport-height > midi-list.height ? 16px : 0px);
-                label: row.name;
-                value: row.learning ? "Waiting..." : (row.assigned == "" ? "-" : row.assigned);
-                highlight: row.learning;
+                label: self.action.name;
+                value: self.action.learning ? "Waiting..." : (self.action.assigned == "" ? "-" : self.action.assigned);
+                highlight: self.action.learning;
                 VCenter { HeaderButton {
-                    label: row.learning ? "Cancel" : "Learn";
+                    label: action-row.action.learning ? "Cancel" : "Learn";
                     preferred-width: 104px;
                     min-width: 104px;
-                    hot: !row.learning;
-                    light: row.learning;
-                    tapped => { root.learn(i); }
+                    hot: !action-row.action.learning;
+                    light: action-row.action.learning;
+                    tapped => { root.learn(action-row.action-index); }
                 } }
                 VCenter { HeaderButton {
                     label: "Clear";
                     preferred-width: 104px;
                     min-width: 104px;
-                    tapped => { root.clear(i); }
+                    tapped => { root.clear(action-row.action-index); }
                 } }
             }
             ScrollFade {
@@ -2377,14 +2501,6 @@ component ConnectingOverlay inherits Rectangle {
         font-weight: 700;
         horizontal-alignment: center;
     }
-    HeaderButton {
-        x: parent.width - self.width - 12px;
-        y: 12px;
-        width: 100px;
-        height: 32px;
-        label: "Banks";
-        tapped => { root.performance(); }
-    }
 }
 
 component GigButton inherits Rectangle {
@@ -2410,18 +2526,11 @@ component GigPanel inherits Rectangle {
     in property <bool> portrait;
     in property <bool> connected;
     in property <bool> busy;
-    in property <string> bank-name;
-    in property <bool> have-banks;
     in property <string> preset;
     in property <string> notice;
-    in property <[string]> slots;
-    in property <[bool]> assigned;
-    in property <int> slot: -1;
     in property <[string]> scenes;
     in property <[bool]> scene-assigned;
     in property <int> scene: -1;
-    callback bank-stepped(int);
-    callback recall(int);
     callback scene-recall(int);
     callback tuner();
     callback tempo();
@@ -2434,36 +2543,20 @@ component GigPanel inherits Rectangle {
         HorizontalLayout {
             height: 56px;
             spacing: 8px;
-            GigButton { width: 82px; label: "Prev"; enabled: root.have-banks && !root.busy; tapped => { root.bank-stepped(-1); } }
-            Text { text: root.bank-name; font-size: 24px; font-weight: 700; color: #ffffff; horizontal-stretch: 1; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
-            GigButton { width: 82px; label: "Next"; enabled: root.have-banks && !root.busy; tapped => { root.bank-stepped(1); } }
+            Text { text: "Gig"; font-size: 24px; font-weight: 700; color: #ffffff; horizontal-stretch: 1; }
             GigButton { width: 88px; label: "Editor"; tapped => { root.editor(); } }
         }
         Text { text: root.preset; font-size: 22px; font-weight: 700; color: #ffffff; overflow: elide; }
         Text { text: root.connected ? root.notice : "Disconnected - connect the Nano to play"; color: #909090; font-size: 14px; wrap: word-wrap; }
-        slot-grid := Rectangle {
+        scene-grid := Rectangle {
             min-height: 160px;
             vertical-stretch: 1;
             background: transparent;
-            for label[index] in root.slots: GigButton {
-                width: (slot-grid.width - 8px) / 2;
-                height: (slot-grid.height - 8px) / 2;
-                x: mod(index, 2) * (self.width + 8px);
-                y: floor(index / 2) * (self.height + 8px);
-                label: label;
-                highlight: root.slot == index;
-                enabled: root.connected && !root.busy && root.assigned[index];
-                tapped => { root.recall(index); }
-            }
-        }
-        scene-grid := Rectangle {
-            height: root.portrait ? 160px : 80px;
-            background: transparent;
             for label[index] in root.scenes: GigButton {
                 width: root.portrait ? (scene-grid.width - 8px) / 2 : (scene-grid.width - 24px) / 4;
-                height: root.portrait ? (scene-grid.height - 8px) / 2 : scene-grid.height;
-                x: (root.portrait ? mod(index, 2) : index) * (self.width + 8px);
-                y: root.portrait ? floor(index / 2) * (self.height + 8px) : 0px;
+                height: (scene-grid.height - (ceil(root.scenes.length / (root.portrait ? 2 : 4)) - 1) * 8px) / max(1, ceil(root.scenes.length / (root.portrait ? 2 : 4)));
+                x: mod(index, root.portrait ? 2 : 4) * (self.width + 8px);
+                y: floor(index / (root.portrait ? 2 : 4)) * (self.height + 8px);
                 label: label;
                 highlight: root.scene == index;
                 enabled: root.connected && !root.busy && root.scene-assigned[index];
@@ -2479,118 +2572,149 @@ component GigPanel inherits Rectangle {
     }
 }
 
-component FxPresetPanel inherits Rectangle {
-    in property <[string]> presets;
-    in property <int> block: 0;
-    in property <string> notice;
-    callback selected(int);
-    callback recall(int);
-    callback store(int);
-    callback remove(int);
-    callback closed();
-    background: Surface.background;
-    TouchArea {}
-    VerticalLayout {
-        padding: 14px;
-        spacing: 8px;
-        PopupHeader { title: "Named FX presets (32 slots)"; closed => { root.closed(); } }
-        HorizontalLayout {
-            spacing: 6px;
-            for name[index] in ["Pre 1", "Pre 2", "Post 1", "Post 2", "Post 3"]: HeaderButton {
-                label: name; hot: root.block == index;
-                tapped => { root.selected(index); }
-            }
-        }
-        Text { text: root.notice; color: #909090; font-size: 14px; wrap: word-wrap; }
-        shelf := Flickable {
-            vertical-stretch: 1;
-            viewport-width: self.width;
-            viewport-height: root.presets.length * 76px;
-            for label[index] in root.presets: OptionRow {
-                y: index * 76px; width: shelf.width;
-                label: label; value: "";
-                VCenter { HeaderButton { label: "Play"; height: 44px; tapped => { root.recall(index); } } }
-                VCenter { HeaderButton { label: "Store"; height: 44px; tapped => { root.store(index); } } }
-                VCenter { HeaderButton { label: "Delete"; height: 44px; tapped => { root.remove(index); } } }
-            }
-        }
-    }
-}
-
-component BankPanel inherits Rectangle {
-    in property <[string]> banks;
-    in property <[string]> slots;
-    in property <int> bank: 0;
-    in property <int> current-slot: -1;
-    in property <string> notice;
-    in property <bool> scenes-open;
+component ScenePanel inherits Rectangle {
+    in-out property <int> menu-index: -1;
+    property <length> menu-x;
+    property <length> menu-y;
+    changed enabled => { root.menu-index = -1; }
+    changed portrait => { root.menu-index = -1; }
+    changed title => { root.menu-index = -1; }
+    in property <bool> portrait;
+    property <int> columns: root.portrait ? 2 : 3;
+    in property <bool> dirty;
+    in property <string> title;
+    in property <bool> enabled;
+    in property <[bool]> assigned;
     in property <[string]> scenes;
     in property <int> scene: -1;
-    callback scenes-opened(int);
-    callback scenes-closed();
     callback scene-recall(int);
     callback scene-store(int);
+    callback scene-rename(int);
     callback scene-clear(int);
     callback closed();
-    callback add();
-    callback selected(int);
-    callback rename(int);
-    callback remove(int);
-    callback recall(int);
-    callback assign(int);
-    callback clear(int);
-    callback fx-presets();
-    callback gig();
     background: Surface.background;
     TouchArea {}
     VerticalLayout {
         padding: 14px;
         spacing: 8px;
         PopupHeader {
-            title: root.scenes-open ? "Bank slot scenes" : "Custom banks";
-            closed => { if root.scenes-open { root.scenes-closed(); } else { root.closed(); } }
+            title: root.title;
+            closed => { root.closed(); }
         }
-        Text { text: root.notice; color: #909090; font-size: 14px; wrap: word-wrap; }
-        if !root.scenes-open: HorizontalLayout {
-            spacing: 8px;
-            HeaderButton { label: "Add bank (max 8)"; height: 40px; tapped => { root.add(); } }
-            HeaderButton { label: "FX presets"; height: 40px; tapped => { root.fx-presets(); } }
-            HeaderButton { label: "Gig"; height: 40px; tapped => { root.gig(); } }
-        }
-        if !root.scenes-open: bank-list := Flickable {
-            height: min(152px, root.banks.length * 76px);
-            viewport-width: self.width;
-            viewport-height: root.banks.length * 76px;
-            for name[index] in root.banks: OptionRow {
-                y: index * 76px; width: bank-list.width;
-                label: name; value: ""; highlight: index == root.bank;
-                VCenter { HeaderButton { label: "Select"; height: 40px; tapped => { root.selected(index); } } }
-                VCenter { HeaderButton { label: "Name"; height: 40px; tapped => { root.rename(index); } } }
-                VCenter { HeaderButton { label: "Delete"; height: 40px; tapped => { root.remove(index); } } }
-            }
-        }
-        if !root.scenes-open: slot-list := Flickable {
+        Rectangle { height: 2px; }
+        scene-list := Flickable {
             vertical-stretch: 1;
             viewport-width: self.width;
-            viewport-height: root.slots.length * 76px;
-            for label[index] in root.slots: OptionRow {
-                y: index * 76px; width: slot-list.width;
-                label: label; value: ""; highlight: index == root.current-slot;
-                VCenter { HeaderButton { label: "Play"; height: 44px; tapped => { root.recall(index); } } }
-                VCenter { HeaderButton { label: "Assign"; height: 44px; tapped => { root.assign(index); } } }
-                VCenter { HeaderButton { label: "Scenes"; height: 44px; tapped => { root.scenes-opened(index); } } }
+            viewport-height: ceil(root.scenes.length / root.columns) * 102px - 8px;
+            for label[index] in root.scenes: Rectangle {
+                x: mod(index, root.columns) * (self.width + 8px);
+                y: floor(index / root.columns) * 102px;
+                width: (scene-list.width - (root.columns - 1) * 8px) / root.columns;
+                height: 94px;
+                background: index == root.scene ? #1a3af8 : #2a2a2a;
+                border-radius: Radius.default;
+                TouchArea {
+                    x: 0px; y: 0px;
+                    width: parent.width - 64px;
+                    height: parent.height;
+                    enabled: root.enabled && root.assigned[index];
+                    clicked => { root.scene-recall(index); }
+                }
+                Text {
+                    x: 10px;
+                    width: 32px;
+                    text: "0" + (index + 1);
+                    color: #ffffff70;
+                    font-size: 19px; font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                        Text {
+                            x: 48px; y: 8px; height: 78px;
+                            width: parent.width - 124px - (index == root.scene && root.dirty ? 16px : 0px);
+                            text: label;
+                            color: index == root.scene ? #ffffff : #ececec;
+                            font-size: 19px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            wrap: word-wrap;
+                        }
+                        if index == root.scene && root.dirty: Text {
+                            x: parent.width - 92px;
+                            width: 16px;
+                            text: "*";
+                            color: #ffffff;
+                            font-size: 20px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                    Rectangle {
+                        x: parent.width - 64px;
+                        width: 64px;
+                        height: parent.height;
+                        VerticalLayout {
+                            x: parent.width - 34px;
+                            width: 28px;
+                            height: parent.height;
+                            alignment: center;
+                            spacing: 4px;
+                            for dot in 3: Rectangle {
+                                width: 5px; height: 5px;
+                                background: #e0e0e0;
+                                border-radius: 3px;
+                            }
+                        }
+                        TouchArea {
+                            enabled: root.enabled;
+                            clicked => {
+                                root.menu-index = index;
+                                root.menu-x = clamp(14px + mod(index, root.columns) * (scene-list.width + 8px) / root.columns
+                                    + (scene-list.width - (root.columns - 1) * 8px) / root.columns - 42px,
+                                    8px, root.width - 228px);
+                                root.menu-y = clamp(90px + floor(index / root.columns) * 102px + scene-list.viewport-y,
+                                    8px, root.height - 188px);
+                        }
+                    }
+                }
             }
+            ScrollFade { width: scene-list.width; offset: -scene-list.viewport-y; page: scene-list.height; total: scene-list.viewport-height; }
         }
-        if root.scenes-open: scene-list := Flickable {
-            vertical-stretch: 1;
-            viewport-width: self.width;
-            viewport-height: root.scenes.length * 76px;
-            for label[index] in root.scenes: OptionRow {
-                y: index * 76px; width: scene-list.width;
-                label: label; value: ""; highlight: index == root.scene;
-                VCenter { HeaderButton { label: "Play"; height: 44px; tapped => { root.scene-recall(index); } } }
-                VCenter { HeaderButton { label: "Store"; height: 44px; tapped => { root.scene-store(index); } } }
-                VCenter { HeaderButton { label: "Delete"; height: 44px; tapped => { root.scene-clear(index); } } }
+    }
+    if root.menu-index >= 0: Rectangle {
+        TouchArea { clicked => { root.menu-index = -1; } }
+        Rectangle {
+            x: root.menu-x; y: root.menu-y;
+            width: 220px; height: 180px;
+            background: #303030;
+            border-radius: Radius.default;
+            for action in 3: Rectangle {
+                x: 4px; y: action * 60px;
+                width: parent.width - 8px; height: 60px;
+                property <bool> action-enabled: root.enabled && (action == 1 || root.assigned[root.menu-index]);
+                Text {
+                    x: 12px;
+                    text: action == 0 ? "Rename" : action == 1 ? "Save" : "Delete";
+                    color: parent.action-enabled ? #f0f0f0 : #666666;
+                    font-size: 18px; font-weight: 700;
+                    vertical-alignment: center;
+                }
+                if action == 2: Rectangle {
+                    x: 8px;
+                    y: 0px;
+                    width: parent.width - 16px;
+                    height: 1px;
+                    background: #ffffff30;
+                }
+                TouchArea {
+                    enabled: parent.action-enabled;
+                    clicked => {
+                        if action == 0 { root.scene-rename(root.menu-index); }
+                        else if action == 1 { root.scene-store(root.menu-index); }
+                        else { root.scene-clear(root.menu-index); }
+                        root.menu-index = -1;
+                    }
+                }
             }
         }
     }
@@ -3046,63 +3170,58 @@ export component AppWindow inherits Window {
     callback midi-clear-all();
     callback midi-clear-all-requested();
     callback performance-opened();
-    callback performance-add();
-    callback performance-selected(int);
-    callback performance-rename(int);
-    callback performance-delete(int);
-    callback performance-recall(int);
-    callback performance-assign(int);
-    callback performance-clear(int);
     in-out property <bool> performance-open: false;
-    in-out property <[string]> performance-banks: [];
-    in-out property <[string]> performance-slots: [];
-    in-out property <int> performance-bank: 0;
-    in-out property <int> performance-slot: -1;
     in-out property <string> performance-notice: "";
     in-out property <int> performance-name-action: 0;
-    in-out property <int> performance-name-bank: -1;
-    in-out property <int> performance-delete-bank: -1;
-    in-out property <int> performance-assign-slot: -1;
-    in-out property <int> performance-edit-slot: -1;
     in-out property <int> performance-edit-scene: -1;
     in-out property <int> performance-scene: -1;
+    in-out property <string> scene-label: "Scene";
+    in-out property <int> scene-preset: 1;
+    in-out property <string> scene-title: "";
+    in-out property <int> scene-menu-index: -1;
+    changed performance-open => { root.scene-menu-index = -1; }
+    changed kbd-open => { root.scene-menu-index = -1; }
+    in-out property <bool> scene-dirty: false;
+    in-out property <[bool]> scene-assigned: [];
     in-out property <[string]> performance-scenes: [];
     in-out property <int> performance-confirm-action: 0;
-    in-out property <int> performance-pending-preset: -1;
-    in-out property <bool> fx-presets-open: false;
+    in-out property <int> fx-preset-menu-index: -1;
+    in-out property <bool> fx-preset-dirty: false;
     in-out property <int> fx-preset-block: 0;
+    in-out property <string> fx-preset-model: "";
+    in-out property <int> fx-store-block: 0;
+    in-out property <string> fx-store-model: "";
+    in-out property <int> fx-store-preset: 1;
+    in-out property <[bool]> fx-preset-assigned: [];
+    in-out property <int> fx-preset-selected: -1;
     in-out property <int> fx-preset-edit: -1;
     in-out property <[string]> fx-presets: [];
-    callback fx-presets-opened();
-    callback fx-preset-block-selected(int);
     callback fx-preset-recall(int);
     callback fx-preset-store(int);
+    callback fx-preset-rename(int);
     callback fx-preset-delete(int);
     in-out property <bool> gig-open: false;
     in-out property <bool> performance-busy: false;
-    in-out property <[bool]> gig-assigned: [];
     in-out property <[string]> gig-scenes: [];
     in-out property <[bool]> gig-scene-assigned: [];
     in-out property <int> gig-scene: -1;
-    callback gig-bank-stepped(int);
     callback gig-scene-recall(int);
     callback gig-mode-set(bool);
     gig-mode-set(enabled) => {
         root.gig-open = enabled;
         root.settings-open = false;
         root.performance-open = false;
-        root.fx-presets-open = false;
+        root.fx-preset-menu-index = -1;
         root.model-open = false;
         root.confirm-open = false;
         root.kbd-open = false;
         root.performance-confirm-action = 0;
         root.performance-name-action = 0;
-        root.performance-delete-bank = -1;
         root.midi-clear-confirm = false;
     }
-    callback performance-scenes-opened(int);
     callback performance-scene-recall(int);
     callback performance-scene-store(int);
+    callback performance-scene-rename(int);
     callback performance-scene-clear(int);
     property <bool> midi-clear-confirm: false;
     midi-clear-all-requested => {
@@ -3138,8 +3257,14 @@ export component AppWindow inherits Window {
     // The software renderer draws everything under an overlay, so hide what an
     // opaque or full-screen layer covers.
     // Confirmations are cards over whatever is open, so they do not hide it.
-    property <bool> popup-open: root.kbd-open || root.model-open || root.settings-open || root.performance-open || root.fx-presets-open || root.gig-open;
+    property <bool> popup-open: root.kbd-open || root.model-open || root.settings-open || root.performance-open || root.gig-open;
     property <bool> main-covered: root.popup-open || root.page == 2 || root.connecting;
+    changed main-covered => { root.fx-preset-menu-index = -1; }
+    changed chain => { root.fx-preset-menu-index = -1; }
+    changed fx-preset-model => { root.fx-preset-menu-index = -1; }
+    changed page => { root.fx-preset-menu-index = -1; }
+    changed portrait => { root.fx-preset-menu-index = -1; }
+    changed performance-busy => { root.fx-preset-menu-index = -1; }
 
     Rectangle {
         visible: !root.main-covered;
@@ -3162,6 +3287,8 @@ export component AppWindow inherits Window {
                 settings-shown: root.settings-open;
                 settings-tapped => { root.tools-opened(); }
                 performance-tapped => { root.performance-opened(); }
+                scene-label: root.scene-label;
+                scene-enabled: !root.connecting && !root.performance-busy;
             }
             if !root.portrait: HorizontalLayout {
                 // With the panels' 2px inset this is the 8px gap used between chain tabs.
@@ -3231,6 +3358,16 @@ export component AppWindow inherits Window {
                         gate-tapped => { root.gate-tapped(); }
                     }
                     if root.page == 1: FxPanel {
+                        presets: root.fx-presets;
+                        preset-assigned: root.fx-preset-assigned;
+                        selected-preset: root.fx-preset-selected;
+                        preset-dirty: root.fx-preset-dirty;
+                        menu-index <=> root.fx-preset-menu-index;
+                        preset-enabled: !root.connecting && !root.performance-busy && root.fx-preset-model != "";
+                        preset-recall(index) => { root.fx-preset-recall(index); }
+                        preset-store(index) => { root.fx-preset-store(index); }
+                        preset-rename(index) => { root.fx-preset-rename(index); }
+                        preset-delete(index) => { root.fx-preset-delete(index); }
                         model-name: root.model;
                         model-enabled: root.model-enabled;
                         model-list-tapped => { root.model-list-tapped(); }
@@ -3308,6 +3445,16 @@ export component AppWindow inherits Window {
                         gate-tapped => { root.gate-tapped(); }
                     }
                     if root.page == 1: FxPanel {
+                        presets: root.fx-presets;
+                        preset-assigned: root.fx-preset-assigned;
+                        selected-preset: root.fx-preset-selected;
+                        preset-dirty: root.fx-preset-dirty;
+                        menu-index <=> root.fx-preset-menu-index;
+                        preset-enabled: !root.connecting && !root.performance-busy && root.fx-preset-model != "";
+                        preset-recall(index) => { root.fx-preset-recall(index); }
+                        preset-store(index) => { root.fx-preset-store(index); }
+                        preset-rename(index) => { root.fx-preset-rename(index); }
+                        preset-delete(index) => { root.fx-preset-delete(index); }
                         model-name: root.model;
                         model-enabled: root.model-enabled;
                         model-list-tapped => { root.model-list-tapped(); }
@@ -3464,29 +3611,21 @@ export component AppWindow inherits Window {
         closed => { root.model-open = false; }
     }
 
-    if root.performance-open && !root.model-open: BankPanel {
+    if root.performance-open && !root.model-open: ScenePanel {
         width: root.width; height: root.height;
-        visible: !root.kbd-open && !root.fx-presets-open;
-        banks: root.performance-banks; slots: root.performance-slots;
-        bank: root.performance-bank; current-slot: root.performance-slot;
-        notice: root.performance-notice;
-        scenes-open: root.performance-edit-slot >= 0;
+        visible: !root.kbd-open;
+        title: root.scene-title;
+        menu-index <=> root.scene-menu-index;
+        portrait: root.portrait;
+        enabled: !root.connecting && !root.performance-busy;
+        assigned: root.scene-assigned;
+        dirty: root.scene-dirty;
         scenes: root.performance-scenes; scene: root.performance-scene;
-        scenes-opened(index) => { root.performance-scenes-opened(index); }
-        scenes-closed => { root.performance-edit-slot = -1; }
-        fx-presets => { root.fx-presets-opened(); }
-        gig => { root.gig-mode-set(true); }
         scene-recall(index) => { root.performance-scene-recall(index); }
         scene-store(index) => { root.performance-scene-store(index); }
+        scene-rename(index) => { root.performance-scene-rename(index); }
         scene-clear(index) => { root.midi-clear-confirm = false; root.performance-scene-clear(index); }
         closed => { root.performance-open = false; }
-        add => { root.performance-add(); }
-        selected(index) => { root.performance-selected(index); }
-        rename(index) => { root.performance-rename(index); }
-        remove(index) => { root.midi-clear-confirm = false; root.performance-delete(index); }
-        recall(index) => { root.performance-recall(index); }
-        assign(index) => { root.performance-assign(index); }
-        clear(index) => { root.performance-clear(index); }
     }
 
     if root.gig-open && root.page != 2: GigPanel {
@@ -3494,30 +3633,13 @@ export component AppWindow inherits Window {
         portrait: root.portrait;
         connected: !root.connecting;
         busy: root.performance-busy;
-        bank-name: root.performance-banks.length > 0 ? root.performance-banks[root.performance-bank] : "No banks";
-        have-banks: root.performance-banks.length > 0;
         preset: root.preset;
         notice: root.performance-notice;
-        slots: root.performance-slots; assigned: root.gig-assigned; slot: root.performance-slot;
         scenes: root.gig-scenes; scene-assigned: root.gig-scene-assigned; scene: root.gig-scene;
-        bank-stepped(delta) => { root.gig-bank-stepped(delta); }
-        recall(index) => { root.performance-recall(index); }
         scene-recall(index) => { root.gig-scene-recall(index); }
         tuner => { root.tuner-tapped(); }
         tempo => { root.tempo-tapped(); }
         editor => { root.gig-mode-set(false); }
-    }
-
-    if root.fx-presets-open: FxPresetPanel {
-        visible: !root.kbd-open;
-        presets: root.fx-presets;
-        block: root.fx-preset-block;
-        notice: root.performance-notice;
-        selected(index) => { root.fx-preset-block-selected(index); }
-        recall(index) => { root.fx-preset-recall(index); }
-        store(index) => { root.fx-preset-store(index); }
-        remove(index) => { root.fx-preset-delete(index); }
-        closed => { root.fx-presets-open = false; }
     }
 
     if root.confirm-open: ConfirmDialog {
@@ -3538,7 +3660,7 @@ export component AppWindow inherits Window {
         }
         closed => {
             root.confirm-open = false; root.midi-clear-confirm = false;
-            root.performance-delete-bank = -1; root.performance-confirm-action = 0;
+            root.performance-confirm-action = 0;
         }
     }
 
@@ -3555,7 +3677,7 @@ export component AppWindow inherits Window {
         closed => { root.kbd-open = false; root.performance-name-action = 0; }
     }
 
-    if root.connecting && !root.performance-open && !root.fx-presets-open && !root.gig-open: ConnectingOverlay {
+    if root.connecting && !root.performance-open && !root.gig-open: ConnectingOverlay {
         amp-state: root.conn-amp;
         foot-state: root.conn-foot;
         loading: root.load-status;

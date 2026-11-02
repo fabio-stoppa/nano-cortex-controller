@@ -5,32 +5,32 @@ use core::cell::RefCell;
 pub mod data;
 #[path = "performance/restore.rs"]
 pub mod restore;
-use data::{Bank, Config, SLOTS};
+use data::Config;
 use restore::{Plan, Progress, View};
 
 enum Pending {
-    Bank {
-        preset: u8,
-        ack: u32,
-        requested: Option<u32>,
-        deadline: i64,
-    },
     Scene {
         index: usize,
         plan: Plan,
     },
     Effect {
+        index: usize,
+        block: usize,
         plan: Plan,
     },
 }
 
 struct State {
     config: Option<Config>,
-    bank: usize,
-    slot: Option<usize>,
+    load_error: Option<&'static str>,
     version: u32,
     notice: &'static str,
     scene: Option<usize>,
+    scene_dirty: bool,
+    preset: u8,
+    fx_selected: [Option<usize>; 5],
+    fx_models: [Vec<u8>; 5],
+    fx_dirty: [bool; 5],
     pending: Option<Pending>,
 }
 
@@ -40,11 +40,15 @@ unsafe impl Sync for Store {}
 
 static STATE: Store = Store(RefCell::new(State {
     config: None,
-    bank: 0,
-    slot: None,
+    load_error: None,
     version: 1,
     notice: "",
     scene: None,
+    scene_dirty: false,
+    preset: 0,
+    fx_selected: [None; 5],
+    fx_models: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+    fx_dirty: [false; 5],
     pending: None,
 }));
 
@@ -60,11 +64,15 @@ impl State {
 
 pub fn load() {
     let config = crate::settings::load_performance_json()
-        .and_then(|json| json.as_deref().map(Config::decode).transpose());
+        .and_then(|json| json.as_deref().map(Config::decode).transpose())
+        .map(Option::unwrap_or_default);
     match config {
-        Ok(config) => install(config.unwrap_or_default()),
+        Ok(config) => {
+            install(config);
+        }
         Err(error) => {
-            with(|state| state.config = Some(Config::default()));
+            install(Config::default());
+            with(|state| state.load_error = Some(error));
             report(error);
         }
     }
@@ -80,10 +88,14 @@ pub fn report(notice: &'static str) {
 
 fn install(config: Config) {
     with(|state| {
-        state.bank = state.bank.min(config.banks.len().saturating_sub(1));
         state.config = Some(config);
-        state.slot = None;
+        state.load_error = None;
         state.scene = None;
+        state.scene_dirty = false;
+        state.preset = crate::state::nano_state_preset_slot();
+        state.fx_selected = [None; 5];
+        state.fx_models = Default::default();
+        state.fx_dirty = [false; 5];
         state.pending = None;
         state.notice = "Performance configuration saved";
         state.version = state.version.wrapping_add(1);
@@ -96,6 +108,9 @@ pub fn export_json() -> Result<String, &'static str> {
     config.encode()
 }
 fn edit(f: impl FnOnce(&mut Config) -> Result<(), &'static str>) -> Result<(), &'static str> {
+    if let Some(error) = with(|state| state.load_error) {
+        return Err(error);
+    }
     if busy() {
         return Err("Wait for the current recall to finish");
     }
@@ -103,133 +118,14 @@ fn edit(f: impl FnOnce(&mut Config) -> Result<(), &'static str>) -> Result<(), &
     f(&mut changed)?;
     let json = changed.encode()?;
     crate::settings::save_performance_json(&json)?;
-    install(changed);
+    with(|state| {
+        state.config = Some(changed);
+        state.notice = "Performance configuration saved";
+        state.version = state.version.wrapping_add(1);
+    });
     Ok(())
 }
 
-pub fn add_bank(name: &str) -> Result<(), &'static str> {
-    edit(|config| {
-        config.banks.push(Bank {
-            name: String::from(name),
-            slots: [None; SLOTS],
-            scenes: Default::default(),
-        });
-        Ok(())
-    })?;
-    with(|state| state.bank = state.config().banks.len() - 1);
-    Ok(())
-}
-pub fn rename_bank(index: usize, name: &str) -> Result<(), &'static str> {
-    edit(|config| {
-        config
-            .banks
-            .get_mut(index)
-            .ok_or("Bank no longer exists")?
-            .name = String::from(name);
-        Ok(())
-    })
-}
-pub fn delete_bank(index: usize) -> Result<(), &'static str> {
-    edit(|config| {
-        if index >= config.banks.len() {
-            return Err("Bank no longer exists");
-        }
-        config.banks.remove(index);
-        Ok(())
-    })
-}
-pub fn assign_slot(slot: usize, preset: Option<u8>) -> Result<(), &'static str> {
-    let bank = bank();
-    edit(|config| {
-        let target = config
-            .banks
-            .get_mut(bank)
-            .ok_or("Create a bank first")?
-            .slots
-            .get_mut(slot)
-            .ok_or("Invalid bank slot")?;
-        let changed = *target != preset;
-        *target = preset;
-        if changed {
-            config.banks[bank].scenes[slot] = Default::default();
-        }
-        Ok(())
-    })
-}
-pub fn select_bank(index: usize) -> Result<(), &'static str> {
-    if busy() {
-        return Err("Wait for the current recall to finish");
-    }
-    with(|state| {
-        if index >= state.config().banks.len() {
-            return Err("Bank no longer exists");
-        }
-        state.bank = index;
-        state.slot = None;
-        state.scene = None;
-        state.notice = "";
-        state.version = state.version.wrapping_add(1);
-        Ok(())
-    })
-}
-pub fn step_bank(delta: i8) -> Result<(), &'static str> {
-    let next = with(|state| {
-        let count = state.config().banks.len();
-        if count == 0 {
-            return Err("Create a bank first");
-        }
-        Ok((state.bank as isize + isize::from(delta)).rem_euclid(count as isize) as usize)
-    })?;
-    select_bank(next)
-}
-pub fn recall_slot(slot: usize) -> Result<u8, &'static str> {
-    if !crate::link::connected() {
-        return Err("Connect the Nano before recalling a bank slot");
-    }
-    with(|state| {
-        let bank = state.bank;
-        let preset = state
-            .config()
-            .banks
-            .get(bank)
-            .ok_or("Create a bank first")?
-            .slots
-            .get(slot)
-            .copied()
-            .flatten()
-            .ok_or("Assign a preset to this bank slot first")?;
-        state.slot = Some(slot);
-        state.scene = None;
-        state.version = state.version.wrapping_add(1);
-        Ok(preset)
-    })
-}
-pub fn banks() -> Vec<String> {
-    with(|state| {
-        state
-            .config()
-            .banks
-            .iter()
-            .map(|bank| bank.name.clone())
-            .collect()
-    })
-}
-pub fn slots() -> [Option<u8>; SLOTS] {
-    with(|state| {
-        let bank = state.bank;
-        state
-            .config()
-            .banks
-            .get(bank)
-            .map_or([None; SLOTS], |bank| bank.slots)
-    })
-}
-pub fn bank() -> usize {
-    with(|state| state.bank)
-}
-pub fn slot() -> Option<usize> {
-    with(|state| state.slot)
-}
 pub fn notice() -> &'static str {
     with(|state| state.notice)
 }
@@ -264,14 +160,60 @@ pub fn busy() -> bool {
 pub fn scene() -> Option<usize> {
     with(|state| state.scene)
 }
+pub fn scene_dirty() -> bool {
+    with(|state| state.scene_dirty)
+}
+pub fn fx_selected(block: usize) -> Option<usize> {
+    sync_fx_selections();
+    with(|state| state.fx_selected.get(block).copied().flatten())
+}
+
+fn sync_fx_selections() {
+    let mut effects = crate::fx::types::NanoFxState::zeroed();
+    crate::fx::nano_fx_snapshot(&mut effects);
+    with(|state| {
+        for (block, current) in effects.blocks.iter().enumerate() {
+            if state.fx_selected[block].is_some()
+                && (!effects.valid || !current.valid || current.model_id() != state.fx_models[block])
+            {
+                state.fx_selected[block] = None;
+                state.fx_dirty[block] = false;
+                state.version = state.version.wrapping_add(1);
+            }
+        }
+    });
+}
+pub fn fx_dirty(block: usize) -> bool {
+    with(|state| state.fx_dirty.get(block).copied().unwrap_or(false))
+}
+
+pub fn fx_model(block: usize) -> Option<Vec<u8>> {
+    let mut effects = crate::fx::types::NanoFxState::zeroed();
+    crate::fx::nano_fx_snapshot(&mut effects);
+    let current = effects.blocks.get(block)?;
+    if !effects.valid || !current.valid {
+        return None;
+    }
+    let model = crate::fx::models::model_ref(current.model)?;
+    if current.model_id() != model.id_bytes()
+        || !crate::fx::models::is_model_allowed(block as u32, model)
+    {
+        return None;
+    }
+    Some(model.id_bytes().to_vec())
+}
 
 pub fn cancel(reason: &'static str) {
     let cancelled = with(|state| {
-        state.scene = None;
-        let pending = state.pending.take();
-        if matches!(pending, Some(Pending::Bank { .. })) {
-            state.slot = None;
+        let selected = state.scene.take().is_some()
+            || state.fx_selected.iter().any(Option::is_some)
+            || state.scene_dirty;
+        state.scene_dirty = false;
+        state.fx_selected = [None; 5];
+        if selected {
+            state.version = state.version.wrapping_add(1);
         }
+        let pending = state.pending.take();
         pending.is_some()
     });
     if cancelled {
@@ -279,31 +221,14 @@ pub fn cancel(reason: &'static str) {
     }
 }
 
-pub fn start_bank(slot: usize) -> Result<u8, &'static str> {
-    if busy() || crate::state::nano_rx_mode_get() != 0 {
-        return Err("Wait for Nano state transfer to finish");
-    }
-    let preset = recall_slot(slot)?;
+pub fn scenes(preset: usize) -> Vec<Option<String>> {
     with(|state| {
-        state.pending = Some(Pending::Bank {
-            preset,
-            ack: crate::state::preset_ack_generation(),
-            requested: None,
-            deadline: crate::clock::now_us() + 30_000_000,
-        });
-        state.notice = "Loading bank preset...";
-    });
-    Ok(preset)
-}
-
-pub fn scenes(slot: usize) -> Vec<Option<String>> {
-    with(|state| {
-        let bank = state.bank;
         state
             .config()
-            .banks
-            .get(bank)
-            .and_then(|bank| bank.scenes.get(slot))
+            .preset_scenes
+            .iter()
+            .find(|collection| usize::from(collection.preset) == preset)
+            .map(|collection| &collection.scenes)
             .map_or_else(
                 || alloc::vec![None; data::SCENES],
                 |scenes| {
@@ -316,39 +241,33 @@ pub fn scenes(slot: usize) -> Vec<Option<String>> {
     })
 }
 
-pub fn capture_scene(
-    bank: usize,
-    slot: usize,
-    index: usize,
-    name: &str,
-) -> Result<(), &'static str> {
+pub fn capture_scene(preset: u8, index: usize, name: &str) -> Result<(), &'static str> {
+    let error = data::name_error(name);
+    if !error.is_empty() { return Err(error); }
     if busy() || !crate::link::connected() || crate::tuner::nano_tuner_is_active() {
         return Err("Connect the Nano and exit tuner before saving a scene");
     }
-    if with(|state| state.bank != bank || state.slot != Some(slot)) {
-        return Err("Play and verify this bank slot before storing its scene");
-    }
-    let expected = with(|state| {
-        state
-            .config()
-            .banks
-            .get(bank)
-            .and_then(|bank| bank.slots.get(slot))
-            .copied()
-            .flatten()
-    })
-    .ok_or("Assign and play this bank slot before storing a scene")?;
     let current = view();
-    if current.preset != expected {
-        return Err("Play this bank slot before storing its scene");
+    if !(1..=64).contains(&preset) || current.preset != preset {
+        return Err("Nano preset changed; reopen the scene selector before saving");
     }
     let snapshot = data::Snapshot::capture(&current)?;
     edit(|config| {
+        if !config
+            .preset_scenes
+            .iter()
+            .any(|collection| collection.preset == preset)
+        {
+            config.preset_scenes.push(data::PresetScenes {
+                preset,
+                scenes: Default::default(),
+            });
+        }
         let scene = config
-            .banks
-            .get_mut(bank)
-            .and_then(|bank| bank.scenes.get_mut(slot))
-            .and_then(|scenes| scenes.get_mut(index))
+            .preset_scenes
+            .iter_mut()
+            .find(|collection| collection.preset == preset)
+            .and_then(|collection| collection.scenes.get_mut(index))
             .ok_or("Invalid scene slot")?;
         *scene = Some(data::Scene {
             name: String::from(name),
@@ -357,23 +276,43 @@ pub fn capture_scene(
         Ok(())
     })?;
     with(|state| {
-        state.bank = bank;
-        state.slot = Some(slot);
-        state.scene = None;
+        state.scene = Some(index);
+        state.scene_dirty = false;
+        state.preset = preset;
     });
     Ok(())
 }
 
-pub fn clear_scene(slot: usize, index: usize) -> Result<(), &'static str> {
-    let bank = bank();
+pub fn clear_scene(preset: usize, index: usize) -> Result<(), &'static str> {
     edit(|config| {
         let scene = config
-            .banks
-            .get_mut(bank)
-            .and_then(|bank| bank.scenes.get_mut(slot))
-            .and_then(|scenes| scenes.get_mut(index))
+            .preset_scenes
+            .iter_mut()
+            .find(|collection| usize::from(collection.preset) == preset)
+            .and_then(|collection| collection.scenes.get_mut(index))
             .ok_or("Invalid scene slot")?;
         *scene = None;
+        Ok(())
+    })?;
+    with(|state| {
+        if usize::from(state.preset) == preset && state.scene == Some(index) {
+            state.scene = None;
+            state.scene_dirty = false;
+        }
+    });
+    Ok(())
+}
+
+pub fn rename_scene(preset: usize, index: usize, name: &str) -> Result<(), &'static str> {
+    let error = data::name_error(name);
+    if !error.is_empty() { return Err(error); }
+    edit(|config| {
+        let scene = config.preset_scenes.iter_mut()
+            .find(|collection| usize::from(collection.preset) == preset)
+            .and_then(|collection| collection.scenes.get_mut(index))
+            .and_then(Option::as_mut)
+            .ok_or("This scene slot is empty")?;
+        scene.name = name.into();
         Ok(())
     })
 }
@@ -382,32 +321,27 @@ pub fn recall_scene(index: usize) -> Result<(), &'static str> {
     if busy() || !crate::link::connected() || crate::tuner::nano_tuner_is_active() {
         return Err("Wait for recall, connect the Nano and exit tuner first");
     }
-    let (preset, snapshot) = with(|state| -> Result<_, &'static str> {
-        let bank = state.bank;
-        let slot = state
-            .slot
-            .ok_or("Play a bank slot before recalling a scene")?;
-        let bank = state
+    let preset = view().preset;
+    let snapshot = with(|state| -> Result<_, &'static str> {
+        let collection = state
             .config()
-            .banks
-            .get(bank)
-            .ok_or("Bank no longer exists")?;
-        let scene = bank.scenes[slot]
+            .preset_scenes
+            .iter()
+            .find(|collection| collection.preset == preset)
+            .ok_or("This Nano preset has no saved scenes")?;
+        let scene = collection
+            .scenes
             .get(index)
             .and_then(Option::as_ref)
             .ok_or("This scene is empty")?;
-        Ok((
-            bank.slots[slot].ok_or("This bank slot is unassigned")?,
-            scene.snapshot.clone(),
-        ))
+        Ok(scene.snapshot.clone())
     })?;
-    if view().preset != preset {
-        return Err("Play this bank slot again; Nano preset has changed");
-    }
     let plan = Plan::scene(snapshot, preset, crate::clock::now_us())?;
     with(|state| {
         state.pending = Some(Pending::Scene { index, plan });
         state.scene = None;
+        state.scene_dirty = false;
+        state.fx_selected = [None; 5];
         state.notice = "Recalling scene and verifying...";
         state.version = state.version.wrapping_add(1);
     });
@@ -415,22 +349,14 @@ pub fn recall_scene(index: usize) -> Result<(), &'static str> {
 }
 
 pub fn poll() -> Option<crate::link::Cmd> {
+    sync_fx_selections();
     let preset = crate::state::nano_state_preset_slot();
     let mut pending = with(|state| {
-        if state.pending.is_none()
-            && state.slot.is_some_and(|slot| {
-                state
-                    .config
-                    .as_ref()
-                    .and_then(|config| config.banks.get(state.bank))
-                    .and_then(|bank| bank.slots.get(slot))
-                    .copied()
-                    .flatten()
-                    != Some(preset)
-            })
-        {
-            state.slot = None;
+        if state.preset != preset {
+            state.preset = preset;
             state.scene = None;
+            state.scene_dirty = false;
+            state.fx_selected = [None; 5];
             state.version = state.version.wrapping_add(1);
         }
         state.pending.take()
@@ -438,38 +364,24 @@ pub fn poll() -> Option<crate::link::Cmd> {
     let current = view();
     let now = crate::clock::now_us();
     let result = match &mut pending {
-        Pending::Bank {
-            preset,
-            ack,
-            requested,
-            deadline,
-        } => {
-            if now >= *deadline {
-                Progress::Failed("Bank preset load timed out; selection not verified")
-            } else if current.preset != *preset {
-                Progress::Failed("Nano preset changed while loading bank slot")
-            } else if let Some(generation) = requested {
-                if current.generation != *generation && current.idle && current.amp.valid {
-                    Progress::Complete
-                } else {
-                    Progress::Waiting
-                }
-            } else if crate::state::preset_ack_generation() != *ack && current.idle {
-                *requested = Some(current.generation);
-                Progress::Write(crate::link::Cmd::PerformanceRefresh)
-            } else {
-                Progress::Waiting
-            }
-        }
-        Pending::Scene { plan, .. } | Pending::Effect { plan } => plan.poll(&current, now),
+        Pending::Scene { plan, .. } | Pending::Effect { plan, .. } => plan.poll(&current, now),
     };
     match result {
         Progress::Complete => {
             with(|state| {
-                state.scene = match pending {
-                    Pending::Scene { index, .. } => Some(index),
-                    _ => None,
-                };
+                match pending {
+                    Pending::Scene { index, .. } => {
+                        state.scene = Some(index);
+                        state.scene_dirty = false;
+                        state.fx_selected = [None; 5];
+                    }
+                    Pending::Effect { index, block, .. } => {
+                        state.fx_selected[block] = Some(index);
+                        state.fx_models[block] = current.effects.blocks[block].model_id().to_vec();
+                        state.fx_dirty[block] = false;
+                        state.scene_dirty = state.scene.is_some();
+                    }
+                }
                 state.notice = "Recall verified";
                 state.version = state.version.wrapping_add(1);
             });
@@ -478,9 +390,8 @@ pub fn poll() -> Option<crate::link::Cmd> {
         Progress::Failed(error) => {
             with(|state| {
                 state.scene = None;
-                if matches!(pending, Pending::Bank { .. }) {
-                    state.slot = None;
-                }
+                state.scene_dirty = false;
+                state.fx_selected = [None; 5];
             });
             report(error);
             None
@@ -496,30 +407,55 @@ pub fn poll() -> Option<crate::link::Cmd> {
     }
 }
 
-pub fn fx_presets() -> Vec<Option<data::FxPreset>> {
-    with(|state| state.config().fx_presets.to_vec())
+pub fn fx_presets(model: &[u8]) -> Vec<Option<data::FxPreset>> {
+    with(|state| {
+        state
+            .config()
+            .model_presets
+            .iter()
+            .find(|collection| collection.model == model)
+            .map_or_else(|| alloc::vec![None; data::FX_PRESETS_PER_MODEL], |collection| collection.presets.to_vec())
+    })
 }
 
 pub fn disconnected() {
     cancel("Nano disconnected; recall may be partially applied");
     with(|state| {
-        state.slot = None;
         state.scene = None;
+        state.scene_dirty = false;
+        state.fx_selected = [None; 5];
         state.version = state.version.wrapping_add(1);
     });
 }
 
 pub fn sound_edited() {
     with(|state| {
-        if state.scene.take().is_some() {
+        if state.scene.is_some() && !state.scene_dirty {
+            state.scene_dirty = true;
             state.version = state.version.wrapping_add(1);
         }
     });
 }
 
-pub fn capture_fx(index: usize, block: usize, name: &str) -> Result<(), &'static str> {
+pub fn effect_edited(block: usize) {
+    sound_edited();
+    fx_selected(block);
+    with(|state| {
+        if block < state.fx_selected.len() && state.fx_selected[block].is_some() && !state.fx_dirty[block] {
+            state.fx_dirty[block] = true;
+            state.version = state.version.wrapping_add(1);
+        }
+    });
+}
+
+pub fn capture_fx(index: usize, block: usize, name: &str, model: &[u8]) -> Result<(), &'static str> {
+    let error = data::name_error(name);
+    if !error.is_empty() { return Err(error); }
     if busy() || !crate::link::connected() || crate::tuner::nano_tuner_is_active() {
         return Err("Wait for recall, connect the Nano and exit tuner before storing FX");
+    }
+    if fx_model(block).as_deref() != Some(model) {
+        return Err("FX model changed or is not loaded; reopen FX preset saving");
     }
     let current = view();
     if !current.idle || !current.effects.valid {
@@ -533,40 +469,57 @@ pub fn capture_fx(index: usize, block: usize, name: &str) -> Result<(), &'static
             .ok_or("Invalid FX source block")?,
         block,
     )?;
-    let bank = bank();
-    let slot = slot();
+    if effect.model.is_empty() || effect.model != model {
+        return Err("FX model changed or is not loaded; reopen FX preset saving");
+    }
+    if index >= data::FX_PRESETS_PER_MODEL {
+        return Err("Invalid FX preset slot");
+    }
+    let dirty: [bool; 5] = core::array::from_fn(|block| !effect.matches(&current.effects.blocks[block]));
     edit(|config| {
-        let target = config
-            .fx_presets
-            .get_mut(index)
-            .ok_or("Invalid FX preset slot")?;
-        *target = Some(data::FxPreset {
+        if !config.model_presets.iter().any(|collection| collection.model == model) {
+            config.model_presets.push(data::ModelPresets {
+                model: model.to_vec(), presets: Default::default(),
+            });
+        }
+        let collection = config.model_presets.iter_mut()
+            .find(|collection| collection.model == model).ok_or("FX preset collection missing")?;
+        collection.presets[index] = Some(data::FxPreset {
             name: name.into(),
-            source_block: block as u8,
             effect,
         });
         Ok(())
     })?;
     with(|state| {
-        state.bank = bank;
-        state.slot = slot;
+        state.fx_selected[block] = Some(index);
+        state.fx_models[block] = model.to_vec();
+        state.fx_dirty[block] = false;
+        for other in 0..5 {
+            if other != block && state.fx_models[other] == model && state.fx_selected[other] == Some(index) {
+                state.fx_dirty[other] = dirty[other];
+            }
+        }
     });
     Ok(())
 }
 
-pub fn clear_fx(index: usize) -> Result<(), &'static str> {
-    let bank = bank();
-    let slot = slot();
+pub fn clear_fx(index: usize, model: &[u8]) -> Result<(), &'static str> {
     edit(|config| {
         *config
-            .fx_presets
-            .get_mut(index)
+            .model_presets
+            .iter_mut()
+            .find(|collection| collection.model == model)
+            .and_then(|collection| collection.presets.get_mut(index))
             .ok_or("Invalid FX preset slot")? = None;
         Ok(())
     })?;
     with(|state| {
-        state.bank = bank;
-        state.slot = slot;
+        for block in 0..5 {
+            if state.fx_models[block] == model && state.fx_selected[block] == Some(index) {
+                state.fx_selected[block] = None;
+                state.fx_dirty[block] = false;
+            }
+        }
     });
     Ok(())
 }
@@ -575,11 +528,14 @@ pub fn recall_fx(index: usize, block: usize) -> Result<(), &'static str> {
     if busy() || !crate::link::connected() || crate::tuner::nano_tuner_is_active() {
         return Err("Wait for recall, connect the Nano and exit tuner before recalling FX");
     }
+    let model = fx_model(block).ok_or("Wait for the current FX model to load")?;
     let effect = with(|state| {
         state
             .config()
-            .fx_presets
-            .get(index)
+            .model_presets
+            .iter()
+            .find(|collection| collection.model == model)
+            .and_then(|collection| collection.presets.get(index))
             .and_then(Option::as_ref)
             .map(|preset| preset.effect.clone())
     })
@@ -590,10 +546,25 @@ pub fn recall_fx(index: usize, block: usize) -> Result<(), &'static str> {
     }
     let plan = Plan::effect(effect, block, current.preset, crate::clock::now_us())?;
     with(|state| {
-        state.pending = Some(Pending::Effect { plan });
-        state.scene = None;
+        state.pending = Some(Pending::Effect { index, block, plan });
+        state.fx_selected[block] = None;
+        state.fx_dirty[block] = false;
         state.notice = "Recalling FX preset and verifying...";
         state.version = state.version.wrapping_add(1);
     });
     Ok(())
+}
+
+pub fn rename_fx(index: usize, model: &[u8], name: &str) -> Result<(), &'static str> {
+    let error = data::name_error(name);
+    if !error.is_empty() { return Err(error); }
+    edit(|config| {
+        let preset = config.model_presets.iter_mut()
+            .find(|collection| collection.model == model)
+            .and_then(|collection| collection.presets.get_mut(index))
+            .and_then(Option::as_mut)
+            .ok_or("This FX preset slot is empty")?;
+        preset.name = name.into();
+        Ok(())
+    })
 }

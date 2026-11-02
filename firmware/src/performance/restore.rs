@@ -490,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn scene_json_rejects_ranges_and_unassigned_slots() {
+    fn scene_json_rejects_ranges_and_invalid_preset_numbers() {
         let mut view = fixture();
         loaded_model(&mut view, 0);
         let mut snapshot = Snapshot::capture(&view).unwrap();
@@ -498,18 +498,17 @@ mod tests {
         assert!(snapshot.validate().is_err());
         snapshot.effects[0].parameters[0] = 0.4;
         let mut config = super::super::data::Config::default();
-        let mut bank = super::super::data::Bank {
-            name: "Test".into(),
-            slots: [Some(1), None, None, None],
+        let mut collection = super::super::data::PresetScenes {
+            preset: 1,
             scenes: Default::default(),
         };
-        bank.scenes[0][0] = Some(super::super::data::Scene {
+        collection.scenes[0] = Some(super::super::data::Scene {
             name: "Clean".into(),
             snapshot,
         });
-        config.banks.push(bank);
+        config.preset_scenes.push(collection);
         assert!(super::super::data::Config::decode(&config.encode().unwrap()).is_ok());
-        config.banks[0].slots[0] = None;
+        config.preset_scenes[0].preset = 0;
         assert!(config.encode().is_err());
     }
 }

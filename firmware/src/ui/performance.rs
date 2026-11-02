@@ -1,4 +1,4 @@
-use super::{list_columns, AppWindow, ListRows};
+use super::AppWindow;
 use crate::link::Cmd;
 use alloc::{format, string::String};
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -13,118 +13,129 @@ fn outcome(result: Result<(), &'static str>) {
 }
 
 pub(super) fn refresh(app: &AppWindow, force: bool) {
+    let block = super::fx_block_for_chain(app.get_chain()).unwrap_or(0) as i32;
+    let model = crate::performance::fx_model(block as usize).unwrap_or_default();
+    let model_key = crate::performance::data::model_key(&model);
+    let fx_selected = crate::performance::fx_selected(block as usize);
     let version = crate::performance::version();
-    if !force && SHOWN.swap(version, Ordering::Relaxed) == version {
+    if !force
+        && SHOWN.swap(version, Ordering::Relaxed) == version
+        && app.get_fx_preset_block() == block
+        && app.get_fx_preset_model().as_str() == model_key
+    {
         return;
     }
     SHOWN.store(version, Ordering::Relaxed);
-    app.set_performance_banks(slint::ModelRc::new(slint::VecModel::from(
-        crate::performance::banks()
-            .into_iter()
-            .map(slint::SharedString::from)
-            .collect::<alloc::vec::Vec<_>>(),
-    )));
-    let names = crate::state::nano_state_preset_names();
-    let slots = crate::performance::slots()
-        .iter()
-        .enumerate()
-        .map(|(index, preset)| {
-            let label = match preset {
-                Some(preset) => format!(
-                    "{}: {} {}",
-                    index + 1,
-                    preset,
-                    names
-                        .get(usize::from(*preset) - 1)
-                        .map_or("", String::as_str)
-                ),
-                None => format!("{}: (unassigned)", index + 1),
-            };
-            slint::SharedString::from(label)
-        })
-        .collect::<alloc::vec::Vec<_>>();
-    app.set_performance_slots(slint::ModelRc::new(slint::VecModel::from(slots)));
-    app.set_performance_bank(crate::performance::bank() as i32);
-    app.set_performance_slot(crate::performance::slot().map_or(-1, |index| index as i32));
+    app.set_fx_preset_block(block);
+    app.set_fx_preset_model(model_key.into());
     app.set_performance_notice(crate::performance::notice().into());
     app.set_performance_busy(crate::performance::busy());
-    app.set_gig_assigned(slint::ModelRc::new(slint::VecModel::from(
-        crate::performance::slots()
-            .iter()
-            .map(Option::is_some)
-            .collect::<alloc::vec::Vec<_>>(),
-    )));
-    let scenes = crate::performance::scenes(crate::performance::slot().unwrap_or(usize::MAX));
-    app.set_gig_scene_assigned(slint::ModelRc::new(slint::VecModel::from(
-        scenes
-            .iter()
-            .map(Option::is_some)
-            .collect::<alloc::vec::Vec<_>>(),
-    )));
-    app.set_gig_scenes(slint::ModelRc::new(slint::VecModel::from(
-        scenes
-            .into_iter()
-            .enumerate()
-            .map(|(index, name)| {
-                slint::SharedString::from(format!(
-                    "{}: {}",
-                    index + 1,
-                    name.as_deref().unwrap_or("(empty)")
-                ))
-            })
-            .collect::<alloc::vec::Vec<_>>(),
-    )));
+    app.set_scene_dirty(crate::performance::scene_dirty());
+    let names = crate::state::nano_state_preset_names();
+    let scene_preset = app.get_scene_preset();
+    let name = scene_preset.checked_sub(1).and_then(|index| names.get(index as usize))
+        .map_or("", String::as_str);
+    app.set_scene_title(format!("{scene_preset} - {name} scenes").into());
+    let preset = crate::state::nano_state_preset_slot();
+    let current = crate::performance::scenes(usize::from(preset));
+    let selected = crate::performance::scene();
+    let label = selected.and_then(|index| current.get(index).and_then(Option::as_deref));
+    app.set_scene_label(
+        match label {
+            Some(name) => format!(
+                "{}{}",
+                name,
+                if crate::performance::scene_dirty() {
+                    " *"
+                } else {
+                    ""
+                }
+            ),
+            None => String::from("Scene"),
+        }
+        .into(),
+    );
     app.set_gig_scene(crate::performance::scene().map_or(-1, |index| index as i32));
-    let presets = crate::performance::fx_presets()
-        .into_iter()
-        .enumerate()
-        .map(|(index, preset)| {
-            let label = match preset {
-                Some(preset) => format!(
-                    "{}: {}{}",
-                    index + 1,
-                    preset.name,
-                    if preset
-                        .effect
-                        .validate(app.get_fx_preset_block() as usize)
-                        .is_err()
-                    {
-                        " (incompatible)"
-                    } else {
-                        ""
-                    }
-                ),
-                None => format!("{}: (empty)", index + 1),
-            };
-            slint::SharedString::from(label)
-        })
-        .collect::<alloc::vec::Vec<_>>();
-    app.set_fx_presets(slint::ModelRc::new(slint::VecModel::from(presets)));
-    let slot = app.get_performance_edit_slot();
-    let scenes = crate::performance::scenes(slot as usize)
-        .into_iter()
-        .enumerate()
-        .map(|(index, name)| {
-            format!("{}: {}", index + 1, name.as_deref().unwrap_or("(empty)")).into()
-        })
-        .collect::<alloc::vec::Vec<slint::SharedString>>();
-    app.set_performance_scenes(slint::ModelRc::new(slint::VecModel::from(scenes)));
-    app.set_performance_scene(if slot == app.get_performance_slot() {
-        crate::performance::scene().map_or(-1, |index| index as i32)
+    app.set_gig_scene_assigned(slint::ModelRc::new(slint::VecModel::from(
+        current
+            .iter()
+            .map(Option::is_some)
+            .collect::<alloc::vec::Vec<_>>(),
+    )));
+    let labels = |scenes: alloc::vec::Vec<Option<String>>| {
+        slint::ModelRc::new(slint::VecModel::from(
+            scenes
+                .into_iter()
+                .enumerate()
+                .map(|(index, name)| {
+                    format!("{}: {}", index + 1, name.as_deref().unwrap_or("(empty)")).into()
+                })
+                .collect::<alloc::vec::Vec<slint::SharedString>>(),
+        ))
+    };
+    app.set_gig_scenes(labels(current));
+    let scenes = crate::performance::scenes(app.get_scene_preset() as usize);
+    app.set_scene_assigned(slint::ModelRc::new(slint::VecModel::from(
+        scenes
+            .iter()
+            .map(Option::is_some)
+            .collect::<alloc::vec::Vec<_>>(),
+    )));
+    app.set_performance_scenes(slint::ModelRc::new(slint::VecModel::from(
+        scenes.into_iter().map(|name| name.unwrap_or_else(|| String::from("(empty)")).into())
+            .collect::<alloc::vec::Vec<slint::SharedString>>(),
+    )));
+    app.set_performance_scene(if app.get_scene_preset() == i32::from(preset) {
+        selected.map_or(-1, |index| index as i32)
     } else {
         -1
     });
+    let presets = crate::performance::fx_presets(&model);
+    app.set_fx_preset_assigned(slint::ModelRc::new(slint::VecModel::from(
+        presets
+            .iter()
+            .map(Option::is_some)
+            .collect::<alloc::vec::Vec<_>>(),
+    )));
+    app.set_fx_presets(slint::ModelRc::new(slint::VecModel::from(
+        presets
+            .into_iter()
+            .enumerate()
+            .map(|(index, preset)| {
+                preset
+                    .map_or_else(|| format!("+ {}", index + 1), |preset| preset.name)
+                    .into()
+            })
+            .collect::<alloc::vec::Vec<slint::SharedString>>(),
+    )));
+    app.set_fx_preset_selected(
+        fx_selected.map_or(-1, |index| index as i32),
+    );
+    app.set_fx_preset_dirty(crate::performance::fx_dirty(block as usize));
 }
 
-fn naming(app: &AppWindow, action: i32, bank: i32, text: &str) {
+fn stored_model(app: &AppWindow) -> Result<alloc::vec::Vec<u8>, &'static str> {
+    model_for_key(app.get_fx_store_model().as_str())
+}
+
+fn model_for_key(key: &str) -> Result<alloc::vec::Vec<u8>, &'static str> {
+    crate::fx::catalog::catalog().iter()
+        .find(|model| crate::performance::data::model_key(model.id_bytes()) == key)
+        .map(|model| model.id_bytes().to_vec())
+        .ok_or("FX preset model is not loaded")
+}
+
+fn naming(app: &AppWindow, action: i32, text: &str) {
     app.set_performance_name_action(action);
-    app.set_performance_name_bank(bank);
     app.set_kbd_title(
-        match action {
-            1 => "New bank",
-            3 => "Store current sound as scene",
-            4 => "Store selected block as FX preset",
-            _ => "Rename bank",
+        if action == 3 {
+            "Save current sound as scene"
+        } else if action == 6 {
+            "Rename scene"
+        } else if action == 5 {
+            "Rename effect preset"
+        } else {
+            "Save current effect preset"
         }
         .into(),
     );
@@ -134,37 +145,19 @@ fn naming(app: &AppWindow, action: i32, bank: i32, text: &str) {
 }
 
 pub(super) fn register(app: &AppWindow) {
-    app.on_gig_bank_stepped(|delta| {
-        outcome(crate::performance::step_bank(delta.clamp(-1, 1) as i8))
-    });
-    app.on_gig_scene_recall(|index| {
-        if !crate::link::connected() {
-            crate::performance::report("Connect the Nano before recalling a scene");
-            return;
-        }
-        crate::link::push_cmd(Cmd::SceneRecall(index as u8));
-    });
-    app.on_fx_presets_opened({
+    app.on_gig_scene_recall(|index| crate::link::push_cmd(Cmd::SceneRecall(index as u8)));
+    app.on_performance_opened({
         let weak = app.as_weak();
         move || {
             if let Some(app) = weak.upgrade() {
-                app.set_fx_preset_block(
-                    super::fx_block_for_chain(app.get_chain()).unwrap_or(0) as i32
-                );
-                app.set_fx_presets_open(true);
-                refresh(&app, true);
-                if crate::link::connected() {
-                    crate::link::push_cmd(Cmd::PerformanceFxRefresh);
+                if !crate::link::connected() {
+                    crate::performance::report("Connect the Nano before opening scenes");
+                    return;
                 }
-            }
-        }
-    });
-    app.on_fx_preset_block_selected({
-        let weak = app.as_weak();
-        move |block| {
-            if let Some(app) = weak.upgrade() {
-                app.set_fx_preset_block(block);
+                app.set_scene_preset(i32::from(crate::state::nano_state_preset_slot()));
+                app.set_performance_open(true);
                 refresh(&app, true);
+                crate::link::push_cmd(Cmd::PerformanceFxRefresh);
             }
         }
     });
@@ -172,13 +165,14 @@ pub(super) fn register(app: &AppWindow) {
         let weak = app.as_weak();
         move |index| {
             if let Some(app) = weak.upgrade() {
-                if !crate::link::connected() {
-                    crate::performance::report("Connect the Nano before recalling FX");
-                    return;
-                }
+                let model = match model_for_key(app.get_fx_preset_model().as_str()) {
+                    Ok(model) => model,
+                    Err(error) => { crate::performance::report(error); return; }
+                };
                 crate::link::push_cmd(Cmd::FxPresetRecall {
                     index: index as u8,
                     block: app.get_fx_preset_block() as u8,
+                    model: Some(model),
                 });
             }
         }
@@ -192,11 +186,50 @@ pub(super) fn register(app: &AppWindow) {
                     return;
                 }
                 app.set_fx_preset_edit(index);
-                let name = crate::performance::fx_presets()
+                app.set_fx_store_block(app.get_fx_preset_block());
+                app.set_fx_store_model(app.get_fx_preset_model());
+                app.set_fx_store_preset(i32::from(crate::state::nano_state_preset_slot()));
+                crate::link::push_cmd(Cmd::PerformanceFxRefresh);
+                let model = match stored_model(&app) {
+                    Ok(model) => model,
+                    Err(error) => { crate::performance::report(error); return; }
+                };
+                let presets = crate::performance::fx_presets(&model);
+                let name = presets
                     .get(index as usize)
                     .and_then(Option::as_ref)
                     .map_or_else(|| format!("FX {}", index + 1), |preset| preset.name.clone());
-                naming(&app, 4, -1, &name);
+                if presets
+                    .get(index as usize).is_some_and(Option::is_some)
+                    && crate::performance::data::name_error(&name).is_empty()
+                {
+                    app.set_kbd_text(name.into());
+                    confirmation(&app, 6, "Save FX preset changes?",
+                        "Replace this model preset with the current parameters and bypass. All slots using it share this preset.");
+                } else {
+                    naming(&app, 4, &name);
+                }
+            }
+        }
+    });
+    app.on_fx_preset_rename({
+        let weak = app.as_weak();
+        move |index| {
+            if let Some(app) = weak.upgrade() {
+                app.set_fx_preset_edit(index);
+                app.set_fx_store_block(app.get_fx_preset_block());
+                app.set_fx_store_model(app.get_fx_preset_model());
+                let model = match stored_model(&app) {
+                    Ok(model) => model,
+                    Err(error) => { crate::performance::report(error); return; }
+                };
+                if let Some(preset) = crate::performance::fx_presets(&model)
+                    .get(index as usize).and_then(Option::as_ref)
+                {
+                    naming(&app, 5, &preset.name);
+                } else {
+                    crate::performance::report("This FX preset slot is empty");
+                }
             }
         }
     });
@@ -205,104 +238,14 @@ pub(super) fn register(app: &AppWindow) {
         move |index| {
             if let Some(app) = weak.upgrade() {
                 app.set_fx_preset_edit(index);
+                app.set_fx_store_block(app.get_fx_preset_block());
+                app.set_fx_store_model(app.get_fx_preset_model());
                 confirmation(
                     &app,
                     7,
                     "Delete FX preset?",
-                    "Only this controller FX preset is removed.",
+                    "Remove this model preset from all slots on the controller. The current sound is unchanged.",
                 );
-            }
-        }
-    });
-    app.on_performance_opened({
-        let weak = app.as_weak();
-        move || {
-            if let Some(app) = weak.upgrade() {
-                app.set_settings_open(false);
-                app.set_performance_open(true);
-                app.set_performance_edit_slot(-1);
-                refresh(&app, true);
-            }
-        }
-    });
-    app.on_performance_add({
-        let weak = app.as_weak();
-        move || {
-            if let Some(app) = weak.upgrade() {
-                naming(&app, 1, -1, "");
-            }
-        }
-    });
-    app.on_performance_rename({
-        let weak = app.as_weak();
-        move |index| {
-            if let Some(app) = weak.upgrade() {
-                if let Some(name) = crate::performance::banks().get(index as usize) {
-                    naming(&app, 2, index, name);
-                } else {
-                    crate::performance::report("Bank no longer exists");
-                }
-            }
-        }
-    });
-    app.on_performance_selected(|index| outcome(crate::performance::select_bank(index as usize)));
-    app.on_performance_clear(|index| {
-        outcome(crate::performance::assign_slot(index as usize, None))
-    });
-    app.on_performance_recall(|index| {
-        if !crate::link::connected() {
-            crate::performance::report("Connect the Nano before recalling a bank slot");
-        } else {
-            crate::link::push_cmd(Cmd::BankSlot(index as u8));
-        }
-    });
-    app.on_performance_delete({
-        let weak = app.as_weak();
-        move |index| {
-            if let Some(app) = weak.upgrade() {
-                app.set_performance_delete_bank(index);
-                app.set_confirm_title("Delete bank?".into());
-                app.set_confirm_message(
-                    "Controller assignments will be removed. Nano presets are unchanged.".into(),
-                );
-                app.set_confirm_label("Delete".into());
-                app.set_confirm_danger(true);
-                app.set_confirm_open(true);
-            }
-        }
-    });
-    app.on_performance_assign({
-        let weak = app.as_weak();
-        move |index| {
-            if let Some(app) = weak.upgrade() {
-                app.set_performance_assign_slot(index);
-                let names = crate::state::nano_state_preset_names();
-                let mut rows = ListRows::new(list_columns(&app));
-                rows.header("Preset slots");
-                rows.item("(unassigned)", 0);
-                for preset in 1..=64 {
-                    rows.item(
-                        &format!(
-                            "{} {}",
-                            preset,
-                            names.get(preset - 1).map_or("(empty)", String::as_str)
-                        ),
-                        preset as i32,
-                    );
-                }
-                rows.show(&app, 6, "Assign bank slot", -1);
-            }
-        }
-    });
-    app.on_performance_scenes_opened({
-        let weak = app.as_weak();
-        move |slot| {
-            if let Some(app) = weak.upgrade() {
-                app.set_performance_edit_slot(slot);
-                refresh(&app, true);
-                if crate::link::connected() {
-                    crate::link::push_cmd(Cmd::PerformanceFxRefresh);
-                }
             }
         }
     });
@@ -310,22 +253,11 @@ pub(super) fn register(app: &AppWindow) {
         let weak = app.as_weak();
         move |index| {
             if let Some(app) = weak.upgrade() {
-                let slot = app.get_performance_edit_slot();
-                if !crate::link::connected() {
-                    crate::performance::report("Connect the Nano before recalling a scene");
+                if app.get_scene_preset() != i32::from(crate::state::nano_state_preset_slot()) {
+                    crate::performance::report("Nano preset changed; reopen the scene selector");
                     return;
                 }
-                if crate::performance::scenes(slot as usize)
-                    .get(index as usize)
-                    .is_none_or(Option::is_none)
-                {
-                    crate::performance::report("This scene is empty");
-                    return;
-                }
-                if crate::performance::slot() != Some(slot as usize) {
-                    crate::link::push_cmd(Cmd::BankSlot(slot as u8));
-                }
-                crate::link::push_cmd(Cmd::SceneRecall(index as u8));
+                recall_scene(&app, index);
             }
         }
     });
@@ -334,12 +266,23 @@ pub(super) fn register(app: &AppWindow) {
         move |index| {
             if let Some(app) = weak.upgrade() {
                 app.set_performance_edit_scene(index);
-                let name = crate::performance::scenes(app.get_performance_edit_slot() as usize)
+                let name = crate::performance::scenes(app.get_scene_preset() as usize)
                     .get(index as usize)
                     .cloned()
                     .flatten()
                     .unwrap_or_else(|| format!("Scene {}", index + 1));
-                naming(&app, 3, app.get_performance_bank(), &name);
+                if crate::performance::scenes(app.get_scene_preset() as usize)
+                    .get(index as usize).is_some_and(Option::is_some)
+                {
+                    if crate::performance::data::name_error(&name).is_empty() {
+                        app.set_kbd_text(name.into());
+                        capture_scene(&app);
+                    } else {
+                        naming(&app, 3, &name);
+                    }
+                } else {
+                    naming(&app, 3, &name);
+                }
             }
         }
     });
@@ -347,13 +290,22 @@ pub(super) fn register(app: &AppWindow) {
         let weak = app.as_weak();
         move |index| {
             if let Some(app) = weak.upgrade() {
-                app.set_performance_edit_scene(index);
-                confirmation(
-                    &app,
-                    4,
-                    "Delete scene?",
-                    "Only this controller snapshot is removed.",
-                );
+                outcome(crate::performance::clear_scene(app.get_scene_preset() as usize, index as usize));
+            }
+        }
+    });
+    app.on_performance_scene_rename({
+        let weak = app.as_weak();
+        move |index| {
+            if let Some(app) = weak.upgrade() {
+                if let Some(name) = crate::performance::scenes(app.get_scene_preset() as usize)
+                    .get(index as usize).cloned().flatten()
+                {
+                    app.set_performance_edit_scene(index);
+                    naming(&app, 6, &name);
+                } else {
+                    crate::performance::report("This scene slot is empty");
+                }
             }
         }
     });
@@ -362,42 +314,44 @@ pub(super) fn register(app: &AppWindow) {
 pub(super) fn accept_name(app: &AppWindow, name: &str) {
     let action = app.get_performance_name_action();
     app.set_performance_name_action(0);
-    if action == 4 {
-        let existing = crate::performance::fx_presets()
-            .get(app.get_fx_preset_edit() as usize)
-            .is_some_and(Option::is_some);
-        if existing {
-            confirmation(app, 6, "Replace FX preset?", "Replace this shelf slot with the selected block's current model, parameters and bypass.");
-        } else {
-            capture_fx(app);
-        }
-        return;
-    }
     if action == 3 {
-        let existing = crate::performance::scenes(app.get_performance_edit_slot() as usize)
-            .get(app.get_performance_edit_scene() as usize)
-            .is_some_and(Option::is_some);
-        if existing {
-            confirmation(
-                app,
-                3,
-                "Replace scene?",
-                "Replace this saved snapshot with the current Nano sound.",
-            );
-        } else {
-            capture_scene(app);
-        }
+        capture_scene(app);
         return;
     }
-    outcome(match action {
-        1 => crate::performance::add_bank(name),
-        2 => crate::performance::rename_bank(app.get_performance_name_bank() as usize, name),
-        _ => Err("Invalid naming action"),
-    });
+    if action == 6 {
+        outcome(crate::performance::rename_scene(
+            app.get_scene_preset() as usize, app.get_performance_edit_scene() as usize, name,
+        ));
+        return;
+    }
+    if action == 5 {
+        outcome(stored_model(app).and_then(|model| crate::performance::rename_fx(
+            app.get_fx_preset_edit() as usize, &model, name,
+        )));
+        return;
+    }
+    let existing = match action {
+        4 => match stored_model(app) {
+            Ok(model) => crate::performance::fx_presets(&model)
+                .get(app.get_fx_preset_edit() as usize).is_some_and(Option::is_some),
+            Err(error) => { crate::performance::report(error); return; }
+        },
+        _ => {
+            crate::performance::report("Invalid performance naming action");
+            return;
+        }
+    };
+    if existing {
+        confirmation(app, 6, "Replace saved sound?",
+            "Replace this controller snapshot with the current sound. The Nano preset is not saved.");
+    } else if action == 4 {
+        capture_fx(app);
+    } else {
+        capture_scene(app);
+    }
 }
 
 fn confirmation(app: &AppWindow, action: i32, title: &str, message: &str) {
-    app.set_performance_delete_bank(-1);
     app.set_performance_confirm_action(action);
     app.set_confirm_title(title.into());
     app.set_confirm_message(message.into());
@@ -405,7 +359,7 @@ fn confirmation(app: &AppWindow, action: i32, title: &str, message: &str) {
         if action == 4 || action == 7 {
             "Delete"
         } else {
-            "Replace"
+            "Save"
         }
         .into(),
     );
@@ -414,40 +368,32 @@ fn confirmation(app: &AppWindow, action: i32, title: &str, message: &str) {
 }
 
 fn capture_fx(app: &AppWindow) {
+    let model = match stored_model(app) {
+        Ok(model) => model,
+        Err(error) => { crate::performance::report(error); return; }
+    };
     crate::link::push_cmd(Cmd::FxPresetCapture {
         index: app.get_fx_preset_edit() as u8,
-        block: app.get_fx_preset_block() as u8,
+        block: app.get_fx_store_block() as u8,
+        preset: app.get_fx_store_preset() as u8,
         name: app.get_kbd_text().as_str().into(),
+        model,
+    });
+}
+
+fn recall_scene(app: &AppWindow, index: i32) {
+    crate::link::push_cmd(Cmd::SceneRecallAt {
+        preset: app.get_scene_preset() as u8,
+        scene: index as u8,
     });
 }
 
 fn capture_scene(app: &AppWindow) {
-    if !crate::link::connected() {
-        crate::performance::report("Connect the Nano before storing a scene");
-        return;
-    }
     crate::link::push_cmd(Cmd::SceneCapture {
-        bank: app.get_performance_name_bank() as u8,
-        slot: app.get_performance_edit_slot() as u8,
+        preset: app.get_scene_preset() as u8,
         scene: app.get_performance_edit_scene() as u8,
         name: String::from(app.get_kbd_text().as_str()),
     });
-}
-
-pub(super) fn assign(app: &AppWindow, preset: i32) {
-    let slot = app.get_performance_assign_slot() as usize;
-    let target = if preset == 0 {
-        None
-    } else {
-        Some(preset as u8)
-    };
-    let existing = crate::performance::slots().get(slot).copied().flatten();
-    if existing != target && crate::performance::scenes(slot).iter().any(Option::is_some) {
-        app.set_performance_pending_preset(preset);
-        confirmation(app, 5, "Replace bank assignment?", "Changing this preset assignment clears its four saved scenes. Nano presets are unchanged.");
-    } else {
-        outcome(crate::performance::assign_slot(slot, target));
-    }
 }
 
 pub(super) fn confirm(app: &AppWindow) -> bool {
@@ -455,25 +401,9 @@ pub(super) fn confirm(app: &AppWindow) -> bool {
     app.set_performance_confirm_action(0);
     match action {
         6 => capture_fx(app),
-        7 => outcome(crate::performance::clear_fx(
-            app.get_fx_preset_edit() as usize
-        )),
-        3 => capture_scene(app),
-        4 => outcome(crate::performance::clear_scene(
-            app.get_performance_edit_slot() as usize,
-            app.get_performance_edit_scene() as usize,
-        )),
-        5 => {
-            let preset = app.get_performance_pending_preset();
-            outcome(crate::performance::assign_slot(
-                app.get_performance_assign_slot() as usize,
-                if preset == 0 {
-                    None
-                } else {
-                    Some(preset as u8)
-                },
-            ));
-        }
+        7 => outcome(stored_model(app).and_then(|model| crate::performance::clear_fx(
+            app.get_fx_preset_edit() as usize, &model,
+        ))),
         _ => return false,
     }
     true

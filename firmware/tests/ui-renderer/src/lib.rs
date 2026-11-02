@@ -1,5 +1,10 @@
 slint::include_modules!();
 
+#[cfg(test)]
+mod preview {
+    include!(concat!(env!("OUT_DIR"), "/preview.rs"));
+}
+
 extern crate alloc;
 
 #[cfg(test)]
@@ -92,6 +97,53 @@ mod tests {
             assert_eq!(rows.row_data(1).unwrap(), updated);
         }
         app.set_model_open(false);
+    }
+
+    fn check_preview_workflow(window: &MinimalSoftwareWindow) {
+        let tap = |x, y| {
+            let position = LogicalPosition::new(x, y);
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+        };
+        for portrait in [false, true] {
+            let (width, height) = if portrait { (480, 800) } else { (800, 480) };
+            let app = preview::Preview::new().unwrap();
+            app.set_preview_portrait(portrait);
+            app.show().unwrap();
+            window.set_size(PhysicalSize::new(width, height));
+            let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
+            let mut draw = || {
+                window.request_redraw();
+                window.draw_if_needed(|renderer| {
+                    renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                    renderer.render(&mut pixels, width as usize);
+                });
+            };
+            for _ in 0..2 {
+                draw();
+                tap(width as f32 - 110.0, 38.0);
+                assert_eq!(app.get_popup(), "scenes");
+                draw();
+                tap(35.0, 35.0);
+                assert_eq!(app.get_popup(), "none");
+            }
+            for popup in ["scenes", "gig", "none"] {
+                app.set_popup(popup.into());
+                draw();
+                assert_eq!(
+                    app.get_popup(),
+                    popup,
+                    "Preview popup navigation changed unexpectedly"
+                );
+            }
+            app.hide().unwrap();
+        }
     }
 
     fn check_preset_menu_hit_target(app: &AppWindow, window: &MinimalSoftwareWindow) {
@@ -492,7 +544,7 @@ mod tests {
                 renderer.render(&mut pixels, width as usize);
                 renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
             });
-            let (x, y) = if portrait { (30, 125) } else { (150, 75) };
+            let (x, y) = if portrait { (30, 173) } else { (150, 123) };
             let cell = ((38u16 >> 3) << 11) | ((38u16 >> 2) << 5) | (38u16 >> 3);
             assert_eq!(pixels[y * width as usize + x].0, cell);
             assert_ne!(pixels[y * width as usize + x].0, pixels[0].0);
@@ -642,54 +694,354 @@ mod tests {
         window.set_size(PhysicalSize::new(800, 480));
     }
 
-    fn check_bank_screen(app: &AppWindow, window: &MinimalSoftwareWindow) {
+    fn check_full_midi_list(app: &AppWindow, window: &MinimalSoftwareWindow) {
+        struct Actions {
+            visited: std::cell::RefCell<std::collections::BTreeSet<usize>>,
+            tracker: slint::ModelNotify,
+        }
+        impl slint::Model for Actions {
+            type Data = MidiRow;
+            fn row_count(&self) -> usize {
+                429
+            }
+            fn row_data(&self, index: usize) -> Option<MidiRow> {
+                if index >= self.row_count() {
+                    return None;
+                }
+                self.visited.borrow_mut().insert(index);
+                Some(MidiRow {
+                    name: format!("Action {index}").into(),
+                    assigned: "CC 7 ch1".into(),
+                    learning: false,
+                })
+            }
+            fn model_tracker(&self) -> &dyn slint::ModelTracker {
+                &self.tracker
+            }
+        }
+        let actions = Rc::new(Actions {
+            visited: Default::default(),
+            tracker: Default::default(),
+        });
+        let learned = Rc::new(std::cell::Cell::new(-1));
+        app.on_midi_learn({
+            let learned = learned.clone();
+            move |index| learned.set(index)
+        });
+        let cleared = Rc::new(std::cell::Cell::new(-1));
+        app.on_midi_clear({
+            let cleared = cleared.clone();
+            move |index| cleared.set(index)
+        });
+        app.set_midi_rows(actions.clone().into());
+        let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
+        let render = |pixels: &mut [Rgb565Pixel], width| {
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                renderer.render(pixels, width);
+                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            });
+        };
+        for (width, height, portrait) in [(800, 480, false), (480, 800, true)] {
+            learned.set(-1);
+            cleared.set(-1);
+            app.set_settings_open(false);
+            app.set_portrait(portrait);
+            window.set_size(PhysicalSize::new(width, height));
+            render(&mut pixels, width as usize);
+            actions.visited.borrow_mut().clear();
+            app.set_settings_open(true);
+            app.set_settings_tab(3);
+            render(&mut pixels, width as usize);
+            assert!(
+                actions.visited.borrow().len() <= 20,
+                "Opening MIDI eagerly fetched {} of 429 actions",
+                actions.visited.borrow().len()
+            );
+            for _ in 0..3 {
+                window.dispatch_event(WindowEvent::PointerScrolled {
+                    position: LogicalPosition::new(width as f32 / 2.0, height as f32 / 2.0),
+                    delta_x: 0.0,
+                    delta_y: -100_000.0,
+                });
+                render(&mut pixels, width as usize);
+            }
+            assert!(
+                actions.visited.borrow().contains(&428),
+                "Final MIDI action is unreachable"
+            );
+            for y in (height - 100..height).step_by(2) {
+                let position = LogicalPosition::new(width as f32 - 190.0, y as f32);
+                window.dispatch_event(WindowEvent::PointerPressed {
+                    position,
+                    button: PointerEventButton::Left,
+                });
+                window.dispatch_event(WindowEvent::PointerReleased {
+                    position,
+                    button: PointerEventButton::Left,
+                });
+                if learned.get() == 428 {
+                    let position = LogicalPosition::new(width as f32 - 78.0, y as f32);
+                    window.dispatch_event(WindowEvent::PointerPressed {
+                        position,
+                        button: PointerEventButton::Left,
+                    });
+                    window.dispatch_event(WindowEvent::PointerReleased {
+                        position,
+                        button: PointerEventButton::Left,
+                    });
+                    break;
+                }
+            }
+            assert_eq!(learned.get(), 428, "Virtualized Learn changed action index");
+            assert_eq!(cleared.get(), 428, "Virtualized Clear changed action index");
+        }
+        app.set_midi_rows(slint::ModelRc::default());
+        app.set_settings_open(false);
+        app.set_settings_tab(0);
+        app.set_portrait(false);
+        window.set_size(PhysicalSize::new(800, 480));
+    }
+
+    fn check_fx_preset_tabs(
+        app: &AppWindow,
+        window: &MinimalSoftwareWindow,
+        time: &std::cell::Cell<std::time::Duration>,
+    ) {
+        let recalled = Rc::new(std::cell::Cell::new(-1));
+        let stored = Rc::new(std::cell::Cell::new(-1));
+        let renamed = Rc::new(std::cell::Cell::new(-1));
+        let deleted = Rc::new(std::cell::Cell::new(-1));
+        app.on_fx_preset_recall({
+            let recalled = recalled.clone();
+            move |index| recalled.set(index)
+        });
+        app.on_fx_preset_store({
+            let stored = stored.clone();
+            move |index| stored.set(index)
+        });
+        app.on_fx_preset_rename({
+            let renamed = renamed.clone();
+            move |index| renamed.set(index)
+        });
+        app.on_fx_preset_delete({
+            let deleted = deleted.clone();
+            move |index| deleted.set(index)
+        });
+        let tap = |x, y| {
+            let position = LogicalPosition::new(x, y);
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+        };
+        app.set_page(1);
+        app.set_connecting(false);
+        app.set_performance_open(false);
+        app.set_fx_preset_menu_index(-1);
+        app.set_fx_preset_model("test-model".into());
+        app.set_fx_presets(slint::ModelRc::new(slint::VecModel::from(vec![
+            "First saved effect with long name".into(),
+            "+ 2".into(),
+            "Third".into(),
+            "Fourth".into(),
+        ])));
+        app.set_fx_preset_assigned(slint::ModelRc::new(slint::VecModel::from(vec![
+            true, false, true, true,
+        ])));
+        let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
+        for (width, height, portrait) in [(800, 480, false), (480, 800, true)] {
+            app.set_portrait(portrait);
+            window.set_size(PhysicalSize::new(width, height));
+            app.set_fx_n0("Mix".into());
+            app.set_fx_preset_selected(0);
+            app.set_fx_preset_model(format!("test-model-{portrait}").into());
+            app.set_fx_preset_dirty(false);
+            let mut draw = || {
+                window.request_redraw();
+                window.draw_if_needed(|renderer| {
+                    renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                    renderer.render(&mut pixels, width as usize);
+                });
+            };
+            draw();
+            let start = if portrait { 16.0 } else { 132.0 };
+            let tab_width = (width as f32 - start - 16.0 - 12.0) / 4.0;
+            let sample_x = (start + 20.0) as usize;
+            let gap_color = pixels[107 * width as usize + sample_x];
+            assert!((104..112).all(|y| pixels[y * width as usize + sample_x] == gap_color), "Preset row must have an 8px bottom gap");
+            assert_ne!(pixels[103 * width as usize + sample_x], gap_color, "Tab height changed");
+            assert_ne!(pixels[112 * width as usize + sample_x], gap_color, "Missing parameter row");
+            let clean = pixels.clone();
+            app.set_fx_preset_dirty(true);
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.render(&mut pixels, width as usize);
+            });
+            let marker_x = (start + tab_width - 12.0) as usize;
+            assert!((66..102).any(|y| (marker_x - 6..marker_x + 6).any(|x|
+                pixels[y * width as usize + x] != clean[y * width as usize + x]
+            )), "Unsaved marker hidden by long preset name");
+            app.set_fx_preset_dirty(false);
+            let mut draw = || {
+                window.request_redraw();
+                window.draw_if_needed(|renderer| {
+                    renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                    renderer.render(&mut pixels, width as usize);
+                });
+            };
+            for index in [0, 2, 3] {
+                recalled.set(-1);
+                tap(start + (index as f32 + 0.5) * (tab_width + 4.0), 84.0);
+                assert_eq!(recalled.get(), index, "FX tab changed recall index");
+            }
+            tap(start + 1.5 * (tab_width + 4.0), 84.0);
+            assert_eq!(stored.get(), 1, "Empty FX tab did not offer saving");
+            for index in 0..4 {
+                for action in 0..3 {
+                    recalled.set(-1);
+                    stored.set(-1);
+                    renamed.set(-1);
+                    deleted.set(-1);
+                    app.set_fx_preset_menu_index(-1);
+                    draw();
+                    let position = LogicalPosition::new(
+                        start + index as f32 * (tab_width + 4.0) + tab_width / 2.0,
+                        84.0,
+                    );
+                    window.dispatch_event(WindowEvent::PointerPressed {
+                        position,
+                        button: PointerEventButton::Left,
+                    });
+                    draw();
+                    time.set(time.get() + std::time::Duration::from_millis(449));
+                    slint::platform::update_timers_and_animations();
+                    assert_eq!(app.get_fx_preset_menu_index(), -1, "Hold opened too early");
+                    time.set(time.get() + std::time::Duration::from_millis(2));
+                    slint::platform::update_timers_and_animations();
+                    assert_eq!(app.get_fx_preset_menu_index(), index, "Hold did not open dropdown");
+                    draw();
+                    window.dispatch_event(WindowEvent::PointerReleased {
+                        position,
+                        button: PointerEventButton::Left,
+                    });
+                    assert_eq!(recalled.get(), -1, "Hold also recalled the preset");
+                    assert_eq!(stored.get(), -1, "Hold also stored the preset");
+                    let menu_x = (start + index as f32 * (tab_width + 4.0))
+                        .min(width as f32 - 236.0);
+                    tap(menu_x + 40.0, 140.0 + action as f32 * 60.0);
+                    let enabled = action == 0 || index != 1;
+                    assert_eq!(stored.get(), if action == 0 && enabled { index } else { -1 });
+                    assert_eq!(renamed.get(), if action == 1 && enabled { index } else { -1 });
+                    assert_eq!(deleted.get(), if action == 2 && enabled { index } else { -1 });
+                    if enabled {
+                        assert_eq!(app.get_fx_preset_menu_index(), -1, "Action left dropdown open");
+                    }
+                }
+            }
+            app.set_fx_preset_menu_index(0);
+            draw();
+            tap(start + 40.0, 300.0);
+            assert_eq!(app.get_fx_preset_menu_index(), -1, "Outside tap did not dismiss dropdown");
+            let position = LogicalPosition::new(start + tab_width / 2.0, 84.0);
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            draw();
+            window.dispatch_event(WindowEvent::PointerMoved {
+                position: LogicalPosition::new(position.x, position.y + 20.0),
+            });
+            time.set(time.get() + std::time::Duration::from_millis(500));
+            slint::platform::update_timers_and_animations();
+            draw();
+            assert_eq!(app.get_fx_preset_menu_index(), -1, "Dragging opened the hold menu");
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+            app.set_fx_preset_menu_index(0);
+            app.set_fx_preset_model("another-model".into());
+            slint::platform::update_timers_and_animations();
+            assert_eq!(app.get_fx_preset_menu_index(), -1, "Model change left the old model menu open");
+            app.set_fx_preset_menu_index(0);
+            app.set_performance_busy(true);
+            slint::platform::update_timers_and_animations();
+            assert_eq!(app.get_fx_preset_menu_index(), -1, "Busy state left dropdown open");
+            draw();
+            recalled.set(-1);
+            tap(start + 0.5 * tab_width, 84.0);
+            assert_eq!(recalled.get(), -1, "Busy FX tab remained active");
+            app.set_performance_busy(false);
+        }
+        app.set_fx_presets(slint::ModelRc::default());
+        app.set_fx_n0("-".into());
+        app.set_fx_preset_selected(-1);
+        app.set_page(0);
+        app.set_portrait(false);
+        window.set_size(PhysicalSize::new(800, 480));
+    }
+
+    fn check_scene_screen(app: &AppWindow, window: &MinimalSoftwareWindow) {
         let openings = Rc::new(std::cell::Cell::new(0));
         app.on_performance_opened({
             let openings = openings.clone();
             move || openings.set(openings.get() + 1)
         });
-        let additions = Rc::new(std::cell::Cell::new(0));
-        let stores = Rc::new(std::cell::Cell::new(0));
-        let fx_stores = Rc::new(std::cell::Cell::new(0));
-        let fx_blocks = Rc::new(std::cell::Cell::new(-1));
-        app.on_fx_preset_store({
-            let stores = fx_stores.clone();
-            move |index| {
-                assert_eq!(index, 0);
-                stores.set(stores.get() + 1);
-            }
-        });
-        app.on_fx_preset_block_selected({
-            let blocks = fx_blocks.clone();
-            move |index| blocks.set(index)
-        });
+        let stores = Rc::new(std::cell::Cell::new(-1));
+        let renames = Rc::new(std::cell::Cell::new(-1));
+        let deletes = Rc::new(std::cell::Cell::new(-1));
+        let recalls = Rc::new(std::cell::Cell::new(-1));
         app.on_performance_scene_store({
             let stores = stores.clone();
+            move |index| stores.set(index)
+        });
+        app.on_performance_scene_rename({
+            let renames = renames.clone();
+            move |index| renames.set(index)
+        });
+        app.on_performance_scene_clear({
+            let deletes = deletes.clone();
+            move |index| deletes.set(index)
+        });
+        app.on_performance_scene_recall({
+            let recalls = recalls.clone();
+            let weak = app.as_weak();
             move |index| {
-                assert_eq!(index, 0);
-                stores.set(stores.get() + 1);
+                recalls.set(index);
+                let app = weak.upgrade().unwrap();
+                app.set_performance_scene(index);
+                app.set_scene_dirty(false);
             }
         });
-        app.on_performance_add({
-            let additions = additions.clone();
-            move || additions.set(additions.get() + 1)
-        });
+        let tap = |x, y| {
+            let position = LogicalPosition::new(x, y);
+            window.dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+            window.dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+        };
         let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
-        app.set_performance_banks(slint::ModelRc::new(slint::VecModel::from(vec![
-            "Set 1".into(),
-            "Set 2".into(),
+        app.set_scene_preset(12);
+        app.set_scene_title("12 - Summer Drive scenes".into());
+        app.set_performance_scene(0);
+        app.set_scene_dirty(true);
+        app.set_scene_assigned(slint::ModelRc::new(slint::VecModel::from(vec![
+            true, true, true, true, true, true, true, false,
         ])));
-        app.set_performance_slots(slint::ModelRc::new(slint::VecModel::from(vec![
-            "1: 4 Clean".into(),
-            "2: 8 Lead".into(),
-            "3: (unassigned)".into(),
-            "4: (unassigned)".into(),
-        ])));
-        app.set_performance_notice("".into());
+        app.set_performance_scenes(slint::ModelRc::new(slint::VecModel::from(
+            (1..=8).map(|index| format!("Scene name {index}").into()).collect::<Vec<_>>(),
+        )));
+        app.set_performance_notice("Preview only - must not be displayed".into());
         for (width, height, portrait) in [(800, 480, false), (480, 800, true)] {
             app.set_portrait(portrait);
             window.set_size(PhysicalSize::new(width, height));
-            app.set_connecting(true);
+            app.set_connecting(false);
             app.set_performance_open(false);
             window.request_redraw();
             window.draw_if_needed(|renderer| {
@@ -699,7 +1051,7 @@ mod tests {
                 renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
             });
             let before = openings.get();
-            let position = LogicalPosition::new(width as f32 - 62.0, 28.0);
+            let position = LogicalPosition::new(width as f32 - 110.0, 38.0);
             window.dispatch_event(WindowEvent::PointerPressed {
                 position,
                 button: PointerEventButton::Left,
@@ -711,7 +1063,7 @@ mod tests {
             assert_eq!(
                 openings.get(),
                 before + 1,
-                "Offline Banks entry is inaccessible"
+                "Header scene selector is inaccessible"
             );
             app.set_performance_open(true);
             window.request_redraw();
@@ -721,122 +1073,112 @@ mod tests {
                 renderer.render(&mut pixels, width as usize);
                 renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
             });
-            let before = additions.get();
-            let position = LogicalPosition::new(100.0, 116.0);
-            window.dispatch_event(WindowEvent::PointerPressed {
-                position,
-                button: PointerEventButton::Left,
-            });
-            window.dispatch_event(WindowEvent::PointerReleased {
-                position,
-                button: PointerEventButton::Left,
-            });
-            assert_eq!(
-                additions.get(),
-                before + 1,
-                "Banks screen is covered or Add is inaccessible"
-            );
-            app.set_performance_edit_slot(0);
-            app.set_performance_scenes(slint::ModelRc::new(slint::VecModel::from(vec![
-                "1: Clean".into(),
-                "2: Lead".into(),
-                "3: (empty)".into(),
-                "4: (empty)".into(),
-            ])));
+            let columns = if portrait { 2 } else { 3 };
+            let card_width = (width as f32 - 28.0 - (columns - 1) as f32 * 8.0) / columns as f32;
+            app.set_performance_scene(0);
+            app.set_scene_dirty(false);
             window.request_redraw();
             window.draw_if_needed(|renderer| {
                 renderer.set_rendering_rotation(RenderingRotation::NoRotation);
                 renderer.render(&mut pixels, width as usize);
             });
-            let before = stores.get();
-            let position = LogicalPosition::new(width as f32 - 160.0, 122.0);
-            window.dispatch_event(WindowEvent::PointerPressed {
-                position,
-                button: PointerEventButton::Left,
-            });
-            window.dispatch_event(WindowEvent::PointerReleased {
-                position,
-                button: PointerEventButton::Left,
-            });
-            assert_eq!(stores.get(), before + 1, "Scene Store is inaccessible");
-            app.set_performance_edit_slot(-1);
-            app.set_fx_presets(slint::ModelRc::new(slint::VecModel::from(vec![
-                "1: Drive".into()
-            ])));
-            app.set_fx_presets_open(true);
-            window.request_redraw();
-            window.draw_if_needed(|renderer| {
-                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
-                renderer.render(&mut pixels, width as usize);
-            });
-            let before = fx_stores.get();
-            let position = LogicalPosition::new(width as f32 - 160.0, 186.0);
-            window.dispatch_event(WindowEvent::PointerPressed {
-                position,
-                button: PointerEventButton::Left,
-            });
-            window.dispatch_event(WindowEvent::PointerReleased {
-                position,
-                button: PointerEventButton::Left,
-            });
-            assert_eq!(fx_stores.get(), before + 1, "FX Store is inaccessible");
-            let position = LogicalPosition::new(width as f32 - 55.0, 92.0);
-            window.dispatch_event(WindowEvent::PointerPressed {
-                position,
-                button: PointerEventButton::Left,
-            });
-            window.dispatch_event(WindowEvent::PointerReleased {
-                position,
-                button: PointerEventButton::Left,
-            });
-            assert_eq!(fx_blocks.get(), 4, "Last FX target is inaccessible");
-            app.set_confirm_title("Delete FX preset?".into());
-            app.set_confirm_message("Only this shelf entry is removed.".into());
-            app.set_confirm_label("Delete".into());
-            app.set_confirm_open(true);
+            let sample = |x: f32, y: usize| y * width as usize + x as usize;
+            assert_ne!(pixels[sample(55.0, 160)].0, pixels[sample(card_width + 63.0, 160)].0, "Selected scene is not spotlighted");
+            let clean = pixels.clone();
+            app.set_scene_dirty(true);
             window.request_redraw();
             window.draw_if_needed(|renderer| {
                 renderer.render(&mut pixels, width as usize);
             });
-            let position = LogicalPosition::new(width as f32 - 160.0, 186.0);
-            window.dispatch_event(WindowEvent::PointerPressed {
-                position,
-                button: PointerEventButton::Left,
+            let marker_x = (14.0 + card_width - 84.0) as usize;
+            assert!((100..165).any(|y| (marker_x - 8..marker_x + 8).any(|x|
+                pixels[y * width as usize + x] != clean[y * width as usize + x]
+            )), "Selected scene lacks its unsaved asterisk");
+            assert!((80..142).all(|y| (card_width as usize + 30..width as usize - 25).all(|x|
+                pixels[y * width as usize + x] == clean[y * width as usize + x]
+            )), "Unsaved marker leaked onto another scene");
+            tap(card_width + 50.0, 135.0);
+            assert_eq!(recalls.get(), 1, "Card body does not recall scene ({width}x{height})");
+            assert!(app.get_performance_open(), "Scene recall closed the menu");
+            assert_eq!(app.get_performance_scene(), 1);
+            assert!(!app.get_scene_dirty());
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.render(&mut pixels, width as usize);
             });
-            window.dispatch_event(WindowEvent::PointerReleased {
-                position,
-                button: PointerEventButton::Left,
-            });
-            assert_eq!(
-                fx_stores.get(),
-                before + 1,
-                "Confirmation allowed an underlying FX Store tap"
-            );
-            app.set_confirm_open(false);
-            app.set_fx_presets_open(false);
+            let mut menu_action = |index: i32, action: i32| {
+                let col = index % columns;
+                let row = index / columns;
+                tap(14.0 + col as f32 * (card_width + 8.0) + card_width - 30.0, 135.0 + row as f32 * 102.0);
+                assert_eq!(app.get_scene_menu_index(), index, "Three-dot button did not open scene menu");
+                assert_eq!(recalls.get(), 1, "Menu button recalled its card");
+                window.request_redraw();
+                window.draw_if_needed(|renderer| { renderer.render(&mut pixels, width as usize); });
+                let x = (14.0 + col as f32 * (card_width + 8.0) + card_width - 42.0)
+                    .clamp(8.0, width as f32 - 228.0);
+                let y = (90.0 + row as f32 * 102.0).clamp(8.0, height as f32 - 188.0);
+                let separator_x = (x + 20.0) as usize;
+                let separator_y = (y + 120.0) as usize;
+                assert_ne!(
+                    pixels[separator_y * width as usize + separator_x],
+                    pixels[(separator_y - 1) * width as usize + separator_x],
+                    "Scene menu lacks a separator before Delete"
+                );
+                tap(x + 40.0, y + 30.0 + action as f32 * 60.0);
+                assert!(!app.get_confirm_open(), "Scene action opened a confirmation");
+                if index != 7 || action == 1 {
+                    assert_eq!(app.get_scene_menu_index(), -1, "Scene action left menu open");
+                } else {
+                    tap(5.0, 5.0);
+                    assert_eq!(app.get_scene_menu_index(), -1, "Outside tap did not dismiss menu");
+                }
+                window.request_redraw();
+                window.draw_if_needed(|renderer| { renderer.render(&mut pixels, width as usize); });
+            };
+            menu_action(0, 0);
+            assert_eq!(renames.get(), 0, "Rename menu action is inaccessible");
+            menu_action(0, 1);
+            assert_eq!(stores.get(), 0, "Save menu action is inaccessible");
+            menu_action(0, 2);
+            assert_eq!(deletes.get(), 0, "Delete menu action is inaccessible");
+            assert_eq!(recalls.get(), 1, "Action button also recalled its card");
+            menu_action(6, 1);
+            assert_eq!(stores.get(), 6, "Seventh scene is inaccessible");
+            renames.set(-1);
+            deletes.set(-1);
+            menu_action(7, 0);
+            menu_action(7, 2);
+            assert_eq!(renames.get(), -1, "Empty scene allowed rename");
+            assert_eq!(deletes.get(), -1, "Empty scene allowed delete");
+            menu_action(7, 1);
+            assert_eq!(stores.get(), 7, "Eighth scene cannot be saved");
+            if portrait {
+                app.set_scene_menu_index(0);
+                app.set_performance_busy(true);
+                slint::platform::update_timers_and_animations();
+                assert_eq!(app.get_scene_menu_index(), -1, "Busy state left scene menu open");
+                app.set_performance_busy(false);
+            } else {
+                window.request_redraw();
+                window.draw_if_needed(|renderer| { renderer.render(&mut pixels, width as usize); });
+                recalls.set(-1);
+                tap(2.0 * (card_width + 8.0) + 50.0, 135.0);
+                assert_eq!(recalls.get(), 2, "Landscape does not have three columns");
+            }
         }
         app.set_performance_open(false);
+        app.set_scene_dirty(false);
         app.set_connecting(false);
         app.set_portrait(false);
         window.set_size(PhysicalSize::new(800, 480));
     }
 
     fn check_gig_screen(app: &AppWindow, window: &MinimalSoftwareWindow) {
-        let slots = Rc::new(std::cell::Cell::new((0, -1)));
         let scenes = Rc::new(std::cell::Cell::new((0, -1)));
-        let banks = Rc::new(std::cell::Cell::new(0));
         let tempo = Rc::new(std::cell::Cell::new(0));
-        app.on_performance_recall({
-            let slots = slots.clone();
-            move |index| slots.set((slots.get().0 + 1, index))
-        });
         app.on_gig_scene_recall({
             let scenes = scenes.clone();
             move |index| scenes.set((scenes.get().0 + 1, index))
-        });
-        app.on_gig_bank_stepped({
-            let banks = banks.clone();
-            move |_| banks.set(banks.get() + 1)
         });
         app.on_tempo_tapped({
             let tempo = tempo.clone();
@@ -853,28 +1195,22 @@ mod tests {
             }
         });
         app.set_preset("1 Clean".into());
-        app.set_performance_slots(slint::ModelRc::new(slint::VecModel::from(
-            (1..=4)
-                .map(|index| format!("Slot {index} Clean").into())
-                .collect::<Vec<_>>(),
-        )));
-        app.set_gig_assigned(slint::ModelRc::new(slint::VecModel::from(vec![true; 4])));
         app.set_gig_scenes(slint::ModelRc::new(slint::VecModel::from(
-            (1..=4)
+            (1..=8)
                 .map(|index| format!("Scene {index}").into())
                 .collect::<Vec<_>>(),
         )));
-        app.set_gig_scene_assigned(slint::ModelRc::new(slint::VecModel::from(vec![true; 4])));
+        app.set_gig_scene_assigned(slint::ModelRc::new(slint::VecModel::from(vec![true; 8])));
         app.set_settings_open(true);
         app.set_performance_open(true);
-        app.set_fx_presets_open(true);
+        app.set_fx_preset_menu_index(0);
         app.set_model_open(true);
         app.set_confirm_open(true);
         app.set_kbd_open(true);
         app.invoke_gig_mode_set(true);
         assert!(app.get_gig_open());
         assert!(
-            !app.get_settings_open() && !app.get_performance_open() && !app.get_fx_presets_open()
+            !app.get_settings_open() && !app.get_performance_open() && app.get_fx_preset_menu_index() == -1
         );
         assert!(!app.get_model_open() && !app.get_confirm_open() && !app.get_kbd_open());
         let tap = |x, y| {
@@ -903,23 +1239,9 @@ mod tests {
                 });
             };
             draw();
-            let before = slots.get().0;
-            tap(100.0, 141.0);
-            tap(100.0, 217.0);
-            assert_eq!(
-                slots.get(),
-                (before + 2, 0),
-                "Gig slot target is smaller than 76 pixels tall"
-            );
-            tap(width as f32 - 60.0, if portrait { 500.0 } else { 270.0 });
-            assert_eq!(slots.get(), (before + 3, 3), "Last gig slot inaccessible");
             let before = scenes.get().0;
             tap(width as f32 - 60.0, if portrait { 675.0 } else { 360.0 });
-            assert_eq!(scenes.get(), (before + 1, 3), "Last scene inaccessible");
-            let before = banks.get();
-            tap(45.0, 40.0);
-            tap(width as f32 - 145.0, 40.0);
-            assert_eq!(banks.get(), before + 2);
+            assert_eq!(scenes.get(), (before + 1, 7), "Last scene inaccessible");
             tap(80.0, height as f32 - 45.0);
             assert_eq!(app.get_page(), 2);
             assert!(app.get_gig_open());
@@ -931,7 +1253,7 @@ mod tests {
             let before = tempo.get();
             tap(width as f32 - 70.0, height as f32 - 45.0);
             assert_eq!(tempo.get(), before + 1);
-            let before = (slots.get(), scenes.get(), banks.get(), tempo.get());
+            let before = (scenes.get(), tempo.get());
             app.set_performance_busy(true);
             draw();
             tap(45.0, 40.0);
@@ -940,7 +1262,7 @@ mod tests {
             tap(80.0, height as f32 - 45.0);
             tap(width as f32 - 70.0, height as f32 - 45.0);
             assert_eq!(
-                (slots.get(), scenes.get(), banks.get(), tempo.get()),
+                (scenes.get(), tempo.get()),
                 before,
                 "Busy recall controls remained active"
             );
@@ -949,7 +1271,11 @@ mod tests {
             app.set_connecting(true);
             draw();
             tap(100.0, 160.0);
-            assert_eq!(slots.get(), before.0, "Disconnected recall remained active");
+            assert_eq!(
+                scenes.get(),
+                before.0,
+                "Disconnected recall remained active"
+            );
             tap(width as f32 - 55.0, 40.0);
             assert!(
                 !app.get_gig_open(),
@@ -1158,7 +1484,9 @@ mod tests {
         check_fullscreen_popups(&app, &window);
         check_fx_cell_contrast(&app, &window);
         check_midi_clear_confirmation(&app, &window);
-        check_bank_screen(&app, &window);
+        check_full_midi_list(&app, &window);
+        check_fx_preset_tabs(&app, &window, &time);
+        check_scene_screen(&app, &window);
         check_gig_screen(&app, &window);
         let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
 
@@ -1259,5 +1587,7 @@ mod tests {
                 );
             }
         }
+        app.hide().unwrap();
+        check_preview_workflow(&window);
     }
 }

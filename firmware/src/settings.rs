@@ -1,7 +1,7 @@
 //! Persists the screen layout in the first sector of the `nvs` partition.
 //!
-//! The second sector holds legacy MIDI bindings for migration. Current MIDI
-//! configuration lives in the separate `midi` partition.
+//! Current MIDI and performance configuration live in separate partitions.
+//! The last NVS sector marks completion of the controller-wide storage reset.
 
 use alloc::{string::String, vec};
 use esp_bootloader_esp_idf::partitions::{
@@ -87,27 +87,68 @@ pub fn save_layout(mode: i32) {
 
 mod midi_record;
 mod json_record;
+mod reset;
 
-const MIDI_OFFSET: u32 = SECTOR;
-
-/// Saved MIDI bindings (second sector of `nvs`), if a valid record exists.
-pub fn load_midi(count: usize) -> Option<[u16; midi_record::MAX]> {
-    with_region(|region| {
-        if (region.partition_size() as u32) < 2 * SECTOR || count > midi_record::MAX {
-            log::warn!("MIDI storage region or action count unsupported");
-            return None;
+pub fn initialize() -> Result<bool, &'static str> {
+    let flash = flash().ok_or("Flash unavailable for controller factory reset")?;
+    let mut buf = vec![0; PARTITION_TABLE_MAX_LEN];
+    let table = read_partition_table(&mut *flash, &mut buf)
+        .map_err(|_| "Cannot read partition table for controller factory reset")?;
+    let find = |label: &str, minimum: u32| {
+        let entry = table.iter().find(|entry| entry.label_as_str() == label)
+            .ok_or("Controller factory reset partition missing; flash using flash.sh")?;
+        if entry.partition_type() != PartitionType::Data(DataPartitionSubType::Nvs)
+            || entry.len() < minimum
+        {
+            return Err("Controller factory reset partition type or size invalid");
         }
-        let mut r = [0u8; midi_record::SIZE];
-        region
-            .read(MIDI_OFFSET, &mut r)
-            .map_err(|e| log::warn!("MIDI read {e:?}"))
-            .ok()?;
-        let decoded = midi_record::decode(&r, count);
-        if decoded.is_none() && r.iter().any(|b| *b != 0xff) {
-            log::warn!("Invalid MIDI binding record");
+        Ok(entry)
+    };
+    let nvs = find("nvs", 3 * SECTOR)?;
+    let midi = find("midi", json_record::CAPACITY)?;
+    let performance = find("performance", PERFORMANCE_SLOT * 2)?;
+    let nvs_size = nvs.len();
+    let midi_size = midi.len();
+    let performance_size = performance.len();
+    let ranges = [
+        (nvs.offset(), nvs_size),
+        (midi.offset(), midi_size),
+        (performance.offset(), performance_size),
+    ];
+    for (index, &(offset, size)) in ranges.iter().enumerate() {
+        let end = offset.checked_add(size).ok_or("Controller reset partition range overflow")?;
+        if offset % SECTOR != 0 || end > flash.capacity() as u32
+            || ranges[..index].iter().any(|&(old_offset, old_size)| {
+                offset < old_offset + old_size && old_offset < end
+            })
+        {
+            return Err("Controller reset partition ranges invalid or overlapping");
         }
-        decoded
-    })
+    }
+    struct Regions<'a, 'b, 'd> {
+        flash: &'a core::cell::RefCell<&'b mut FlashStorage<'d>>,
+        entry: esp_bootloader_esp_idf::partitions::PartitionEntry,
+    }
+    impl json_record::Storage for Regions<'_, '_, '_> {
+        fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), &'static str> {
+            self.entry.as_flash_region(&mut **self.flash.borrow_mut()).read(offset, bytes)
+                .map_err(|_| "Controller reset flash read failed")
+        }
+        fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), &'static str> {
+            self.entry.as_flash_region(&mut **self.flash.borrow_mut()).write(offset, bytes)
+                .map_err(|_| "Controller reset flash write failed")
+        }
+        fn erase(&mut self, start: u32, end: u32) -> Result<(), &'static str> {
+            self.entry.as_flash_region(&mut **self.flash.borrow_mut()).erase(start, end)
+                .map_err(|_| "Controller reset flash erase failed")
+        }
+    }
+    let flash = core::cell::RefCell::new(flash);
+    reset::initialize(
+        &mut Regions { flash: &flash, entry: nvs }, nvs_size,
+        &mut Regions { flash: &flash, entry: midi }, midi_size,
+        &mut Regions { flash: &flash, entry: performance }, performance_size,
+    )
 }
 
 pub fn save_midi(keys: &[u16]) -> bool {

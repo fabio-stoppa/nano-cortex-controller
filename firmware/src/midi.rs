@@ -38,7 +38,19 @@ const BANK_START: usize = MUTE_START + 6;
 const SCENE_START: usize = BANK_START + 14;
 const FX_PRESET_START: usize = SCENE_START + 4;
 const GIG_START: usize = FX_PRESET_START + BLOCKS * crate::performance::data::FX_PRESETS;
-pub const ACTION_COUNT: usize = GIG_START + 2;
+const EXTRA_SCENE_START: usize = GIG_START + 2;
+pub const ACTION_COUNT: usize = EXTRA_SCENE_START + crate::performance::data::SCENES - 4;
+
+pub fn active_action(index: usize) -> bool {
+    index < ACTION_COUNT
+        && !(BANK_START..SCENE_START).contains(&index)
+        && !(FX_PRESET_START + BLOCKS * crate::performance::data::FX_PRESETS_PER_MODEL..GIG_START)
+            .contains(&index)
+}
+
+pub fn visible_action(row: usize) -> Option<usize> {
+    (0..ACTION_COUNT).filter(|index| active_action(*index)).nth(row)
+}
 
 const BLOCK_NAMES: [&str; BLOCKS] = [
     "Pre FX 1",
@@ -163,9 +175,11 @@ pub fn action_name(index: usize) -> String {
         format!("Recall scene {}", index - SCENE_START + 1)
     } else if index < GIG_START {
         let offset = index - FX_PRESET_START;
-        format!("FX preset {} into {}", offset / BLOCKS + 1, BLOCK_NAMES[offset % BLOCKS])
-    } else {
+        format!("Current model preset {} in {}", offset / BLOCKS + 1, BLOCK_NAMES[offset % BLOCKS])
+    } else if index < EXTRA_SCENE_START {
         String::from(if index == GIG_START { "Enter gig view" } else { "Exit gig view" })
+    } else {
+        format!("Recall scene {}", index - EXTRA_SCENE_START + 5)
     }
 }
 
@@ -200,7 +214,7 @@ static TABLE: Mutex<CriticalSectionRawMutex, RefCell<Table>> = Mutex::new(RefCel
 }));
 
 pub fn load() {
-    let migrate = match crate::settings::load_midi_json() {
+    match crate::settings::load_midi_json() {
         Ok(Some(json)) => {
             match keys_from_json(&json) {
                 Ok(keys) => TABLE.lock(|t| {
@@ -210,23 +224,9 @@ pub fn load() {
                 }),
                 Err(err) => report(err),
             }
-            return;
         }
-        Ok(None) => true,
-        Err(err) => {
-            report(err);
-            false
-        }
-    };
-    if let Some(keys) = crate::settings::load_midi(ACTION_COUNT.min(256)) {
-        TABLE.lock(|t| {
-            let mut t = t.borrow_mut();
-            for (slot, key) in t.keys.iter_mut().zip(keys) {
-                *slot = key;
-            }
-            t.version += 1;
-            t.unsaved = migrate;
-        });
+        Ok(None) => {}
+        Err(err) => report(err),
     }
 }
 
@@ -266,6 +266,14 @@ pub fn rows() -> alloc::vec::Vec<Row> {
     })
 }
 
+pub fn visible_rows() -> alloc::vec::Vec<Row> {
+    rows()
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, row)| active_action(index).then_some(row))
+        .collect()
+}
+
 /// Last message seen, for the page's status line.
 pub fn last_text() -> String {
     TABLE.lock(|t| {
@@ -280,7 +288,8 @@ pub fn last_text() -> String {
 
 /// Starts waiting for a message for `index`; tapping the same row again cancels.
 pub fn toggle_learn(index: usize) {
-    if index >= ACTION_COUNT {
+    if !active_action(index) {
+        report("This MIDI action has been retired");
         return;
     }
     TABLE.lock(|t| {
@@ -488,7 +497,7 @@ fn dispatch(status: u8, data: [u8; 2]) {
     });
     if let Some(keys) = keys {
         let actions = keys.iter().enumerate().filter_map(|(index, assigned)| {
-            (*assigned == key
+            (*assigned == key && active_action(index)
                 && (!continuous_action(index) || msg.kind == Kind::Cc)
                 && (continuous_action(index) || msg.kind != Kind::Cc || msg.value > 0))
                 .then_some(index)
@@ -505,7 +514,7 @@ fn dispatch(status: u8, data: [u8; 2]) {
 
 /// Called on the Nano link task, so snapshots and writes share its ordering.
 pub fn command(index: usize, value: u8, continuous: bool) -> Option<Cmd> {
-    if index >= ACTION_COUNT || (continuous_action(index) && !continuous) {
+    if !active_action(index) || (continuous_action(index) && !continuous) {
         log::warn!("Unsupported MIDI action {index}");
         return None;
     }
@@ -585,19 +594,17 @@ pub fn command(index: usize, value: u8, continuous: bool) -> Option<Cmd> {
         } else {
             Some(Cmd::TunerOutputMute(n == 4))
         }
-    } else if index < BANK_START + 2 {
-        Some(Cmd::BankStep(if index == BANK_START { 1 } else { -1 }))
-    } else if index < BANK_START + 6 {
-        Some(Cmd::BankSlot((index - BANK_START - 2) as u8))
     } else if index < SCENE_START {
-        Some(Cmd::BankAt((index - BANK_START - 6) as u8))
+        None
     } else if index < FX_PRESET_START {
         Some(Cmd::SceneRecall((index - SCENE_START) as u8))
     } else if index < GIG_START {
         let offset = index - FX_PRESET_START;
-        Some(Cmd::FxPresetRecall { index: (offset / BLOCKS) as u8, block: (offset % BLOCKS) as u8 })
-    } else {
+        Some(Cmd::FxPresetRecall { index: (offset / BLOCKS) as u8, block: (offset % BLOCKS) as u8, model: None })
+    } else if index < EXTRA_SCENE_START {
         Some(Cmd::Gig(index == GIG_START))
+    } else {
+        Some(Cmd::SceneRecall((index - EXTRA_SCENE_START + 4) as u8))
     }
 }
 

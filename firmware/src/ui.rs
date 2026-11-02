@@ -258,8 +258,16 @@ fn ensure() {
     });
     app.on_tools_refresh(move || crate::link::push_cmd(Cmd::ToolsOpen));
     app.on_midi_closed(|| crate::midi::cancel_learn());
-    app.on_midi_learn(|index| crate::midi::toggle_learn(index.max(0) as usize));
-    app.on_midi_clear(|index| crate::midi::clear(index.max(0) as usize));
+    app.on_midi_learn(|index| {
+        if let Some(action) = crate::midi::visible_action(index.max(0) as usize) {
+            crate::midi::toggle_learn(action);
+        }
+    });
+    app.on_midi_clear(|index| {
+        if let Some(action) = crate::midi::visible_action(index.max(0) as usize) {
+            crate::midi::clear(action);
+        }
+    });
     app.on_midi_clear_all(crate::midi::clear_all);
     app.on_tools_jack_selected(move |expression| {
         crate::link::push_cmd(Cmd::JackMode(if expression {
@@ -421,7 +429,6 @@ fn ensure() {
                 2 => crate::link::push_cmd(Cmd::CabAt(index as u16)),
                 3 if index <= 255 => crate::link::push_cmd(Cmd::PresetAt(index as u8)),
                 kind @ (4 | 5) if index <= 255 => choose_target(&app, kind, index as u8),
-                6 if (0..=64).contains(&index) => performance::assign(&app, index),
                 0 if index <= 255 => {
                     let Some(block) = fx_block_for_chain(app.get_chain()) else {
                         return;
@@ -456,7 +463,11 @@ fn ensure() {
             let mut text = String::from(app.get_kbd_text().as_str());
             if key.as_str() == "\u{8}" {
                 text.pop();
-            } else if key.len() == 1 && text.len() < nano_wire::editor::PRESET_NAME_LIMIT {
+            } else if key.len() == 1 && text.len() < if app.get_performance_name_action() != 0 {
+                crate::performance::data::NAME_LIMIT
+            } else {
+                nano_wire::editor::PRESET_NAME_LIMIT
+            } {
                 text.push_str(key.as_str());
             }
             app.set_kbd_text(text.as_str().into());
@@ -491,12 +502,6 @@ fn ensure() {
         move || {
             if let Some(app) = weak.upgrade() {
                 if performance::confirm(&app) { return; }
-                let bank = app.get_performance_delete_bank();
-                if bank >= 0 {
-                    app.set_performance_delete_bank(-1);
-                    if let Err(error) = crate::performance::delete_bank(bank as usize) { crate::performance::report(error); }
-                    return;
-                }
             }
             match CONFIRM.load(Ordering::Relaxed) {
         CONFIRM_DELETE => {
@@ -1030,7 +1035,7 @@ pub fn refresh_midi() {
         return;
     }
     MIDI_SHOWN.store(version, core::sync::atomic::Ordering::Relaxed);
-    let rows: alloc::vec::Vec<MidiRow> = crate::midi::rows()
+    let rows: alloc::vec::Vec<MidiRow> = crate::midi::visible_rows()
         .into_iter()
         .map(|r| MidiRow {
             name: r.name.as_str().into(),

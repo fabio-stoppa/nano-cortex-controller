@@ -566,7 +566,7 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
             if crate::performance::busy() {
                 crate::performance::report("Parameter edit ignored while performance recall is running");
             } else {
-                crate::performance::sound_edited();
+                crate::performance::effect_edited(usize::from(param.block));
                 if !crate::fx::nano_fx_write_param_normalized(
                     u32::from(param.block),
                     param.wire,
@@ -595,16 +595,27 @@ fn apply_cmd(cmd: crate::link::Cmd) {
         | crate::link::Cmd::Preset(_) | crate::link::Cmd::PresetAt(_)
     ) {
         crate::performance::sound_edited();
+        match &cmd {
+            crate::link::Cmd::Param(param) => crate::performance::effect_edited(usize::from(param.block)),
+            crate::link::Cmd::Block { slot, .. } => crate::performance::effect_edited(usize::from(*slot)),
+            crate::link::Cmd::Model { block, .. } | crate::link::Cmd::ModelAt { block, .. } =>
+                crate::performance::effect_edited(usize::from(*block)),
+            _ => {}
+        }
     }
     match cmd {
         crate::link::Cmd::Gig(enabled) => crate::ui::show_gig(enabled),
-        crate::link::Cmd::FxPresetRecall { index, block } => {
-            if let Err(error) = crate::performance::recall_fx(usize::from(index), usize::from(block)) {
+        crate::link::Cmd::FxPresetRecall { index, block, model } => {
+            if model.as_ref().is_some_and(|model| crate::performance::fx_model(usize::from(block)).as_ref() != Some(model)) {
+                crate::performance::report("FX model changed; choose its preset again");
+            } else if let Err(error) = crate::performance::recall_fx(usize::from(index), usize::from(block)) {
                 crate::performance::report(error);
             } else { SLIDER.reset(); crate::link::take_param(); }
         }
-        crate::link::Cmd::FxPresetCapture { index, block, name } => {
-            if let Err(error) = crate::performance::capture_fx(usize::from(index), usize::from(block), &name) {
+        crate::link::Cmd::FxPresetCapture { index, block, preset, name, model } => {
+            if preset != crate::state::nano_state_preset_slot() {
+                crate::performance::report("Nano preset changed; reopen FX preset saving");
+            } else if let Err(error) = crate::performance::capture_fx(usize::from(index), usize::from(block), &name, &model) {
                 crate::performance::report(error);
             }
         }
@@ -612,8 +623,15 @@ fn apply_cmd(cmd: crate::link::Cmd) {
             if let Err(error) = crate::performance::recall_scene(usize::from(index)) { crate::performance::report(error); }
             else { SLIDER.reset(); crate::link::take_param(); }
         }
-        crate::link::Cmd::SceneCapture { bank, slot, scene, name } => {
-            if let Err(error) = crate::performance::capture_scene(usize::from(bank), usize::from(slot), usize::from(scene), &name) {
+        crate::link::Cmd::SceneRecallAt { preset, scene } => {
+            if preset != crate::state::nano_state_preset_slot() {
+                crate::performance::report("Nano preset changed; reopen the scene selector");
+            } else if let Err(error) = crate::performance::recall_scene(usize::from(scene)) {
+                crate::performance::report(error);
+            } else { SLIDER.reset(); crate::link::take_param(); }
+        }
+        crate::link::Cmd::SceneCapture { preset, scene, name } => {
+            if let Err(error) = crate::performance::capture_scene(preset, usize::from(scene), &name) {
                 crate::performance::report(error);
             }
         }
@@ -633,24 +651,6 @@ fn apply_cmd(cmd: crate::link::Cmd) {
             let sent = crate::fx::models::find_model(&id)
                 .is_some_and(|model| crate::fx::nano_fx_write_block_model(u32::from(block), model));
             if !sent { crate::performance::cancel("FX model recall refused; sound may be partially updated"); }
-        }
-        crate::link::Cmd::BankStep(delta) => {
-            if let Err(error) = crate::performance::step_bank(delta) { crate::performance::report(error); }
-        }
-        crate::link::Cmd::BankAt(index) => {
-            if let Err(error) = crate::performance::select_bank(usize::from(index)) { crate::performance::report(error); }
-        }
-        crate::link::Cmd::BankSlot(slot) => {
-            match crate::performance::start_bank(usize::from(slot)) {
-                Ok(preset) => {
-                    SLIDER.reset();
-                    crate::link::take_param();
-                    if !crate::state::nano_state_select_preset(preset) {
-                        crate::performance::cancel("Bank preset selection refused");
-                    }
-                }
-                Err(error) => crate::performance::report(error),
-            }
         }
         crate::link::Cmd::Gate(on) => {
             if !crate::fx::nano_fx_write_gate_enabled(on) {

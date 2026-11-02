@@ -8,6 +8,8 @@ pub mod catalog;
 mod hci;
 #[path = "../../../src/settings/json_record.rs"]
 mod json_record;
+#[path = "../../../src/settings/reset.rs"]
+mod reset_record;
 #[path = "../../../src/link.rs"]
 mod link;
 #[path = "../../../src/midi.rs"]
@@ -28,6 +30,8 @@ pub mod types;
 pub mod util;
 
 mod fx {
+    #[cfg(test)]
+    pub use crate::catalog;
     pub use crate::models;
     pub use crate::params;
     pub use crate::types;
@@ -99,7 +103,6 @@ mod state {
 }
 
 mod settings {
-    use super::midi_record;
     use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Mutex;
 
@@ -117,16 +120,6 @@ mod settings {
         }
         *PERFORMANCE.lock().unwrap() = Some(json.to_owned());
         Ok(())
-    }
-
-    pub fn load_midi(count: usize) -> Option<[u16; midi_record::MAX]> {
-        let json = RECORD.lock().unwrap();
-        let keys = crate::midi::keys_from_json(json.as_ref()?).ok()?;
-        let mut result = [0; midi_record::MAX];
-        for (out, key) in result.iter_mut().take(count).zip(keys) {
-            *out = key;
-        }
-        Some(result)
     }
 
     pub fn save_midi(keys: &[u16]) -> bool {
@@ -183,6 +176,55 @@ mod tests {
             .unwrap()
     }
 
+    fn loaded_fx_model(block: usize, model: &'static types::NanoFxModelDef) {
+        assert!(models::is_model_allowed(block as u32, model));
+        fx::SNAPSHOT.with(|snapshot| {
+            let mut snapshot = snapshot.borrow_mut();
+            snapshot.valid = true;
+            let current = &mut snapshot.blocks[block];
+            *current = types::NanoFxBlock::zeroed();
+            current.id = block as u32;
+            current.valid = true;
+            current.model = model;
+            current.model_id_len = model.id_len;
+            current.model_id_raw[..model.id_bytes().len()].copy_from_slice(model.id_bytes());
+            current.has_model_id = true;
+            current.param_count = model.param_count;
+            current.params_loaded = true;
+            for (wire, parameter) in current.params[..usize::from(model.param_count)].iter_mut().enumerate() {
+                parameter.valid = true;
+                parameter.normalized = params::normalize_for_model(model, wire, 0.4);
+            }
+        });
+    }
+
+    fn finish_fx_recall() {
+        for _ in 0..128 {
+            match performance::poll() {
+                Some(link::Cmd::Param(param)) => {
+                    fx::SNAPSHOT.with(|snapshot| {
+                        let mut snapshot = snapshot.borrow_mut();
+                        let block = &mut snapshot.blocks[usize::from(param.block)];
+                        let model = models::model_ref(block.model).unwrap();
+                        block.params[usize::from(param.wire)].normalized =
+                            params::normalize_for_model(model, usize::from(param.wire), param.norm);
+                    });
+                }
+                Some(link::Cmd::Block { slot, on }) => {
+                    fx::SNAPSHOT.with(|snapshot| snapshot.borrow_mut().blocks[usize::from(slot)].on = on);
+                }
+                Some(link::Cmd::PerformanceRefresh | link::Cmd::PerformanceFxRefresh) => {
+                    state::GENERATION.fetch_add(1, Ordering::Relaxed);
+                }
+                Some(link::Cmd::FxModelId { .. }) | None => {}
+                _ => panic!("Unexpected command in FX-only recall"),
+            }
+            if !performance::busy() { break; }
+        }
+        assert!(!performance::busy(), "FX recall did not finish");
+        assert_eq!(performance::notice(), "Recall verified");
+    }
+
     fn cc(number: u8, value: u8) {
         midi::feed(&[0x80, 0x80, 0xb0, number, value]);
     }
@@ -209,51 +251,31 @@ mod tests {
     }
 
     #[test]
-    fn custom_banks_edit_persist_recall_and_refuse_failed_saves() {
+    fn retired_set_bindings_are_preserved_but_do_not_execute() {
         let _guard = LOCK.lock().unwrap();
         reset();
-        *settings::PERFORMANCE.lock().unwrap() = None;
-        performance::load();
-        assert!(performance::recall_slot(0).is_err());
-        performance::add_bank("Set 1").unwrap();
-        performance::assign_slot(0, Some(64)).unwrap();
-        performance::add_bank("Set 2").unwrap();
-        performance::assign_slot(1, Some(3)).unwrap();
-        performance::step_bank(1).unwrap();
-        assert_eq!(performance::bank(), 0);
-        assert_eq!(performance::recall_slot(0).unwrap(), 64);
-        performance::step_bank(-1).unwrap();
-        assert_eq!(performance::recall_slot(1).unwrap(), 3);
-        performance::load();
-        assert_eq!(performance::banks(), ["Set 1", "Set 2"]);
-        assert!(performance::rename_bank(1, "set 1").is_err());
-        let before = performance::export_json().unwrap();
-        settings::FAIL.store(true, Ordering::Relaxed);
-        assert!(performance::delete_bank(0).is_err());
-        assert_eq!(performance::export_json().unwrap(), before);
-        settings::FAIL.store(false, Ordering::Relaxed);
-        performance::delete_bank(0).unwrap();
-        assert_eq!(performance::banks(), ["Set 2"]);
-        link::set_up(false);
-        assert!(performance::recall_slot(1).is_err());
-        assert!(matches!(
-            midi::command(index("Next bank"), 127, false),
-            Some(link::Cmd::BankStep(1))
-        ));
-        assert!(matches!(
-            midi::command(index("Recall bank slot 4"), 127, false),
-            Some(link::Cmd::BankSlot(3))
-        ));
+        learn_cc(0, 7);
+        let mut config: serde_json::Value =
+            serde_json::from_str(&midi::export_json().unwrap()).unwrap();
+        config["bindings"][0]["action"] = 249.into();
+        let json = serde_json::to_string(&config).unwrap();
+        midi::import_json(&json).unwrap();
+        cc(7, 127);
+        assert!(queued().is_empty());
+        assert!(midi::rows()[249].assigned.contains("7"));
+        assert!(!midi::visible_rows()
+            .iter()
+            .any(|row| row.name.contains("bank")));
+        assert!(midi::command(index("Next bank"), 127, false).is_none());
+        assert!(midi::command(index("Recall bank slot 4"), 127, false).is_none());
     }
 
     #[test]
-    fn scenes_persist_failed_saves_preserve_data_and_bank_ack_is_required() {
+    fn scenes_are_preset_scoped_and_failed_saves_preserve_data() {
         let _guard = LOCK.lock().unwrap();
         reset();
         *settings::PERFORMANCE.lock().unwrap() = None;
         performance::load();
-        performance::add_bank("Live").unwrap();
-        performance::assign_slot(0, Some(1)).unwrap();
         state::AMP.with(|amp| amp.borrow_mut().valid = true);
         fx::SNAPSHOT.with(|snapshot| {
             let mut view = snapshot.borrow_mut();
@@ -266,32 +288,15 @@ mod tests {
         });
         state::PRESET.store(1, Ordering::Relaxed);
         state::ACK.store(0, Ordering::Relaxed);
-        assert!(performance::capture_scene(0, 0, 0, "Clean").is_err());
-        performance::recall_slot(0).unwrap();
-        performance::capture_scene(0, 0, 0, "Clean").unwrap();
-        assert_eq!(performance::scenes(0)[0].as_deref(), Some("Clean"));
+        assert!(performance::capture_scene(2, 0, "Clean").is_err());
+        performance::capture_scene(1, 0, "Clean").unwrap();
+        assert_eq!(performance::scenes(1)[0].as_deref(), Some("Clean"));
+        assert_eq!(performance::scene(), Some(0));
         let before = performance::export_json().unwrap();
         settings::FAIL.store(true, Ordering::Relaxed);
-        assert!(performance::capture_scene(0, 0, 0, "Lead").is_err());
+        assert!(performance::capture_scene(1, 0, "Lead").is_err());
         assert_eq!(performance::export_json().unwrap(), before);
         settings::FAIL.store(false, Ordering::Relaxed);
-        performance::start_bank(0).unwrap();
-        assert!(
-            performance::poll().is_none(),
-            "Optimistic preset selection is not acknowledgment"
-        );
-        assert!(performance::busy());
-        assert!(performance::select_bank(0).is_err());
-        state::ACK.fetch_add(1, Ordering::Relaxed);
-        assert!(matches!(
-            performance::poll(),
-            Some(link::Cmd::PerformanceRefresh)
-        ));
-        assert!(performance::poll().is_none());
-        assert!(performance::busy());
-        state::GENERATION.fetch_add(1, Ordering::Relaxed);
-        performance::poll();
-        assert!(!performance::busy());
         performance::recall_scene(0).unwrap();
         assert!(performance::busy());
         for _ in 0..64 {
@@ -305,50 +310,136 @@ mod tests {
         assert!(!performance::busy());
         assert_eq!(performance::scene(), Some(0));
         performance::sound_edited();
-        assert!(performance::scene().is_none());
+        assert_eq!(performance::scene(), Some(0));
+        assert!(performance::scene_dirty());
+        let before = performance::export_json().unwrap();
+        assert!(performance::rename_scene(1, 0, "12345678901234567").is_err());
+        assert_eq!(performance::export_json().unwrap(), before);
+        performance::rename_scene(1, 0, "1234567890123456").unwrap();
+        assert!(performance::scene_dirty(), "Renaming saved unsaved sound edits");
+        assert_eq!(performance::scene(), Some(0));
+        performance::rename_scene(1, 0, "Clean").unwrap();
+        assert!(performance::capture_scene(1, 7, "12345678901234567").is_err());
+        performance::capture_scene(1, 7, "Eighth").unwrap();
+        assert_eq!(performance::scenes(1).len(), 8);
+        assert_eq!(performance::scene(), Some(7));
+        assert!(!performance::scene_dirty());
+        assert!(performance::capture_scene(1, 8, "Overflow").is_err());
+        performance::recall_scene(7).unwrap();
+        for _ in 0..64 {
+            if matches!(performance::poll(), Some(link::Cmd::PerformanceRefresh)) {
+                state::GENERATION.fetch_add(1, Ordering::Relaxed);
+            }
+            if !performance::busy() { break; }
+        }
+        assert_eq!(performance::scene(), Some(7));
+        assert!(!performance::busy());
         performance::recall_scene(0).unwrap();
         performance::cancel("Test interruption");
         assert!(performance::scene().is_none());
-        performance::assign_slot(0, Some(2)).unwrap();
-        assert!(performance::scenes(0).iter().all(Option::is_none));
+        state::PRESET.store(2, Ordering::Relaxed);
+        performance::poll();
+        assert!(performance::scene().is_none());
+        assert!(performance::recall_scene(0).is_err());
+        performance::capture_scene(2, 0, "Other").unwrap();
+        performance::load();
+        assert_eq!(performance::scenes(1)[0].as_deref(), Some("Clean"));
+        assert_eq!(performance::scenes(1)[7].as_deref(), Some("Eighth"));
+        assert_eq!(performance::scenes(2)[0].as_deref(), Some("Other"));
+        performance::clear_scene(2, 0).unwrap();
+        assert!(performance::scenes(2)[0].is_none());
+        assert_eq!(performance::scenes(1)[0].as_deref(), Some("Clean"));
     }
 
     #[test]
-    fn fx_shelf_persists_fixed_slots_without_moving_midi_targets() {
+    fn obsolete_performance_records_are_rejected_without_migration() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        let legacy = r#"{"format":"nano-performance","version":1,"banks":[{"name":"Old Set"}],"preset_scenes":[{"preset":1}],"fx_presets":[{}],"block_presets":[{}]}"#;
+        *settings::PERFORMANCE.lock().unwrap() = Some(legacy.into());
+        performance::load();
+        assert_eq!(performance::notice(), "Invalid performance.json");
+        assert_eq!(settings::PERFORMANCE.lock().unwrap().as_deref(), Some(legacy));
+        assert!(performance::clear_scene(1, 0).is_err(), "Failed reset allowed a destructive save");
+        *settings::PERFORMANCE.lock().unwrap() = None;
+        performance::load();
+        let model = &catalog::catalog()[12];
+        loaded_fx_model(0, model);
+        performance::capture_fx(0, 0, "New", model.id_bytes()).unwrap();
+        performance::load();
+        assert_eq!(performance::fx_presets(model.id_bytes())[0].as_ref().unwrap().name, "New");
+    }
+
+    #[test]
+    fn fx_model_presets_are_shared_across_slots_and_isolated_from_other_models() {
         let _guard = LOCK.lock().unwrap();
         reset();
         *settings::PERFORMANCE.lock().unwrap() = None;
         performance::load();
-        fx::SNAPSHOT.with(|snapshot| {
-            let mut snapshot = snapshot.borrow_mut();
-            *snapshot = types::NanoFxState::reset_with_ids();
-            snapshot.valid = true;
-            for block in &mut snapshot.blocks {
-                block.valid = true;
-            }
-        });
-        performance::capture_fx(0, 0, "Bypass").unwrap();
-        performance::capture_fx(31, 4, "Last").unwrap();
+        let shared = &catalog::catalog()[12];
+        let other = &catalog::catalog()[13];
+        loaded_fx_model(0, shared);
+        loaded_fx_model(4, shared);
+        state::AMP.with(|amp| amp.borrow_mut().valid = true);
+        performance::capture_fx(0, 0, "Bypass", shared.id_bytes()).unwrap();
+        performance::capture_fx(3, 4, "Last", shared.id_bytes()).unwrap();
+        assert!(performance::capture_fx(4, 4, "Overflow", shared.id_bytes()).is_err());
+        let before = performance::export_json().unwrap();
+        assert!(performance::capture_fx(1, 0, "12345678901234567", shared.id_bytes()).is_err());
+        assert!(performance::rename_fx(0, shared.id_bytes(), "12345678901234567").is_err());
+        assert_eq!(performance::export_json().unwrap(), before);
+        performance::rename_fx(0, shared.id_bytes(), "1234567890123456").unwrap();
+        performance::rename_fx(0, shared.id_bytes(), "Bypass").unwrap();
+        assert!(performance::capture_fx(0, 4, "Wrong model", other.id_bytes()).is_err());
+        performance::recall_fx(0, 4).unwrap();
+        finish_fx_recall();
+        performance::sound_edited();
+        assert_eq!(performance::fx_selected(0), Some(0));
+        assert_eq!(performance::fx_selected(4), Some(0));
+        performance::effect_edited(0);
+        assert_eq!(performance::fx_selected(0), Some(0));
+        assert!(performance::fx_dirty(0));
+        assert!(!performance::fx_dirty(4));
+        performance::capture_fx(0, 0, "Bypass", shared.id_bytes()).unwrap();
+        assert!(!performance::fx_dirty(0));
+        assert!(!performance::fx_dirty(4), "Saving the same sound dirtied another slot");
+        fx::SNAPSHOT.with(|snapshot| snapshot.borrow_mut().blocks[0].on = true);
+        performance::capture_fx(0, 0, "Bypass", shared.id_bytes()).unwrap();
+        assert!(performance::fx_dirty(4), "Shared overwrite did not mark the old sound dirty");
+        performance::recall_fx(0, 4).unwrap();
+        finish_fx_recall();
+        assert!(!performance::fx_dirty(4), "Recall did not clear unsaved changes");
+        assert_eq!(performance::fx_selected(4), Some(0));
         let before = performance::export_json().unwrap();
         settings::FAIL.store(true, Ordering::Relaxed);
-        assert!(performance::clear_fx(31).is_err());
+        assert!(performance::clear_fx(3, shared.id_bytes()).is_err());
         assert_eq!(performance::export_json().unwrap(), before);
         settings::FAIL.store(false, Ordering::Relaxed);
-        assert!(performance::capture_fx(1, 0, "bypass").is_err());
-        performance::clear_fx(0).unwrap();
+        assert!(performance::capture_fx(1, 0, "bypass", shared.id_bytes()).is_err());
+        performance::rename_fx(0, shared.id_bytes(), "Shared").unwrap();
+        assert_eq!(performance::fx_presets(shared.id_bytes())[0].as_ref().unwrap().name, "Shared");
+        loaded_fx_model(0, other);
+        assert_eq!(performance::fx_selected(0), None, "Model change kept old selection");
+        assert!(performance::fx_presets(other.id_bytes()).iter().all(Option::is_none));
+        assert!(performance::recall_fx(0, 0).is_err(), "Other model recalled the old model's preset");
+        performance::capture_fx(0, 0, "Shared", other.id_bytes()).unwrap();
+        performance::clear_fx(0, shared.id_bytes()).unwrap();
+        assert_eq!(performance::fx_selected(4), None, "Shared delete kept another slot selected");
+        assert_eq!(performance::fx_selected(0), Some(0), "Shared delete cleared an unrelated model");
         performance::load();
-        assert!(performance::fx_presets()[0].is_none());
-        assert_eq!(performance::fx_presets()[31].as_ref().unwrap().name, "Last");
+        assert!(performance::fx_presets(shared.id_bytes())[0].is_none());
+        assert_eq!(performance::fx_presets(shared.id_bytes())[3].as_ref().unwrap().name, "Last");
+        assert_eq!(
+            performance::fx_presets(other.id_bytes())[0].as_ref().unwrap().name,
+            "Shared"
+        );
         assert!(matches!(
             midi::command(267, 127, false),
-            Some(link::Cmd::FxPresetRecall { index: 0, block: 0 })
+            Some(link::Cmd::FxPresetRecall { index: 0, block: 0, model: None })
         ));
         assert!(matches!(
-            midi::command(426, 127, false),
-            Some(link::Cmd::FxPresetRecall {
-                index: 31,
-                block: 4
-            })
+            midi::command(286, 127, false),
+            Some(link::Cmd::FxPresetRecall { index: 3, block: 4, model: None })
         ));
         assert!(link::COMMAND_CAPACITY > midi::ACTION_COUNT);
     }
@@ -367,17 +458,26 @@ mod tests {
         ));
         *settings::PERFORMANCE.lock().unwrap() = None;
         performance::load();
-        performance::add_bank("Gig").unwrap();
-        performance::assign_slot(0, Some(1)).unwrap();
-        performance::recall_slot(0).unwrap();
-        assert_eq!(performance::slot(), Some(0));
+        state::PRESET.store(1, Ordering::Relaxed);
+        fx::SNAPSHOT.with(|snapshot| {
+            let mut snapshot = snapshot.borrow_mut();
+            *snapshot = types::NanoFxState::reset_with_ids();
+            snapshot.valid = true;
+            for block in &mut snapshot.blocks {
+                block.valid = true;
+            }
+        });
+        let model = &catalog::catalog()[12];
+        loaded_fx_model(0, model);
+        performance::capture_fx(0, 0, "Test", model.id_bytes()).unwrap();
+        assert_eq!(performance::fx_selected(0), Some(0));
         state::PRESET.store(2, Ordering::Relaxed);
         performance::poll();
-        assert_eq!(performance::slot(), None);
+        assert_eq!(performance::fx_selected(0), None);
         state::PRESET.store(1, Ordering::Relaxed);
-        performance::recall_slot(0).unwrap();
+        performance::capture_fx(0, 0, "Test", model.id_bytes()).unwrap();
         link::set_up(false);
-        assert_eq!(performance::slot(), None);
+        assert_eq!(performance::fx_selected(0), None);
         assert!(performance::scene().is_none());
     }
 
@@ -385,7 +485,7 @@ mod tests {
     fn all_new_actions_fit_the_persisted_json_and_atomic_multi_target_queue() {
         let _guard = LOCK.lock().unwrap();
         reset();
-        for action in 0..midi::ACTION_COUNT {
+        for action in (0..midi::ACTION_COUNT).filter(|index| midi::active_action(*index)) {
             learn_cc(action, 127);
         }
         let json = midi::export_json().unwrap();
@@ -396,12 +496,12 @@ mod tests {
         let decoded: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(
             decoded["bindings"].as_array().unwrap().len(),
-            midi::ACTION_COUNT
+            midi::visible_rows().len()
         );
         cc(127, 127);
         assert_eq!(
             queued().len(),
-            midi::ACTION_COUNT,
+            midi::visible_rows().len(),
             "Shared message lost a mapped action"
         );
     }
@@ -427,11 +527,11 @@ mod tests {
     fn all_targets_survive_and_continuous_values_coalesce_by_action() {
         let _guard = LOCK.lock().unwrap();
         reset();
-        for i in 0..midi::ACTION_COUNT {
+        for i in (0..midi::ACTION_COUNT).filter(|index| midi::active_action(*index)) {
             learn_cc(i, 7);
         }
         cc(7, 127);
-        assert_eq!(queued().len(), midi::ACTION_COUNT);
+        assert_eq!(queued().len(), midi::visible_rows().len());
         let json = midi::export_json().unwrap();
         assert!(json.len() <= json_record::MAX_JSON);
         midi::import_json(&json).unwrap();
@@ -580,7 +680,17 @@ mod tests {
     fn expanded_actions_and_endpoints_keep_legacy_indices() {
         let _guard = LOCK.lock().unwrap();
         reset();
-        assert_eq!(midi::ACTION_COUNT, 429);
+        assert_eq!(midi::ACTION_COUNT, 433);
+        assert_eq!(midi::visible_rows().len(), 279);
+        assert_eq!(midi::visible_action(249), Some(263));
+        assert_eq!(midi::visible_action(274), Some(428));
+        for scene in 4..8 {
+            let index = 429 + scene - 4;
+            assert_eq!(midi::action_name(index), format!("Recall scene {}", scene + 1));
+            assert!(matches!(midi::command(index, 127, false), Some(link::Cmd::SceneRecall(slot)) if usize::from(slot) == scene));
+        }
+        assert!(!midi::active_action(249));
+        assert!(!midi::active_action(426));
         assert_eq!(midi::action_name(13), "Pre FX 1 knob 1");
         assert_eq!(midi::action_name(33), "Amp gain");
         assert_eq!(midi::action_name(41), "Cab low-pass");
@@ -658,7 +768,7 @@ mod tests {
         assert!(matches!(link::pop_cmd(), Some(link::Cmd::Save)));
         assert!(link::pop_cmd().is_none());
         midi::persist();
-        assert!(settings::load_midi(midi::ACTION_COUNT)
+        assert!(midi::keys_from_json(&settings::load_midi_json().unwrap().unwrap())
             .unwrap()
             .iter()
             .all(|key| *key == 0));
