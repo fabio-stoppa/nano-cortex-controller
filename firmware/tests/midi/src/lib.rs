@@ -831,6 +831,13 @@ mod tests {
             assert_eq!(link::pop_write(), Some(vec![n]));
         }
         link::push_cmd(link::Cmd::Save);
+        link::push_cmd(link::Cmd::Copy);
+        link::push_cmd(link::Cmd::PresetDelete(4));
+        link::push_cmd(link::Cmd::PresetTransfer {
+            src: 1,
+            dst: 2,
+            remove_src: true,
+        });
         link::write(&[1]);
         link::set_param(0, 0, 0.5);
         link::set_up(false);

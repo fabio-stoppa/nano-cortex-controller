@@ -836,7 +836,11 @@ async fn nano_commands<C: Controller, P: PacketPool>(
             }
         }
     }
-    crate::state::nano_state_begin_sync();
+    if connection::retry_after_reconnect(connection::RetryAction::StateRead)
+        && connection::retry_after_reconnect(connection::RetryAction::PresetRead)
+    {
+        crate::state::nano_state_begin_sync();
+    }
     if flush_writes(client, c304.handle, c304_no_rsp)
         .await
         .is_err()
@@ -941,7 +945,12 @@ async fn nano_commands<C: Controller, P: PacketPool>(
         if !ready {
             let snapshot = crate::state::snapshot_generation() != initial_snapshot;
             let presets = !crate::state::nano_state_preset_names().is_empty();
-            if snapshot && presets && !library_asked && crate::state::nano_rx_mode_get() == 0 {
+            if snapshot
+                && presets
+                && connection::retry_after_reconnect(connection::RetryAction::LibraryRead)
+                && !library_asked
+                && crate::state::nano_rx_mode_get() == 0
+            {
                 library_asked = crate::state::nano_state_request_library();
                 if !library_asked {
                     report_failure(Operation::Loading, &"initial library request refused");

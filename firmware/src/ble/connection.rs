@@ -171,11 +171,32 @@ impl Operation {
             }
             Self::Subscribe => "Check Nano pairing; authentication errors may require re-pairing.",
             Self::Write => {
-                "Check the sound before retrying; save/copy/move/delete may have applied."
+                "The failed write is never replayed automatically; check the Nano before retrying."
             }
             Self::Loading => "Keep Nano nearby and disconnect other clients; loading will restart.",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetryAction {
+    StateRead,
+    PresetRead,
+    LibraryRead,
+    LiveControl,
+    Save,
+    Copy,
+    Rename,
+    Move,
+    Delete,
+    UnknownWrite,
+}
+
+pub const fn retry_after_reconnect(action: RetryAction) -> bool {
+    matches!(
+        action,
+        RetryAction::StateRead | RetryAction::PresetRead | RetryAction::LibraryRead
+    )
 }
 
 #[cfg(test)]
@@ -238,4 +259,27 @@ mod tests {
         assert_eq!(seen, [1, 2, 4, 8, 16, 30]);
         assert_eq!(next_reconnect_backoff_secs(30), 30);
     }
+
+    #[test]
+    fn only_idempotent_reads_are_eligible_for_reconnect_retry() {
+        for action in [
+            RetryAction::StateRead,
+            RetryAction::PresetRead,
+            RetryAction::LibraryRead,
+        ] {
+            assert!(retry_after_reconnect(action));
+        }
+        for action in [
+            RetryAction::LiveControl,
+            RetryAction::Save,
+            RetryAction::Copy,
+            RetryAction::Rename,
+            RetryAction::Move,
+            RetryAction::Delete,
+            RetryAction::UnknownWrite,
+        ] {
+            assert!(!retry_after_reconnect(action));
+        }
+    }
+
 }
