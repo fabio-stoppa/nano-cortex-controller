@@ -2446,6 +2446,7 @@ component StatusLine inherits Rectangle {
 
 component ConnectingOverlay inherits Rectangle {
     in property <string> stage: "Searching";
+    in property <string> error: "";
     in property <int> amp-state: -1;
     in property <int> foot-state: -1;
     in property <string> loading: "";
@@ -2515,6 +2516,14 @@ component ConnectingOverlay inherits Rectangle {
             font-weight: 700;
             horizontal-alignment: center;
             visible: root.loading != "";
+        }
+        Text {
+            text: root.error;
+            color: #ff9090;
+            font-size: 15px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+            visible: root.error != "";
         }
         Rectangle { height: 6px; }
         Text {
@@ -3013,6 +3022,7 @@ component NameKeyboard inherits Rectangle {
 export component AppWindow inherits Window {
     in-out property <bool> connecting: true;
     in-out property <string> connection-stage: "Searching";
+    in-out property <string> connection-error: "";
     in-out property <bool> portrait: false;
     in-out property <int> layout-mode: 0;
     in-out property <int> page: 0;
@@ -4029,6 +4039,7 @@ export component AppWindow inherits Window {
 
     if root.connecting && !root.usb-storage-open && !root.scene-library-open && !root.gig-open: ConnectingOverlay {
         stage: root.connection-stage;
+        error: root.connection-error;
         amp-state: root.conn-amp;
         foot-state: root.conn-foot;
         loading: root.load-status;

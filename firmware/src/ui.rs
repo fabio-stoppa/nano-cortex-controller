@@ -1027,13 +1027,16 @@ pub fn set_connection_stage(stage: &str) {
     if stage != "Loading" {
         ui.app.set_load_status("".into());
     }
+    if stage == "Ready" {
+        ui.app.set_connection_error("".into());
+    }
     ui.window.request_redraw();
 }
 
 pub fn set_connection_error(message: &str) {
     ensure();
     let ui = state().as_mut().unwrap();
-    ui.app.set_load_status(message.into());
+    ui.app.set_connection_error(message.into());
     ui.window.request_redraw();
 }
 

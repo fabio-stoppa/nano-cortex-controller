@@ -29,6 +29,11 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - Raw BLE packet dumps and per-write/slider logs are debug-only. Info logging
   retains setup stages and ten-second/per-disconnect RX, TX, and write-failure
   totals; failures remain errors. TX counts transport sends, not verified edits.
+- The welcome screen retains the last connection failure through reconnect
+  attempts until Ready. Errors identify scan, discovery, subscription, write, or
+  loading, preserve the underlying host/ATT/controller debug code, and suggest
+  recovery. A write error warns that a destructive operation may already have
+  applied; the controller does not automatically replay it.
 - **Preset, effects, and tuner** — the same behavior as the old ESP-IDF app, driven by Embassy deadlines (`firmware/src/state`, `firmware/src/fx`, `firmware/src/tuner`)
 - **800×480 LCD** — Slint UI drawn into the RGB panel (`firmware/src/ui.rs`)
 - **Category-colored FX tabs** — guitar OD orange, bass OD amber, compressor yellow, pitch magenta, filter lime, wah green, utility pink, modulation purple, delay cyan, and reverb blue. Colors match the saturation and brightness of the blue and amp-red accents in both orientations; bypassed FX retain black backgrounds with category-colored labels.

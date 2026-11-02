@@ -37,6 +37,7 @@ use crate::panel::Board;
 
 mod advertisement;
 pub mod connection;
+use connection::Operation;
 
 fn stage(stage: connection::Stage) {
     log::info!("Nano connection: {}", stage.label());
@@ -49,23 +50,29 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(3);
 const LOAD_TIMEOUT: Duration = Duration::from_secs(45);
 
 async fn bounded<T, E: core::fmt::Debug>(
-    label: &str,
+    operation_kind: Operation,
     deadline: Duration,
     operation: impl core::future::Future<Output = Result<T, E>>,
 ) -> Result<T, ()> {
     match with_timeout(deadline, operation).await {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(error)) => {
-            log::error!("{label} failed: {error:?}");
-            crate::ui::set_connection_error(&alloc::format!("{label} failed: {error:?}"));
+            report_failure(operation_kind, &error);
             Err(())
         }
         Err(_) => {
-            log::error!("{label} timed out");
-            crate::ui::set_connection_error(&alloc::format!("{label} timed out; reconnecting"));
+            report_failure(operation_kind, &"deadline exceeded");
             Err(())
         }
     }
+}
+
+fn report_failure(operation: Operation, error: &impl core::fmt::Debug) {
+    let message = alloc::format!("{} failed: {error:?}. {}",
+        operation.label(), operation.recovery());
+    log::error!("{message}");
+    crate::ui::set_connection_error(&message);
+    crate::screen::nano_ui_set_protocol_status(&message);
 }
 
 const NANO_PREFIX: &[u8] = b"Neural DSP Nano Cortex";
@@ -457,10 +464,12 @@ where
         Ok(Ok(scan)) => scan,
         Ok(Err(error)) => {
             log::warn!("scan start failed: {error:?}");
+            if nano { report_failure(Operation::Scan, &error); }
             return None;
         }
         Err(_) => {
             log::error!("BLE scan start timed out waiting for host/controller; restart and check HCI");
+            if nano { report_failure(Operation::Scan, &"controller deadline exceeded"); }
             return None;
         }
     };
@@ -528,7 +537,7 @@ where
     log::info!("connecting to nano");
     stage(connection::Stage::Connecting);
     mark(nano, 1);
-    let conn = bounded("Nano connection", CONNECT_TIMEOUT, central.connect(&connect)).await;
+    let conn = bounded(Operation::Connect, CONNECT_TIMEOUT, central.connect(&connect)).await;
     drop(guard);
     let conn = match conn {
         Ok(conn) => conn,
@@ -544,13 +553,13 @@ where
     // One 251-byte PDU is about 2.1 ms. Without this, the link stays at
     // 27-byte PDUs and one event still carries more packets than the
     // controller can buffer.
-    match bounded("Nano data length setup", SETUP_TIMEOUT, conn.update_data_length(stack, 251, 2120)).await {
+    match bounded(Operation::DataLength, SETUP_TIMEOUT, conn.update_data_length(stack, 251, 2120)).await {
         Ok(()) => log::info!("data length 251 requested"),
         Err(()) => return,
     };
 
     let client = match bounded(
-        "Nano GATT initialization", SETUP_TIMEOUT,
+        Operation::Gatt, SETUP_TIMEOUT,
         Box::pin(GattClient::<C, DefaultPacketPool, 8>::new(stack, &conn)),
     ).await {
         Ok(client) => client,
@@ -565,8 +574,8 @@ where
     // Ends when the Nano drops, so `nano_loop` scans again.
     let _ = select(
         async {
-            if let Err(_) = client.task().await {
-                log::warn!("nano gatt task ended");
+            if let Err(error) = client.task().await {
+                report_failure(Operation::Receive, &error);
             }
         },
         nano_link(&client),
@@ -583,15 +592,14 @@ where
 }
 
 async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8>) {
-    let services = match bounded("Nano service discovery", SETUP_TIMEOUT, client.services()).await {
+    let services = match bounded(Operation::Services, SETUP_TIMEOUT, client.services()).await {
         Ok(services) => services,
         Err(()) => return,
     };
     let required = [UUID_A002, UUID_A003].map(|uuid|
         services.iter().any(|svc| svc.uuid() == Uuid::new_short(uuid)));
     if let Err(error) = connection::validate_capabilities(required[0], required[1], true, true) {
-        log::error!("{error}");
-        crate::scenes::report(error);
+        report_failure(Operation::Services, &error);
         return;
     }
     let mut c304 = None;
@@ -599,7 +607,7 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
     for service in services.iter().filter(|svc|
         svc.uuid() == Uuid::new_short(UUID_A002) || svc.uuid() == Uuid::new_short(UUID_A003))
     {
-        let characteristics = match bounded("Nano characteristic discovery", SETUP_TIMEOUT,
+        let characteristics = match bounded(Operation::Characteristics, SETUP_TIMEOUT,
             client.characteristics::<16>(service)).await {
             Ok(characteristics) => characteristics,
             Err(()) => return,
@@ -614,8 +622,12 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
             }
         }
     }
-    let (Some(c304), Some(c305)) = (c304, c305) else {
-        crate::scenes::report("Discovery failed: required C304/C305 characteristics are missing");
+    let Some(c304) = c304 else {
+        report_failure(Operation::Characteristics, &"C304 characteristic missing");
+        return;
+    };
+    let Some(c305) = c305 else {
+        report_failure(Operation::Characteristics, &"C305 characteristic missing");
         return;
     };
     log::info!("C304 handle {} C305 handle {}", c304.handle, c305.handle);
@@ -626,8 +638,7 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
         c304.props.any(&[CharacteristicProp::Write]),
         c305.props.any(&[CharacteristicProp::Notify]),
     ) {
-        log::error!("{error}");
-        crate::scenes::report(error);
+        report_failure(Operation::Characteristics, &error);
         return;
     }
     log::info!(
@@ -636,7 +647,7 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
     );
 
     stage(connection::Stage::Subscribing);
-    let mut listener = match bounded("C305 subscription", SETUP_TIMEOUT, client.subscribe(&c305, false)).await {
+    let mut listener = match bounded(Operation::Subscribe, SETUP_TIMEOUT, client.subscribe(&c305, false)).await {
         Ok(listener) => listener,
         Err(_) => {
             log::warn!("C305 subscribe failed");
@@ -704,8 +715,14 @@ async fn nano_commands<C: Controller, P: PacketPool>(
             next_summary = Instant::now() + Duration::from_secs(10);
         }
         if !ready && Instant::now() - loading_started >= LOAD_TIMEOUT {
-            crate::scenes::report("Loading failed: initial state, presets, or library timed out");
-            log::error!("Nano initial loading timed out");
+            let missing = if crate::state::snapshot_generation() == initial_snapshot {
+                "complete initial state snapshot timed out"
+            } else if crate::state::nano_state_preset_names().is_empty() {
+                "initial preset catalog timed out"
+            } else {
+                "initial library timed out"
+            };
+            report_failure(Operation::Loading, &missing);
             return;
         }
         match with_timeout(Duration::from_millis(10), SLIDER.wait()).await {
@@ -776,7 +793,7 @@ async fn nano_commands<C: Controller, P: PacketPool>(
             if snapshot && presets && !library_asked && crate::state::nano_rx_mode_get() == 0 {
                 library_asked = crate::state::nano_state_request_library();
                 if !library_asked {
-                    crate::scenes::report("Loading failed: initial library request refused");
+                    report_failure(Operation::Loading, &"initial library request refused");
                     return;
                 }
             }
@@ -1110,7 +1127,7 @@ async fn write_packet<C: Controller, P: PacketPool>(
     no_response_supported: bool,
     packet: &[u8],
 ) -> Result<(), ()> {
-    let result = bounded("C304 write", WRITE_TIMEOUT, async {
+    let result = bounded(Operation::Write, WRITE_TIMEOUT, async {
         if no_response_supported && nano_wire::editor::is_live_value_write(packet) {
             client.write_handle_without_response(handle, packet).await
         } else {

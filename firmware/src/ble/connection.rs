@@ -43,6 +43,54 @@ pub fn initial_state_loaded(snapshot: bool, presets: bool, library: bool) -> boo
     snapshot && presets && library
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum Operation {
+    Connect,
+    DataLength,
+    Gatt,
+    Services,
+    Characteristics,
+    Subscribe,
+    Write,
+    Loading,
+    Receive,
+    Scan,
+}
+
+impl Operation {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Connect => "Nano connection",
+            Self::DataLength => "Nano data length setup",
+            Self::Gatt => "Nano GATT initialization",
+            Self::Services => "Nano service discovery",
+            Self::Characteristics => "Nano characteristic discovery",
+            Self::Subscribe => "C305 subscription",
+            Self::Write => "C304 write",
+            Self::Loading => "Nano initial loading",
+            Self::Receive => "Nano receive",
+            Self::Scan => "Nano scan",
+        }
+    }
+
+    pub const fn recovery(self) -> &'static str {
+        match self {
+            Self::Connect | Self::Scan =>
+                "Move Nano closer, enable pairing, and disconnect Cortex Cloud.",
+            Self::DataLength | Self::Gatt | Self::Receive =>
+                "Check Nano power/range; restart the controller if this repeats.",
+            Self::Services | Self::Characteristics =>
+                "Check that this is a Nano Cortex with compatible firmware.",
+            Self::Subscribe =>
+                "Check Nano pairing; authentication errors may require re-pairing.",
+            Self::Write =>
+                "Check the sound before retrying; save/copy/move/delete may have applied.",
+            Self::Loading =>
+                "Keep Nano nearby and disconnect other clients; loading will restart.",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
