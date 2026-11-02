@@ -26,6 +26,52 @@ pub async fn run_io(receive: impl Future<Output = ()>, commands: impl Future<Out
     embassy_futures::select::select(receive, commands).await;
 }
 
+pub const TOUCH_CONTROL_COUNT: usize = 8;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SliderWrite {
+    pub id: u8,
+    pub raw: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TouchEdits {
+    pending: [Option<SliderWrite>; TOUCH_CONTROL_COUNT],
+}
+
+impl TouchEdits {
+    pub const fn new() -> Self {
+        Self {
+            pending: [None; TOUCH_CONTROL_COUNT],
+        }
+    }
+
+    pub fn push(&mut self, edit: SliderWrite) -> bool {
+        if let Some(slot) = self
+            .pending
+            .iter_mut()
+            .find(|slot| slot.is_some_and(|pending| pending.id == edit.id))
+        {
+            *slot = Some(edit);
+            return true;
+        }
+        if let Some(slot) = self.pending.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(edit);
+            return true;
+        }
+        false
+    }
+
+    pub fn pop(&mut self) -> Option<SliderWrite> {
+        let slot = self.pending.iter_mut().find(|slot| slot.is_some())?;
+        slot.take()
+    }
+
+    pub fn clear(&mut self) {
+        self.pending.fill(None);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {
     Searching,
@@ -143,5 +189,29 @@ mod tests {
                 bits == 15,
             );
         }
+    }
+
+    #[test]
+    fn touch_edits_coalesce_per_control_without_losing_other_controls() {
+        let mut edits = TouchEdits::new();
+        assert!(edits.push(SliderWrite { id: 1, raw: 10 }));
+        assert!(edits.push(SliderWrite { id: 2, raw: 20 }));
+        assert!(edits.push(SliderWrite { id: 1, raw: 99 }));
+        assert_eq!(edits.pop(), Some(SliderWrite { id: 1, raw: 99 }));
+        assert_eq!(edits.pop(), Some(SliderWrite { id: 2, raw: 20 }));
+        assert_eq!(edits.pop(), None);
+    }
+
+    #[test]
+    fn full_touch_queue_rejects_new_control_but_replaces_queued_value() {
+        let mut edits = TouchEdits::new();
+        for id in 0..TOUCH_CONTROL_COUNT as u8 {
+            assert!(edits.push(SliderWrite { id, raw: 0 }));
+        }
+        assert!(!edits.push(SliderWrite { id: 8, raw: 1 }));
+        assert!(edits.push(SliderWrite { id: 3, raw: 77 }));
+        assert_eq!(edits.pop(), Some(SliderWrite { id: 3, raw: 77 }));
+        edits.clear();
+        assert_eq!(edits.pop(), None);
     }
 }

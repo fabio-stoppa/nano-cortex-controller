@@ -20,13 +20,29 @@ use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_time::with_timeout;
 
-#[derive(Clone, Copy)]
-pub struct SliderWrite {
-    pub id: u8,
-    pub raw: u8,
-}
+pub use connection::SliderWrite;
 
 pub static SLIDER: Signal<CriticalSectionRawMutex, SliderWrite> = Signal::new();
+static TOUCH_EDITS: Shared<connection::TouchEdits> =
+    Mutex::new(RefCell::new(connection::TouchEdits::new()));
+
+pub fn submit_slider(edit: SliderWrite) {
+    let queued = TOUCH_EDITS.lock(|slot| slot.borrow_mut().push(edit));
+    if queued {
+        SLIDER.signal(edit);
+    } else {
+        log::warn!("Touch edit queue full; control {} update refused", edit.id);
+    }
+}
+
+fn take_slider() -> Option<SliderWrite> {
+    TOUCH_EDITS.lock(|slot| slot.borrow_mut().pop())
+}
+
+fn clear_sliders() {
+    TOUCH_EDITS.lock(|slot| slot.borrow_mut().clear());
+    SLIDER.reset();
+}
 
 /// The old host dropped queued notifies here. The link task reads them directly.
 pub fn nano_ble_flush_c305_backlog() {}
@@ -75,8 +91,11 @@ async fn bounded<T, E: core::fmt::Debug>(
 }
 
 fn report_failure(operation: Operation, error: &impl core::fmt::Debug) {
-    let message = alloc::format!("{} failed: {error:?}. {}",
-        operation.label(), operation.recovery());
+    let message = alloc::format!(
+        "{} failed: {error:?}. {}",
+        operation.label(),
+        operation.recovery()
+    );
     log::error!("{message}");
     crate::ui::set_connection_error(&message);
     crate::screen::nano_ui_set_protocol_status(&message);
@@ -127,10 +146,12 @@ static NANO_READY: AtomicBool = AtomicBool::new(false);
 static NANO_SEARCHING: AtomicBool = AtomicBool::new(false);
 
 fn traffic_summary() {
-    log::info!("Nano traffic: rx={}, tx={}, write_failures={}",
+    log::info!(
+        "Nano traffic: rx={}, tx={}, write_failures={}",
         RX_PACKETS.load(Ordering::Relaxed),
         TX_PACKETS.load(Ordering::Relaxed),
-        WRITE_FAILURES.load(Ordering::Relaxed));
+        WRITE_FAILURES.load(Ordering::Relaxed)
+    );
 }
 
 type Shared<T> = Mutex<CriticalSectionRawMutex, RefCell<T>>;
@@ -310,7 +331,8 @@ impl EventHandler for Hunt {
             self.reports.set(self.reports.get().wrapping_add(1));
             let name = local_name(report.data).unwrap_or_default();
             if !name.is_empty() {
-                self.named_reports.set(self.named_reports.get().wrapping_add(1));
+                self.named_reports
+                    .set(self.named_reports.get().wrapping_add(1));
             }
             let addr = Address::new(report.addr_kind, report.addr);
             if !name.is_empty() && self.samples_left.get() > 0 {
@@ -321,7 +343,8 @@ impl EventHandler for Hunt {
             // Service UUIDs and the local name may arrive in separate reports.
             let known_nano = SEEN.lock(|seen| {
                 seen.borrow().iter().any(|device| {
-                    device.addr == addr && device.nano
+                    device.addr == addr
+                        && device.nano
                         && (device.state > 0 || Instant::now() - device.seen_at < AVAILABLE_FOR)
                 })
             });
@@ -422,10 +445,14 @@ where
         WRITE_FAILURES.store(0, Ordering::Relaxed);
         // GATT construction has large temporary buffers. Keep session polling
         // out of the parent future's stack frame.
-        select(Box::pin(nano_session(stack, hunt, radio)), NANO_RESTART.wait()).await;
+        select(
+            Box::pin(nano_session(stack, hunt, radio)),
+            NANO_RESTART.wait(),
+        )
+        .await;
         traffic_summary();
         crate::link::set_up(false);
-        SLIDER.reset();
+        clear_sliders();
         LIBRARY_WANTED.store(false, Ordering::Relaxed);
         crate::state::nano_state_reset();
         crate::screen::nano_ui_set_ble_connected(false);
@@ -448,7 +475,11 @@ where
 {
     loop {
         FOOT_RESTART.reset();
-        select(Box::pin(foot_session(stack, hunt, radio)), FOOT_RESTART.wait()).await;
+        select(
+            Box::pin(foot_session(stack, hunt, radio)),
+            FOOT_RESTART.wait(),
+        )
+        .await;
         reset_state(false);
         log::warn!("footswitch link ended, scanning again");
         Timer::after(Duration::from_secs(1)).await;
@@ -456,7 +487,11 @@ where
 }
 
 /// Scans for up to three seconds for one kind of device. Hold the radio lock while calling.
-async fn scan_for<C>(stack: &Stack<'_, C, DefaultPacketPool>, hunt: &Hunt, nano: bool) -> Option<Address>
+async fn scan_for<C>(
+    stack: &Stack<'_, C, DefaultPacketPool>,
+    hunt: &Hunt,
+    nano: bool,
+) -> Option<Address>
 where
     C: Controller + ControllerCmdSync<LeSetScanParams>,
 {
@@ -478,12 +513,18 @@ where
         Ok(Ok(scan)) => scan,
         Ok(Err(error)) => {
             log::warn!("scan start failed: {error:?}");
-            if nano { report_failure(Operation::Scan, &error); }
+            if nano {
+                report_failure(Operation::Scan, &error);
+            }
             return None;
         }
         Err(_) => {
-            log::error!("BLE scan start timed out waiting for host/controller; restart and check HCI");
-            if nano { report_failure(Operation::Scan, &"controller deadline exceeded"); }
+            log::error!(
+                "BLE scan start timed out waiting for host/controller; restart and check HCI"
+            );
+            if nano {
+                report_failure(Operation::Scan, &"controller deadline exceeded");
+            }
             return None;
         }
     };
@@ -571,7 +612,12 @@ where
     NANO_SETUP_ACTIVE.store(true, Ordering::Relaxed);
     stage(connection::Stage::Connecting);
     mark(nano, 1);
-    let conn = bounded(Operation::Connect, CONNECT_TIMEOUT, central.connect(&connect)).await;
+    let conn = bounded(
+        Operation::Connect,
+        CONNECT_TIMEOUT,
+        central.connect(&connect),
+    )
+    .await;
     drop(guard);
     let conn = match conn {
         Ok(conn) => conn,
@@ -587,7 +633,8 @@ where
     // One 251-byte PDU is about 2.1 ms. Without this, the link stays at
     // 27-byte PDUs and one event still carries more packets than the
     // controller can buffer.
-    match connection::with_deadline(SETUP_TIMEOUT, conn.update_data_length(stack, 251, 2120)).await {
+    match connection::with_deadline(SETUP_TIMEOUT, conn.update_data_length(stack, 251, 2120)).await
+    {
         Ok(()) => log::info!("data length 251 requested"),
         Err(Failure::Bluetooth(error)) => {
             log::warn!("Data length update rejected; keeping negotiated default: {error:?}");
@@ -599,9 +646,12 @@ where
     };
 
     let client = match bounded(
-        Operation::Gatt, SETUP_TIMEOUT,
+        Operation::Gatt,
+        SETUP_TIMEOUT,
         Box::pin(GattClient::<C, DefaultPacketPool, 8>::new(stack, &conn)),
-    ).await {
+    )
+    .await
+    {
         Ok(client) => client,
         Err(_) => {
             log::warn!("nano gatt client failed");
@@ -636,19 +686,27 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
         Ok(services) => services,
         Err(()) => return,
     };
-    let required = [UUID_A002, UUID_A003].map(|uuid|
-        services.iter().any(|svc| svc.uuid() == Uuid::new_short(uuid)));
+    let required = [UUID_A002, UUID_A003].map(|uuid| {
+        services
+            .iter()
+            .any(|svc| svc.uuid() == Uuid::new_short(uuid))
+    });
     if let Err(error) = connection::validate_capabilities(required[0], required[1], true, true) {
         report_failure(Operation::Services, &error);
         return;
     }
     let mut c304 = None;
     let mut c305 = None;
-    for service in services.iter().filter(|svc|
-        svc.uuid() == Uuid::new_short(UUID_A002) || svc.uuid() == Uuid::new_short(UUID_A003))
-    {
-        let characteristics = match bounded(Operation::Characteristics, SETUP_TIMEOUT,
-            client.characteristics::<16>(service)).await {
+    for service in services.iter().filter(|svc| {
+        svc.uuid() == Uuid::new_short(UUID_A002) || svc.uuid() == Uuid::new_short(UUID_A003)
+    }) {
+        let characteristics = match bounded(
+            Operation::Characteristics,
+            SETUP_TIMEOUT,
+            client.characteristics::<16>(service),
+        )
+        .await
+        {
             Ok(characteristics) => characteristics,
             Err(()) => return,
         };
@@ -687,7 +745,13 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
     );
 
     stage(connection::Stage::Subscribing);
-    let mut listener = match bounded(Operation::Subscribe, SETUP_TIMEOUT, client.subscribe(&c305, false)).await {
+    let mut listener = match bounded(
+        Operation::Subscribe,
+        SETUP_TIMEOUT,
+        client.subscribe(&c305, false),
+    )
+    .await
+    {
         Ok(listener) => listener,
         Err(_) => {
             log::warn!("C305 subscribe failed");
@@ -698,7 +762,8 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
     connection::run_io(
         receive_notifications(&mut listener),
         nano_commands(client, &c304, c304_no_rsp),
-    ).await;
+    )
+    .await;
 }
 
 async fn receive_notifications(listener: &mut NotificationListener<'_, 512>) {
@@ -721,7 +786,7 @@ async fn nano_commands<C: Controller, P: PacketPool>(
     c304_no_rsp: bool,
 ) {
     stage(connection::Stage::Loading);
-    SLIDER.reset();
+    clear_sliders();
     LIBRARY_WANTED.store(false, Ordering::Relaxed);
     crate::link::set_up(true);
     crate::screen::nano_ui_set_ble_connected(true);
@@ -747,7 +812,12 @@ async fn nano_commands<C: Controller, P: PacketPool>(
         }
     }
     crate::state::nano_state_begin_sync();
-    if flush_writes(client, c304.handle, c304_no_rsp).await.is_err() { return; }
+    if flush_writes(client, c304.handle, c304_no_rsp)
+        .await
+        .is_err()
+    {
+        return;
+    }
 
     loop {
         if Instant::now() >= next_summary {
@@ -765,8 +835,11 @@ async fn nano_commands<C: Controller, P: PacketPool>(
             report_failure(Operation::Loading, &missing);
             return;
         }
-        match with_timeout(Duration::from_millis(10), SLIDER.wait()).await {
-            Ok(write) => {
+        if with_timeout(Duration::from_millis(10), SLIDER.wait())
+            .await
+            .is_ok()
+        {
+            while let Some(write) = take_slider() {
                 if !ready {
                     log::warn!("Slider edit refused while Nano is loading");
                     continue;
@@ -789,18 +862,31 @@ async fn nano_commands<C: Controller, P: PacketPool>(
                     }
                 }
             }
-            Err(_) => {}
         }
         for _ in 0..8 {
-            if !ready || crate::scenes::busy() { break; }
-            let Some(cmd) = crate::link::pop_cmd() else { break; };
+            if !ready || crate::scenes::busy() {
+                break;
+            }
+            let Some(cmd) = crate::link::pop_cmd() else {
+                break;
+            };
             apply_cmd(cmd);
-            if flush_writes(client, c304.handle, c304_no_rsp).await.is_err() { return; }
+            if flush_writes(client, c304.handle, c304_no_rsp)
+                .await
+                .is_err()
+            {
+                return;
+            }
             embassy_futures::yield_now().await;
         }
         if let Some(cmd) = crate::scenes::poll() {
             apply_cmd(cmd);
-            if flush_writes(client, c304.handle, c304_no_rsp).await.is_err() { return; }
+            if flush_writes(client, c304.handle, c304_no_rsp)
+                .await
+                .is_err()
+            {
+                return;
+            }
         }
         if LIBRARY_WANTED.load(core::sync::atomic::Ordering::Relaxed)
             && crate::state::nano_rx_mode_get() == 0
@@ -863,38 +949,64 @@ async fn nano_commands<C: Controller, P: PacketPool>(
                 }
             }
         }
-        if flush_writes(client, c304.handle, c304_no_rsp).await.is_err() { return; }
+        if flush_writes(client, c304.handle, c304_no_rsp)
+            .await
+            .is_err()
+        {
+            return;
+        }
     }
 }
 
 /// Set by the picker; the request goes out once no state transfer is running.
-pub static LIBRARY_WANTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+pub static LIBRARY_WANTED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 
 fn apply_cmd(cmd: crate::link::Cmd) {
-    if !crate::scenes::busy() && matches!(&cmd,
-        crate::link::Cmd::Param(_) | crate::link::Cmd::Block { .. }
-        | crate::link::Cmd::Model { .. } | crate::link::Cmd::ModelAt { .. }
-        | crate::link::Cmd::Gate(_) | crate::link::Cmd::GateAmount(_)
-        | crate::link::Cmd::AmpKnob { .. } | crate::link::Cmd::CaptureVolume(_)
-        | crate::link::Cmd::CabParam { .. } | crate::link::Cmd::Capture(_)
-        | crate::link::Cmd::CaptureAt(_) | crate::link::Cmd::CabAt(_)
-    ) {
+    if !crate::scenes::busy()
+        && matches!(
+            &cmd,
+            crate::link::Cmd::Param(_)
+                | crate::link::Cmd::Block { .. }
+                | crate::link::Cmd::Model { .. }
+                | crate::link::Cmd::ModelAt { .. }
+                | crate::link::Cmd::Gate(_)
+                | crate::link::Cmd::GateAmount(_)
+                | crate::link::Cmd::AmpKnob { .. }
+                | crate::link::Cmd::CaptureVolume(_)
+                | crate::link::Cmd::CabParam { .. }
+                | crate::link::Cmd::Capture(_)
+                | crate::link::Cmd::CaptureAt(_)
+                | crate::link::Cmd::CabAt(_)
+        )
+    {
         crate::scenes::sound_edited();
     }
     match cmd {
         crate::link::Cmd::Gig(enabled) => crate::ui::show_gig(enabled),
         crate::link::Cmd::SceneRecall(index) => {
-            if let Err(error) = crate::scenes::recall_scene(usize::from(index)) { crate::scenes::report(error); }
-            else { SLIDER.reset(); crate::link::take_param(); }
+            if let Err(error) = crate::scenes::recall_scene(usize::from(index)) {
+                crate::scenes::report(error);
+            } else {
+                clear_sliders();
+                crate::link::take_param();
+            }
         }
         crate::link::Cmd::SceneRecallAt { preset, scene } => {
             if preset != crate::state::nano_state_preset_slot() {
                 crate::scenes::report("Nano preset changed; reopen the scene selector");
             } else if let Err(error) = crate::scenes::recall_scene(usize::from(scene)) {
                 crate::scenes::report(error);
-            } else { SLIDER.reset(); crate::link::take_param(); }
+            } else {
+                clear_sliders();
+                crate::link::take_param();
+            }
         }
-        crate::link::Cmd::SceneCapture { preset, scene, name } => {
+        crate::link::Cmd::SceneCapture {
+            preset,
+            scene,
+            name,
+        } => {
             if let Err(error) = crate::scenes::capture_scene(preset, usize::from(scene), &name) {
                 crate::scenes::report(error);
             }
@@ -907,14 +1019,18 @@ fn apply_cmd(cmd: crate::link::Cmd) {
             crate::fx::nano_fx_refresh_all();
             if let Some(slot) = crate::scenes::view().amp.active_cab_slot() {
                 if !crate::state::nano_state_read_cab_settings(slot) {
-                    crate::scenes::cancel("Cab readback request failed; sound may be partially updated");
+                    crate::scenes::cancel(
+                        "Cab readback request failed; sound may be partially updated",
+                    );
                 }
             }
         }
         crate::link::Cmd::FxModelId { block, id } => {
             let sent = crate::fx::models::find_model(&id)
                 .is_some_and(|model| crate::fx::nano_fx_write_block_model(u32::from(block), model));
-            if !sent { crate::scenes::cancel("FX model recall refused; sound may be partially updated"); }
+            if !sent {
+                crate::scenes::cancel("FX model recall refused; sound may be partially updated");
+            }
         }
         crate::link::Cmd::Gate(on) => {
             if !crate::fx::nano_fx_write_gate_enabled(on) {
@@ -929,13 +1045,21 @@ fn apply_cmd(cmd: crate::link::Cmd) {
             }
         }
         crate::link::Cmd::TunerToggle => crate::ui::midi_toggle_tuner(),
-        crate::link::Cmd::MidiAction { index, value, continuous } => {
+        crate::link::Cmd::MidiAction {
+            index,
+            value,
+            continuous,
+        } => {
             if let Some(cmd) = crate::midi::command(index, value, continuous) {
                 apply_cmd(cmd);
             }
         }
         crate::link::Cmd::Param(param) => {
-            if !crate::fx::nano_fx_write_param_normalized(u32::from(param.block), param.wire, param.norm) {
+            if !crate::fx::nano_fx_write_param_normalized(
+                u32::from(param.block),
+                param.wire,
+                param.norm,
+            ) {
                 log::warn!("MIDI FX parameter write failed");
                 crate::scenes::cancel("FX parameter recall failed; sound may be partially updated");
             }
@@ -1053,7 +1177,9 @@ fn apply_cmd(cmd: crate::link::Cmd) {
         crate::link::Cmd::CaptureVolume(raw) => {
             if !crate::state::nano_state_write_capture_volume(raw) {
                 log::warn!("MIDI capture volume write failed");
-                crate::scenes::cancel("Capture level recall failed; sound may be partially updated");
+                crate::scenes::cancel(
+                    "Capture level recall failed; sound may be partially updated",
+                );
             }
         }
         crate::link::Cmd::ExpressionSave { slot, assignments } => {
@@ -1173,7 +1299,8 @@ async fn write_packet<C: Controller, P: PacketPool>(
         } else {
             client.write_handle(handle, packet).await
         }
-    }).await;
+    })
+    .await;
     if result.is_ok() {
         TX_PACKETS.fetch_add(1, Ordering::Relaxed);
     } else {
@@ -1246,7 +1373,9 @@ async fn foot_link<C: Controller>(
     let client = match connection::with_deadline(
         SETUP_TIMEOUT,
         Box::pin(GattClient::<C, DefaultPacketPool, 4>::new(stack, &conn)),
-    ).await {
+    )
+    .await
+    {
         Ok(client) => client,
         Err(error) => {
             log::warn!("Footswitch GATT initialization failed; reconnecting: {error:?}");
@@ -1263,8 +1392,11 @@ async fn foot_link<C: Controller>(
         },
         async {
             let svcs = match connection::with_deadline(
-                SETUP_TIMEOUT, client.services_by_uuid(&Uuid::new_long(MIDI_SVC)),
-            ).await {
+                SETUP_TIMEOUT,
+                client.services_by_uuid(&Uuid::new_long(MIDI_SVC)),
+            )
+            .await
+            {
                 Ok(svcs) => svcs,
                 Err(error) => {
                     log::warn!("Footswitch MIDI service discovery failed: {error:?}");
@@ -1278,7 +1410,8 @@ async fn foot_link<C: Controller>(
             let io = match connection::with_deadline(
                 SETUP_TIMEOUT,
                 client.characteristic_by_uuid::<[u8]>(svc, &Uuid::new_long(MIDI_IO)),
-            ).await
+            )
+            .await
             {
                 Ok(io) => io,
                 Err(error) => {
@@ -1287,8 +1420,11 @@ async fn foot_link<C: Controller>(
                 }
             };
             let mut listener = match connection::with_deadline(
-                SETUP_TIMEOUT, client.subscribe(&io, false),
-            ).await {
+                SETUP_TIMEOUT,
+                client.subscribe(&io, false),
+            )
+            .await
+            {
                 Ok(listener) => listener,
                 Err(error) => {
                     log::warn!("Footswitch MIDI subscription failed; check pairing: {error:?}");

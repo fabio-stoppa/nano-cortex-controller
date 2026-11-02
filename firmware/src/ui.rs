@@ -2406,7 +2406,7 @@ fn queue_write(id: u8, raw: u8) {
     });
     FINGER.lock(|held| held.borrow_mut()[slot] = Some(Instant::now()));
     if fresh {
-        crate::ble::SLIDER.signal(crate::ble::SliderWrite { id, raw });
+        crate::ble::submit_slider(crate::ble::SliderWrite { id, raw });
     }
 }
 

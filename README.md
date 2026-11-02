@@ -31,6 +31,8 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - Nano connect/discovery/subscription/loading preempts new footswitch scans. Once
   Nano is Ready, footswitch scanning drops to a 500 ms window every 5.5 seconds,
   preserving second-client discovery with lower radio duty.
+- Touch slider updates coalesce independently by control in a bounded queue;
+  sweeping one slider cannot evict the latest value of another control.
 - Raw BLE packet dumps and per-write/slider logs are debug-only. Info logging
   retains setup stages and ten-second/per-disconnect RX, TX, and write-failure
   totals; failures remain errors. TX counts transport sends, not verified edits.
