@@ -567,6 +567,10 @@ pub fn nano_state_preset_dirty() -> bool {
     st().preset_dirty
 }
 
+pub fn nano_state_note_sound_edit() {
+    note_preset_dirty(true);
+}
+
 /// Catalog names in slot order. Empty entries stay empty strings.
 pub fn nano_state_preset_names() -> Vec<String> {
     let s = st();

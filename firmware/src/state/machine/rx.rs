@@ -134,6 +134,9 @@ fn update_preset_label_locked(state: &[u8]) {
         format!("Preset {slot}")
     };
     super::editor::note_loaded_preset(&label, slot, foot);
+    if let Some(dirty) = nano_wire::editor::current_preset_dirty(state, !state_dump_truncated(state)) {
+        super::editor::note_preset_dirty(dirty);
+    }
     crate::screen::nano_ui_set_preset_name(&label);
 }
 

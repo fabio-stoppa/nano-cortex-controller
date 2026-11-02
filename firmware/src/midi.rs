@@ -52,6 +52,34 @@ pub fn visible_action(row: usize) -> Option<usize> {
     (0..ACTION_COUNT).filter(|index| active_action(*index)).nth(row)
 }
 
+/// Category IDs match the MIDI tabs; stored action IDs never change.
+pub fn action_category(index: usize) -> i32 {
+    if (PRESET_START..CAPTURE_START).contains(&index) {
+        1 + ((index - PRESET_START) / 16) as i32
+    } else if (CAPTURE_START..MUTE_START).contains(&index)
+        || (BLOCKS + 5..BLOCKS + 7).contains(&index)
+    {
+        5
+    } else if index >= GIG_START || (SCENE_START..FX_PRESET_START).contains(&index) {
+        6
+    } else if (LEGACY_ACTION_COUNT..EXISTING_ACTION_COUNT).contains(&index)
+        || index == BLOCKS
+        || index == GATE_AMOUNT
+    {
+        7
+    } else if index < BLOCKS || (MODEL_START..PRESET_START).contains(&index) {
+        8
+    } else if (FX_PRESET_START..GIG_START).contains(&index) {
+        9
+    } else if (BLOCKS + TRIGGERS..LEGACY_ACTION_COUNT).contains(&index) {
+        10 + ((index - BLOCKS - TRIGGERS) / KNOBS_PER_BLOCK) as i32
+    } else if (EXTRA_KNOBS_START..GATE_AMOUNT).contains(&index) {
+        10 + ((index - EXTRA_KNOBS_START) / EXTRA_KNOBS) as i32
+    } else {
+        0
+    }
+}
+
 const BLOCK_NAMES: [&str; BLOCKS] = [
     "Pre FX 1",
     "Pre FX 2",
@@ -284,6 +312,10 @@ pub fn last_text() -> String {
             String::from(t.notice)
         }
     })
+}
+
+pub fn notice() -> &'static str {
+    TABLE.lock(|t| t.borrow().notice)
 }
 
 /// Starts waiting for a message for `index`; tapping the same row again cancels.

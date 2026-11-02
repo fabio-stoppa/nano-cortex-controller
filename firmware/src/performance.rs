@@ -32,6 +32,8 @@ struct State {
     fx_models: [Vec<u8>; 5],
     fx_dirty: [bool; 5],
     pending: Option<Pending>,
+    autosave: bool,
+    autosave_edit: Option<(u8, i64)>,
 }
 
 struct Store(RefCell<State>);
@@ -50,6 +52,8 @@ static STATE: Store = Store(RefCell::new(State {
     fx_models: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
     fx_dirty: [false; 5],
     pending: None,
+    autosave: false,
+    autosave_edit: None,
 }));
 
 fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
@@ -97,6 +101,7 @@ fn install(config: Config) {
         state.fx_models = Default::default();
         state.fx_dirty = [false; 5];
         state.pending = None;
+        state.autosave_edit = None;
         state.notice = "Performance configuration saved";
         state.version = state.version.wrapping_add(1);
     });
@@ -205,6 +210,7 @@ pub fn fx_model(block: usize) -> Option<Vec<u8>> {
 
 pub fn cancel(reason: &'static str) {
     let cancelled = with(|state| {
+        state.autosave_edit = None;
         let selected = state.scene.take().is_some()
             || state.fx_selected.iter().any(Option::is_some)
             || state.scene_dirty;
@@ -303,6 +309,31 @@ pub fn clear_scene(preset: usize, index: usize) -> Result<(), &'static str> {
     Ok(())
 }
 
+pub fn clear_all_scenes() -> Result<(), &'static str> {
+    edit(|config| {
+        config.preset_scenes.clear();
+        Ok(())
+    })?;
+    with(|state| {
+        state.scene = None;
+        state.scene_dirty = false;
+    });
+    Ok(())
+}
+
+pub fn clear_all_fx() -> Result<(), &'static str> {
+    edit(|config| {
+        config.model_presets.clear();
+        Ok(())
+    })?;
+    with(|state| {
+        state.fx_selected = [None; 5];
+        state.fx_models = Default::default();
+        state.fx_dirty = [false; 5];
+    });
+    Ok(())
+}
+
 pub fn rename_scene(preset: usize, index: usize, name: &str) -> Result<(), &'static str> {
     let error = data::name_error(name);
     if !error.is_empty() { return Err(error); }
@@ -339,6 +370,7 @@ pub fn recall_scene(index: usize) -> Result<(), &'static str> {
     let plan = Plan::scene(snapshot, preset, crate::clock::now_us())?;
     with(|state| {
         state.pending = Some(Pending::Scene { index, plan });
+        state.autosave_edit = None;
         state.scene = None;
         state.scene_dirty = false;
         state.fx_selected = [None; 5];
@@ -401,6 +433,9 @@ pub fn poll() -> Option<crate::link::Cmd> {
             None
         }
         Progress::Write(command) => {
+            if !matches!(&command, crate::link::Cmd::PerformanceRefresh | crate::link::Cmd::PerformanceFxRefresh) {
+                crate::state::nano_state_note_sound_edit();
+            }
             with(|state| state.pending = Some(pending));
             Some(command)
         }
@@ -421,6 +456,7 @@ pub fn fx_presets(model: &[u8]) -> Vec<Option<data::FxPreset>> {
 pub fn disconnected() {
     cancel("Nano disconnected; recall may be partially applied");
     with(|state| {
+        state.autosave_edit = None;
         state.scene = None;
         state.scene_dirty = false;
         state.fx_selected = [None; 5];
@@ -429,12 +465,72 @@ pub fn disconnected() {
 }
 
 pub fn sound_edited() {
+    crate::state::nano_state_note_sound_edit();
     with(|state| {
+        state.autosave_edit = Some((crate::state::nano_state_preset_slot(), crate::clock::now_us()));
         if state.scene.is_some() && !state.scene_dirty {
             state.scene_dirty = true;
             state.version = state.version.wrapping_add(1);
         }
     });
+}
+
+pub fn set_autosave(enabled: bool) {
+    with(|state| {
+        state.autosave = enabled;
+        state.autosave_edit = None;
+    });
+}
+
+/// Called after queued edits have been sent and the Nano state is idle.
+pub fn autosave_due() -> bool {
+    with(|state| {
+        let Some((preset, edited)) = state.autosave_edit else { return false; };
+        if preset != crate::state::nano_state_preset_slot() || !crate::link::connected() {
+            state.autosave_edit = None;
+            return false;
+        }
+        if !state.autosave || crate::clock::now_us() - edited < 5_000_000 {
+            return false;
+        }
+        if state.pending.is_some() || crate::state::nano_rx_mode_get() != 0
+            || crate::tuner::nano_tuner_is_active()
+        {
+            return false;
+        }
+        state.autosave_edit = None;
+        true
+    })
+}
+
+pub fn autosave_selected() -> Result<(), &'static str> {
+    let preset = crate::state::nano_state_preset_slot();
+    if scene_dirty() {
+        if let Some(index) = scene() {
+            let name = scenes(usize::from(preset)).get(index).cloned().flatten()
+                .ok_or("Autosave scene no longer exists")?;
+            capture_scene(preset, index, &name)?;
+        }
+    }
+    for block in 0..5 {
+        if !fx_dirty(block) { continue; }
+        if let Some(index) = fx_selected(block) {
+            let model = fx_model(block).ok_or("Autosave FX model is not loaded")?;
+            let stored = fx_presets(&model).get(index).cloned().flatten()
+                .ok_or("Autosave FX preset no longer exists")?;
+            let current = view();
+            let effect = data::Effect::capture(&current.effects.blocks[block], block)?;
+            for other in block + 1..5 {
+                if fx_selected(other) == Some(index) && fx_model(other).as_ref() == Some(&model)
+                    && fx_dirty(other) && !effect.parameters_match(&current.effects.blocks[other])
+                {
+                    return Err("Autosave conflict: shared FX preset has different edits in multiple blocks");
+                }
+            }
+            capture_fx(index, block, &stored.name, &model)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn effect_edited(block: usize) {
@@ -475,7 +571,7 @@ pub fn capture_fx(index: usize, block: usize, name: &str, model: &[u8]) -> Resul
     if index >= data::FX_PRESETS_PER_MODEL {
         return Err("Invalid FX preset slot");
     }
-    let dirty: [bool; 5] = core::array::from_fn(|block| !effect.matches(&current.effects.blocks[block]));
+    let dirty: [bool; 5] = core::array::from_fn(|block| !effect.parameters_match(&current.effects.blocks[block]));
     edit(|config| {
         if !config.model_presets.iter().any(|collection| collection.model == model) {
             config.model_presets.push(data::ModelPresets {
@@ -547,6 +643,7 @@ pub fn recall_fx(index: usize, block: usize) -> Result<(), &'static str> {
     let plan = Plan::effect(effect, block, current.preset, crate::clock::now_us())?;
     with(|state| {
         state.pending = Some(Pending::Effect { index, block, plan });
+        state.autosave_edit = None;
         state.fx_selected[block] = None;
         state.fx_dirty[block] = false;
         state.notice = "Recalling FX preset and verifying...";

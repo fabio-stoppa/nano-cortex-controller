@@ -99,7 +99,10 @@ mod tests {
         app.set_model_open(false);
     }
 
-    fn check_preview_workflow(window: &MinimalSoftwareWindow) {
+    fn check_preview_workflow(
+        window: &MinimalSoftwareWindow,
+        time: &Rc<std::cell::Cell<std::time::Duration>>,
+    ) {
         let tap = |x, y| {
             let position = LogicalPosition::new(x, y);
             window.dispatch_event(WindowEvent::PointerPressed {
@@ -125,6 +128,30 @@ mod tests {
                     renderer.render(&mut pixels, width as usize);
                 });
             };
+            draw();
+            let position = LogicalPosition::new(40.0, if portrait { 760.0 } else { 90.0 });
+            let original_on = app.get_preview_fx_on();
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            time.set(time.get() + std::time::Duration::from_millis(451));
+            slint::platform::update_timers_and_animations();
+            assert_eq!(app.get_preview_fx_on(), !original_on, "Holding FX did not toggle bypass");
+            assert_eq!(app.get_popup(), "none", "Holding FX opened model selection");
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+            assert_eq!(app.get_preview_fx_on(), !original_on, "Releasing hold toggled FX again");
+            tap(position.x, position.y);
+            time.set(time.get() + std::time::Duration::from_millis(100));
+            slint::platform::update_timers_and_animations();
+            tap(position.x, position.y);
+            assert_eq!(app.get_popup(), "model", "Double-tapping FX did not open selection");
+            assert_eq!(app.get_preview_fx_on(), !original_on, "Double-tapping FX changed bypass");
+            app.set_popup("none".into());
+            slint::platform::update_timers_and_animations();
             for _ in 0..2 {
                 draw();
                 tap(width as f32 - 110.0, 38.0);
@@ -529,6 +556,155 @@ mod tests {
         assert!(!app.get_bt_open());
     }
 
+    fn check_header_tools_menu(app: &AppWindow, window: &MinimalSoftwareWindow) {
+        fn render(
+            window: &MinimalSoftwareWindow,
+            pixels: &mut [Rgb565Pixel],
+            rotation: RenderingRotation,
+            fresh: bool,
+        ) {
+            use slint::platform::WindowAdapter;
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(rotation);
+                if fresh {
+                    renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                }
+                renderer.render(pixels, window.window().size().width as usize);
+                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            });
+        }
+        let weak = app.as_weak();
+        app.on_tools_opened(move || weak.unwrap().set_settings_open(true));
+        let closed = Rc::new(std::cell::Cell::new(0));
+        app.on_midi_closed({
+            let closed = closed.clone();
+            move || closed.set(closed.get() + 1)
+        });
+        let tap = |x, y| {
+            let position = LogicalPosition::new(x, y);
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+        };
+        let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
+        for portrait in [false, true] {
+            let (width, height) = if portrait { (480, 800) } else { (800, 480) };
+            app.set_portrait(portrait);
+            app.set_page(0);
+            app.set_model_enabled(true);
+            window.set_size(PhysicalSize::new(width, height));
+            for (row, section) in [(1, 2), (2, 1), (3, 0)] {
+                app.set_settings_open(false);
+                window.request_redraw();
+                render(window, &mut pixels, RenderingRotation::NoRotation, true);
+                let dot = ((0xe0u16 >> 3) << 11) | ((0xe0u16 >> 2) << 5) | (0xe0u16 >> 3);
+                assert_eq!(
+                    pixels[38 * width as usize + width as usize - 25].0,
+                    dot,
+                    "header dots are not aligned to the right edge"
+                );
+                tap(width as f32 - 35.0, 38.0);
+                assert!(app.get_header_menu_open(), "menu button missed: portrait={portrait}, row={row}");
+                assert!(!app.get_settings_open(), "dots opened Settings directly");
+                window.request_redraw();
+                render(window, &mut pixels, RenderingRotation::NoRotation, true);
+                tap(width as f32 - 100.0, 94.0 + row as f32 * 59.0);
+                assert!(!app.get_header_menu_open());
+                assert!(app.get_settings_open());
+                assert_eq!(app.get_tools_section(), section);
+                assert_eq!(app.get_settings_tab(), 0);
+                assert!(!app.get_bt_open());
+                window.request_redraw();
+                render(window, &mut pixels, RenderingRotation::NoRotation, true);
+                if section != 0 {
+                    // Every tab remains accessible, including via header scrolling in portrait.
+                    for tab in 0..(if section == 1 { 4 } else { 15 }) {
+                        for _ in 0..3 {
+                            for x in (100..width - 14).step_by(12) {
+                                tap(x as f32, 38.0);
+                                window.request_redraw();
+                                render(window, &mut pixels, RenderingRotation::NoRotation, true);
+                                if (if section == 1 { app.get_pedal_tab() } else { app.get_midi_tab() }) == tab {
+                                    break;
+                                }
+                            }
+                            if (if section == 1 { app.get_pedal_tab() } else { app.get_midi_tab() }) == tab {
+                                break;
+                            }
+                            window.dispatch_event(WindowEvent::PointerScrolled {
+                                position: LogicalPosition::new(width as f32 - 100.0, 38.0),
+                                delta_x: -200.0,
+                                delta_y: 0.0,
+                            });
+                            window.request_redraw();
+                            render(window, &mut pixels, RenderingRotation::NoRotation, true);
+                        }
+                        assert_eq!(
+                            if section == 1 { app.get_pedal_tab() } else { app.get_midi_tab() },
+                            tab,
+                            "tab {tab} unreachable in section {section}, portrait={portrait}"
+                        );
+                    }
+                }
+                let before = closed.get();
+                tap(35.0, 35.0);
+                assert!(!app.get_settings_open());
+                assert!(closed.get() > before, "closing tools did not cancel learning");
+            }
+            window.request_redraw();
+            render(window, &mut pixels, RenderingRotation::NoRotation, true);
+            tap(width as f32 - 35.0, 38.0);
+            window.request_redraw();
+            render(window, &mut pixels, RenderingRotation::NoRotation, true);
+            tap(20.0, height as f32 - 20.0);
+            assert!(!app.get_header_menu_open());
+            assert!(!app.get_settings_open(), "outside menu tap activated underlying UI");
+            window.request_redraw();
+            render(window, &mut pixels, RenderingRotation::NoRotation, true);
+            tap(width as f32 - 35.0, 38.0);
+            window.request_redraw();
+            render(window, &mut pixels, RenderingRotation::NoRotation, true);
+            tap(width as f32 - 100.0, 94.0);
+            assert!(app.get_gig_open(), "First header menu option did not open Gig mode");
+            assert!(!app.get_header_menu_open());
+            assert!(!app.get_settings_open());
+            app.invoke_gig_mode_set(false);
+
+            // The asterisk must survive elision and disappear when the Nano is saved.
+            app.set_preset("A very long Nano preset name that needs to be elided".into());
+            app.set_save_dirty(false);
+            window.request_redraw();
+            render(window, &mut pixels, RenderingRotation::NoRotation, true);
+            let clean = pixels.clone();
+            app.set_save_dirty(true);
+            window.request_redraw();
+            render(window, &mut pixels, RenderingRotation::NoRotation, true);
+            let marker_x = if portrait { 282 } else { 542 };
+            assert!(
+                (20..54).any(|y| (marker_x..marker_x + 18).any(|x| {
+                    pixels[y * width as usize + x] != clean[y * width as usize + x]
+                })),
+                "unsaved marker missing on an elided header"
+            );
+            app.set_save_dirty(false);
+            window.request_redraw();
+            render(window, &mut pixels, RenderingRotation::NoRotation, true);
+            assert_eq!(pixels, clean, "saving did not remove the Nano marker");
+        }
+        app.set_preset("-".into());
+        app.set_tools_section(0);
+        app.set_pedal_tab(0);
+        app.set_midi_tab(0);
+        app.set_portrait(false);
+        app.on_midi_closed(|| {});
+        window.set_size(PhysicalSize::new(800, 480));
+    }
+
     fn check_fx_cell_contrast(app: &AppWindow, window: &MinimalSoftwareWindow) {
         app.set_page(1);
         app.set_fx_n0("Mix".into());
@@ -578,6 +754,11 @@ mod tests {
             let preset_action = preset_action.clone();
             move || preset_action.set(preset_action.get() + 1)
         });
+        let performance_clears = Rc::new(std::cell::RefCell::new(Vec::new()));
+        app.on_performance_clear_all({
+            let performance_clears = performance_clears.clone();
+            move |kind| performance_clears.borrow_mut().push(kind)
+        });
         let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
         let red = ((0xf8u16 >> 3) << 11) | ((0x28u16 >> 2) << 5) | (0x1au16 >> 3);
         let click = |x, y| {
@@ -597,7 +778,7 @@ mod tests {
             app.set_kbd_open(false);
             app.set_model_open(false);
             app.set_settings_open(true);
-            app.set_settings_tab(3);
+            app.set_tools_section(2);
             app.set_midi_last("CC 7 ch 1".into());
             window.request_redraw();
             window.draw_if_needed(|renderer| {
@@ -615,27 +796,27 @@ mod tests {
                 renderer.render(&mut pixels, width as usize);
                 renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
             });
-            let last_bottom = (0..height as usize)
-                .rev()
-                .find(|&y| {
-                    (0..width as usize).any(|x| {
-                        pixels[y * width as usize + x].0 != previous[y * width as usize + x].0
-                    })
-                })
-                .expect("Last MIDI message is not rendered");
-            let grey = ((0x90u16 >> 3) << 11) | ((0x90u16 >> 2) << 5) | (0x90u16 >> 3);
-            let help_top = (last_bottom + 1..last_bottom + 40)
-                .find(|&y| {
-                    (14..width as usize - 140).any(|x| pixels[y * width as usize + x].0 == grey)
-                })
-                .expect("Shared-message help is not below the last message");
-            assert!(
-                help_top - last_bottom <= 17,
-                "MIDI header gap is {} pixels",
-                help_top - last_bottom
-            );
-            click(width as f32 - 70.0, last_bottom as f32 + 6.0);
-            assert!(app.get_confirm_open());
+            assert_eq!(pixels, previous, "Removed MIDI information row is still rendered");
+            app.set_tools_section(0);
+            app.set_settings_tab(0);
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                renderer.render(&mut pixels, width as usize);
+                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            });
+            let mut button_span = 0;
+            for x in 14..width as usize - 14 {
+                if pixels[250 * width as usize + x].0 == 0 {
+                    button_span += 1;
+                    assert!(button_span < 140, "Tools buttons stretched in portrait={portrait}");
+                } else {
+                    button_span = 0;
+                }
+            }
+            click(width as f32 - 308.0, 350.0);
+            assert!(app.get_confirm_open(), "clear MIDI missed portrait={portrait}");
             assert_eq!(app.get_confirm_title(), "Clear all MIDI bindings?");
             window.request_redraw();
             window.draw_if_needed(|renderer| {
@@ -687,9 +868,53 @@ mod tests {
                 0,
                 "MIDI confirmation triggered preset operation"
             );
+            let midi_clears_before = cleared.get();
+            for (kind, button_x, title) in [
+                (2, width as f32 - 204.0, "Clear all scenes?"),
+                (3, width as f32 - 88.0, "Clear all FX presets?"),
+            ] {
+                let before = performance_clears.borrow().len();
+                window.request_redraw();
+                window.draw_if_needed(|renderer| {
+                    renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                    renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                    renderer.render(&mut pixels, width as usize);
+                    renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+                });
+                click(button_x, 350.0);
+                assert!(app.get_confirm_open(), "clear button {kind} is unreachable");
+                assert_eq!(app.get_confirm_title(), title);
+                window.request_redraw();
+                window.draw_if_needed(|renderer| {
+                    renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                    renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                    renderer.render(&mut pixels, width as usize);
+                    renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+                });
+                click(5.0, 5.0);
+                assert!(app.get_confirm_open());
+                click(width as f32 - x, y);
+                assert!(!app.get_confirm_open());
+                assert_eq!(performance_clears.borrow().len(), before, "Cancel cleared data");
+                app.invoke_clear_requested(kind);
+                window.request_redraw();
+                window.draw_if_needed(|renderer| {
+                    renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                    renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                    renderer.render(&mut pixels, width as usize);
+                    renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+                });
+                click(x, y);
+                assert!(!app.get_confirm_open());
+                assert_eq!(performance_clears.borrow().as_slice().last(), Some(&kind));
+                assert_eq!(performance_clears.borrow().len(), before + 1);
+                assert_eq!(cleared.get(), midi_clears_before, "Performance clear also cleared MIDI");
+                assert_eq!(preset_action.get(), 0);
+            }
         }
         app.set_settings_open(false);
         app.set_settings_tab(0);
+        app.set_tools_section(0);
         app.set_portrait(false);
         window.set_size(PhysicalSize::new(800, 480));
     }
@@ -710,6 +935,7 @@ mod tests {
                 }
                 self.visited.borrow_mut().insert(index);
                 Some(MidiRow {
+                    index: index as i32,
                     name: format!("Action {index}").into(),
                     assigned: "CC 7 ch1".into(),
                     learning: false,
@@ -753,7 +979,7 @@ mod tests {
             render(&mut pixels, width as usize);
             actions.visited.borrow_mut().clear();
             app.set_settings_open(true);
-            app.set_settings_tab(3);
+            app.set_tools_section(2);
             render(&mut pixels, width as usize);
             assert!(
                 actions.visited.borrow().len() <= 20,
@@ -801,6 +1027,7 @@ mod tests {
         app.set_midi_rows(slint::ModelRc::default());
         app.set_settings_open(false);
         app.set_settings_tab(0);
+        app.set_tools_section(0);
         app.set_portrait(false);
         window.set_size(PhysicalSize::new(800, 480));
     }
@@ -890,6 +1117,29 @@ mod tests {
                 pixels[y * width as usize + x] != clean[y * width as usize + x]
             )), "Unsaved marker hidden by long preset name");
             app.set_fx_preset_dirty(false);
+            app.set_fx_preset_selected(2);
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.render(&mut pixels, width as usize);
+            });
+            let clean_short = pixels.clone();
+            app.set_fx_preset_dirty(true);
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.render(&mut pixels, width as usize);
+            });
+            let third_start = (start + 2.0 * (tab_width + 4.0)) as usize;
+            let third_end = (start + 2.0 * (tab_width + 4.0) + tab_width) as usize;
+            assert!((66..102).any(|y| (third_start..third_end - 20).any(|x|
+                pixels[y * width as usize + x] != clean_short[y * width as usize + x]
+            )), "Short FX preset marker is not next to its label");
+            assert!((66..102).all(|y| (third_end - 20..third_end - 4).all(|x|
+                pixels[y * width as usize + x] == clean_short[y * width as usize + x]
+            )), "Short FX preset marker is still pinned to the right edge");
+            app.set_fx_preset_dirty(false);
+            app.set_fx_preset_selected(0);
             let mut draw = || {
                 window.request_redraw();
                 window.draw_if_needed(|renderer| {
@@ -936,6 +1186,27 @@ mod tests {
                     assert_eq!(stored.get(), -1, "Hold also stored the preset");
                     let menu_x = (start + index as f32 * (tab_width + 4.0))
                         .min(width as f32 - 236.0);
+                    if index == 0 && action == 0 {
+                        let mut menu_pixels = vec![Rgb565Pixel(0); 800 * 480];
+                        window.request_redraw();
+                        window.draw_if_needed(|renderer| {
+                            renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                            renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                            renderer.render(&mut menu_pixels, width as usize);
+                            renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+                        });
+                        let x = (menu_x + 24.0) as usize;
+                        assert_ne!(
+                            menu_pixels[228 * width as usize + x],
+                            menu_pixels[227 * width as usize + x],
+                            "Missing separator before Delete"
+                        );
+                        assert_eq!(
+                            menu_pixels[287 * width as usize + x],
+                            menu_pixels[286 * width as usize + x],
+                            "Separator remains below Delete"
+                        );
+                    }
                     tap(menu_x + 40.0, 140.0 + action as f32 * 60.0);
                     let enabled = action == 0 || index != 1;
                     assert_eq!(stored.get(), if action == 0 && enabled { index } else { -1 });
@@ -1066,6 +1337,7 @@ mod tests {
                 "Header scene selector is inaccessible"
             );
             app.set_performance_open(true);
+            app.set_scene_title("A very long Nano preset title ".repeat(8).into());
             window.request_redraw();
             window.draw_if_needed(|renderer| {
                 renderer.set_rendering_rotation(RenderingRotation::NoRotation);
@@ -1073,6 +1345,15 @@ mod tests {
                 renderer.render(&mut pixels, width as usize);
                 renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
             });
+            assert_eq!(
+                app.get_scene_title().as_str(),
+                "A very long Nano preset title ".repeat(8),
+                "Truncation modified the full title"
+            );
+            let background = pixels[18 * width as usize + width as usize - 1];
+            assert!((18..58).all(|y| (width as usize - 14..width as usize).all(|x|
+                pixels[y * width as usize + x] == background
+            )), "Long scene popup title overflowed its right margin");
             let columns = if portrait { 2 } else { 3 };
             let card_width = (width as f32 - 28.0 - (columns - 1) as f32 * 8.0) / columns as f32;
             app.set_performance_scene(0);
@@ -1482,6 +1763,7 @@ mod tests {
         check_source_card_names(&app, &window);
         check_fx_category_colors(&app, &window);
         check_fullscreen_popups(&app, &window);
+        check_header_tools_menu(&app, &window);
         check_fx_cell_contrast(&app, &window);
         check_midi_clear_confirmation(&app, &window);
         check_full_midi_list(&app, &window);
@@ -1588,6 +1870,6 @@ mod tests {
             }
         }
         app.hide().unwrap();
-        check_preview_workflow(&window);
+        check_preview_workflow(&window, &time);
     }
 }

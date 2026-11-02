@@ -139,6 +139,26 @@ fn ensure() {
     }
     crate::midi::load();
     crate::performance::load();
+    let autosave = crate::settings::load_autosave();
+    app.set_autosave_enabled(autosave);
+    crate::performance::set_autosave(autosave);
+    app.on_autosave_toggled({
+        let weak = app.as_weak();
+        move |enabled| {
+            let Some(app) = weak.upgrade() else { return; };
+            match crate::settings::save_autosave(enabled) {
+                Ok(()) => {
+                    app.set_autosave_enabled(enabled);
+                    crate::performance::set_autosave(enabled);
+                    app.set_autosave_status("".into());
+                }
+                Err(error) => {
+                    crate::performance::report(error);
+                    app.set_autosave_status(error.into());
+                }
+            }
+        }
+    });
     performance::register(&app);
     let weak = app.as_weak();
     app.on_chain_tapped({
@@ -163,7 +183,7 @@ fn ensure() {
             }
         }
     });
-    app.on_chain_held({
+    app.on_chain_double({
         let weak = weak.clone();
         move |index| {
             if fx_block_for_chain(index).is_none() {
@@ -176,7 +196,7 @@ fn ensure() {
             app.invoke_model_list_tapped();
         }
     });
-    app.on_chain_double({
+    app.on_chain_held({
         let weak = weak.clone();
         move |index| {
             let Some(block) = fx_block_for_chain(index) else {
@@ -268,7 +288,45 @@ fn ensure() {
             crate::midi::clear(action);
         }
     });
-    app.on_midi_clear_all(crate::midi::clear_all);
+    app.on_midi_clear_all({
+        let weak = weak.clone();
+        move || {
+            crate::midi::clear_all();
+            crate::midi::persist();
+            if let Some(app) = weak.upgrade() {
+                app.set_clear_status_kind(1);
+                app.set_clear_status(
+                    if crate::midi::notice().is_empty() {
+                        "MIDI bindings cleared"
+                    } else {
+                        crate::midi::notice()
+                    }.into(),
+                );
+            }
+        }
+    });
+    app.on_performance_clear_all({
+        let weak = weak.clone();
+        move |kind| {
+            let result = match kind {
+                2 => crate::performance::clear_all_scenes(),
+                3 => crate::performance::clear_all_fx(),
+                _ => Err("Invalid clear action"),
+            };
+            let message = match result {
+                Ok(()) => if kind == 2 { "All scenes cleared" } else { "All FX presets cleared" },
+                Err(error) => {
+                    crate::performance::report(error);
+                    error
+                }
+            };
+            if let Some(app) = weak.upgrade() {
+                app.set_clear_status_kind(kind);
+                app.set_clear_status(message.into());
+                performance::refresh(&app, true);
+            }
+        }
+    });
     app.on_tools_jack_selected(move |expression| {
         crate::link::push_cmd(Cmd::JackMode(if expression {
             nano_wire::types::JackMode::Expression
@@ -1018,26 +1076,51 @@ pub fn set_bluetooth_busy() {
 }
 
 static MIDI_SHOWN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static MIDI_TAB_SHOWN: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(-1);
 
 /// Repaints the MIDI page when its bindings change and saves new ones.
 pub fn refresh_midi() {
     if let Some(ui) = state().as_ref() { performance::refresh(&ui.app, false); }
-    crate::midi::persist();
-    let version = crate::midi::version();
-    if MIDI_SHOWN.load(core::sync::atomic::Ordering::Relaxed) == version {
-        return;
+    if let Some(ui) = state().as_ref() {
+        if ui.app.get_autosave_enabled() {
+            ui.app.set_autosave_status(crate::performance::notice().into());
+        }
     }
-
+    crate::midi::persist();
+    if let Some(ui) = state().as_ref() {
+        ui.app.set_midi_notice(crate::midi::notice().into());
+        if ui.app.get_clear_status_kind() == 1 {
+            ui.app.set_clear_status(
+                if crate::midi::notice().is_empty() {
+                    "MIDI bindings cleared"
+                } else {
+                    crate::midi::notice()
+                }.into(),
+            );
+        }
+    }
+    let version = crate::midi::version();
     let Some(ui) = state().as_mut() else {
         return;
     };
-    if !ui.app.get_settings_open() {
+    if !ui.app.get_settings_open() || ui.app.get_tools_section() != 2 {
+        return;
+    }
+    let tab = ui.app.get_midi_tab();
+    if MIDI_SHOWN.load(core::sync::atomic::Ordering::Relaxed) == version
+        && MIDI_TAB_SHOWN.load(core::sync::atomic::Ordering::Relaxed) == tab
+    {
         return;
     }
     MIDI_SHOWN.store(version, core::sync::atomic::Ordering::Relaxed);
+    MIDI_TAB_SHOWN.store(tab, core::sync::atomic::Ordering::Relaxed);
     let rows: alloc::vec::Vec<MidiRow> = crate::midi::visible_rows()
         .into_iter()
-        .map(|r| MidiRow {
+        .zip((0..crate::midi::ACTION_COUNT).filter(|action| crate::midi::active_action(*action)))
+        .enumerate()
+        .filter(|(_, (_, action))| crate::midi::action_category(*action) == tab)
+        .map(|(index, (r, _))| MidiRow {
+            index: index as i32,
             name: r.name.as_str().into(),
             assigned: r.assigned.as_str().into(),
             learning: r.learning,
@@ -1200,6 +1283,7 @@ pub fn show_preset(name: &str) {
     ensure();
     let ui = state().as_mut().unwrap();
     ui.app.set_preset(name.into());
+    ui.app.set_save_dirty(crate::state::nano_state_preset_dirty());
     if ui.app.get_model_open() && ui.app.get_list_kind() == 3 {
         ui.app
             .set_model_list_current(i32::from(crate::state::nano_state_preset_slot()));

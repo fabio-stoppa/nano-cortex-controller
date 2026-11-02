@@ -30,6 +30,7 @@ export component Preview inherits AppWindow {
     in-out property <string> popup: "none";
     in-out property <bool> tap-mode: false;
     in-out property <bool> preview-portrait: false;
+    out property <bool> preview-fx-on: root.on-0;
     portrait: root.preview-portrait;
     property <int> demo-save-kind: 0;
     property <int> demo-save-slot: 0;
@@ -56,7 +57,8 @@ export component Preview inherits AppWindow {
     changed popup => {
         root.performance-open = root.popup == "scenes";
         root.gig-open = root.popup == "gig";
-        root.settings-open = root.popup == "settings" || root.popup == "bluetooth";
+        root.settings-open = root.popup == "settings" || root.popup == "bluetooth"
+            || root.popup == "midi" || root.popup == "pedals";
         root.model-open = root.popup == "preset" || root.popup == "preset-menu" || root.popup == "model"
             || root.popup == "capture" || root.popup == "cab" || root.popup == "library";
         root.kbd-open = root.popup == "rename" || root.demo-save-kind != 0;
@@ -239,13 +241,25 @@ export component Preview inherits AppWindow {
         { name: "Nano Cortex 2", kind: "Amp", state: 1 },
         { name: "FootCtrl BLE", kind: "MIDI", state: 0 },
     ];
-    midi-rows: [
-        { name: "FX 1 on/off", assigned: "Note 60", learning: false },
-        { name: "Tuner", assigned: "CC 20", learning: false },
-        { name: "Tap tempo", assigned: "Press a footswitch…", learning: true },
-        { name: "Preset up", assigned: "Not assigned", learning: false },
-        { name: "Preset down", assigned: "Not assigned", learning: false },
+    property <[MidiRow]> demo-midi-controls: [
+        { index: 1, name: "Tuner", assigned: "CC 20", learning: false },
+        { index: 2, name: "Tap tempo", assigned: "Press a footswitch…", learning: true },
     ];
+    property <[MidiRow]> demo-midi-presets: [
+        { index: 3, name: "Preset up", assigned: "Not assigned", learning: false },
+        { index: 4, name: "Preset down", assigned: "Not assigned", learning: false },
+    ];
+    property <[MidiRow]> demo-midi-amp: [
+        { index: 5, name: "Amp gain (CC)", assigned: "CC 7", learning: false },
+        { index: 6, name: "Cab level (CC)", assigned: "", learning: false },
+    ];
+    property <[MidiRow]> demo-midi-fx: [
+        { index: 0, name: "FX 1 on/off", assigned: "Note 60", learning: false },
+        { index: 7, name: "FX 1 mix (CC)", assigned: "", learning: false },
+    ];
+    midi-rows: root.midi-tab == 0 ? root.demo-midi-controls
+        : root.midi-tab >= 1 && root.midi-tab <= 6 ? root.demo-midi-presets
+        : root.midi-tab == 7 ? root.demo-midi-amp : root.demo-midi-fx;
     midi-last: "CC 20 = 127";
     model-list-title: root.popup == "preset" ? "Presets"
         : root.popup == "preset-menu" ? "Presets · action menu"
@@ -264,12 +278,19 @@ export component Preview inherits AppWindow {
         root.page = index == 2 ? 0 : 1;
         root.fx-preset-selected = -1;
     }
-    chain-held(index) => {
+    chain-double(index) => {
         if index != 2 {
             root.chain = index;
             root.page = 1;
             root.popup = "model";
         }
+    }
+    chain-held(index) => {
+        if index == 0 { root.on-0 = !root.on-0; }
+        else if index == 1 { root.on-1 = !root.on-1; }
+        else if index == 3 { root.on-3 = !root.on-3; }
+        else if index == 4 { root.on-4 = !root.on-4; }
+        else if index == 5 { root.on-5 = !root.on-5; }
     }
     performance-opened => { root.popup = "scenes"; }
     performance-scene-recall(index) => { root.demo-recall-scene(index); }
@@ -296,7 +317,46 @@ export component Preview inherits AppWindow {
     slider-moved(index, amount) => { root.scene-dirty = root.performance-scene >= 0; }
     tuner-tapped => { root.page = root.page == 2 ? (root.chain == 2 ? 0 : 1) : 2; }
     tempo-tapped => { root.tap-mode = !root.tap-mode; }
-    tools-opened => { root.popup = root.popup == "settings" ? "none" : "settings"; }
+    tools-opened => { root.popup = root.tools-section == 2 ? "midi" : root.tools-section == 1 ? "pedals" : "settings"; }
+    autosave-toggled(enabled) => {
+        root.autosave-enabled = enabled;
+        root.autosave-status = enabled ? "Preview only - no automatic saves are sent to the Nano." : "";
+    }
+    midi-clear-all => {
+        root.demo-midi-controls[0].assigned = "";
+        root.demo-midi-controls[0].learning = false;
+        root.demo-midi-controls[1].assigned = "";
+        root.demo-midi-controls[1].learning = false;
+        root.demo-midi-presets[0].assigned = "";
+        root.demo-midi-presets[1].assigned = "";
+        root.demo-midi-amp[0].assigned = "";
+        root.demo-midi-amp[1].assigned = "";
+        root.demo-midi-fx[0].assigned = "";
+        root.demo-midi-fx[1].assigned = "";
+        root.clear-status = "MIDI bindings cleared (preview only)";
+    }
+    callback demo-clear-fx(int);
+    demo-clear-fx(index) => {
+        root.demo-effects[index].names = ["+ 1", "+ 2", "+ 3", "+ 4"];
+        root.demo-effects[index].assigned = [false, false, false, false];
+    }
+    performance-clear-all(kind) => {
+        if kind == 2 {
+            root.demo-scenes = ["", "", "", "", "", "", "", ""];
+            root.performance-scene = -1;
+            root.scene-dirty = false;
+        } else {
+            root.demo-clear-fx(0);
+            root.demo-clear-fx(1);
+            root.demo-clear-fx(2);
+            root.demo-clear-fx(3);
+            root.demo-clear-fx(4);
+            root.demo-clear-fx(5);
+            root.fx-preset-selected = -1;
+            root.fx-preset-dirty = false;
+        }
+        root.clear-status = kind == 2 ? "All scenes cleared (preview only)" : "All FX presets cleared (preview only)";
+    }
     preset-list-tapped => { root.popup = "preset"; }
     model-preset-action-chosen(index, action) => {
         root.preset-menu-index = -1;
@@ -351,7 +411,10 @@ export component Preview inherits AppWindow {
         root.popup = "none";
     }
     // Pickers also close themselves through settings-open / model-open, so mirror that here.
-    changed settings-open => { if !root.settings-open && (root.popup == "settings" || root.popup == "bluetooth") { root.popup = "none"; } }
+    changed settings-open => {
+        if !root.settings-open && (root.popup == "settings" || root.popup == "bluetooth"
+            || root.popup == "midi" || root.popup == "pedals") { root.popup = "none"; }
+    }
     changed model-open => {
         if !root.model-open && (root.popup == "preset" || root.popup == "preset-menu"
             || root.popup == "model" || root.popup == "capture" || root.popup == "cab" || root.popup == "library") {
@@ -397,6 +460,7 @@ export component Preview inherits AppWindow {
                 label: "Edited";
                 active: root.scene-dirty || root.fx-preset-dirty;
                 clicked => {
+                    root.save-dirty = !root.save-dirty;
                     root.scene-dirty = !root.scene-dirty;
                     if root.fx-preset-selected >= 0 { root.fx-preset-dirty = !root.fx-preset-dirty; }
                 }
@@ -416,7 +480,7 @@ export component Preview inherits AppWindow {
                 active: root.popup == p.v;
                 clicked => {
                     root.popup = root.popup == p.v ? "none" : p.v;
-                    if p.v == "bluetooth" { root.settings-tab = 4; }
+                    if p.v == "bluetooth" { root.tools-section = 0; root.settings-tab = 4; }
                 }
             }
         }
@@ -433,7 +497,7 @@ export component Preview inherits AppWindow {
                 active: root.popup == p.v;
                 clicked => {
                     root.popup = root.popup == p.v ? "none" : p.v;
-                    if p.v == "settings" { root.settings-tab = 0; }
+                    if p.v == "settings" { root.tools-section = 0; root.settings-tab = 0; }
                 }
             }
         }

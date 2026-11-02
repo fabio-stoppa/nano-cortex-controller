@@ -24,6 +24,7 @@ pub use editor::{
     nano_state_delete_preset, nano_state_expression_calibration_save,
     nano_state_expression_calibration_start, nano_state_load_library_cab,
     nano_state_load_library_capture, nano_state_preset_dirty, nano_state_preset_name,
+    nano_state_note_sound_edit,
     nano_state_preset_names, nano_state_preset_slot, nano_state_read_cab_settings,
     nano_state_read_expression, nano_state_read_settings, nano_state_rename_preset,
     nano_state_preset_name_taken, nano_state_request_library, nano_state_request_lists,

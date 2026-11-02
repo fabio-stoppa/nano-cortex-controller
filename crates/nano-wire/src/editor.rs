@@ -353,6 +353,13 @@ pub fn preset_dirty(data: &[u8]) -> Option<bool> {
     Some(payload_varint(data, 3) == Some(1))
 }
 
+/// Current-state field 41. An omitted flag is clean only in a complete dump.
+pub fn current_preset_dirty(state: &[u8], complete: bool) -> Option<bool> {
+    crate::parsers::field_varint(state, 41)
+        .map(|value| value != 0)
+        .or_else(|| complete.then_some(false))
+}
+
 /// Load preset `index` (0-based). Footswitch slots are left unchanged (`-1`).
 /// `on_foot` is which of IA/IB/IIA/IIB already holds it, or 4 when none does.
 pub fn select_preset_payload(index: u8, on_foot: u8, buf: &mut [u8]) -> usize {
@@ -1071,6 +1078,11 @@ mod tests {
         let clean = [0x04, 0xC0, 0x08, 0x01, 0x73, 0x00, 0x00, 0x00];
         assert_eq!(preset_dirty(&dirty), Some(true));
         assert_eq!(preset_dirty(&clean), Some(false));
+        assert_eq!(current_preset_dirty(&[0xc8, 0x02, 0x01], true), Some(true));
+        assert_eq!(current_preset_dirty(&[0xc8, 0x02, 0x00], true), Some(false));
+        assert_eq!(current_preset_dirty(&[], true), Some(false));
+        assert_eq!(current_preset_dirty(&[], false), None);
+        assert_eq!(current_preset_dirty(&[0xc8, 0x02, 0x01], false), Some(true));
     }
 
     #[test]

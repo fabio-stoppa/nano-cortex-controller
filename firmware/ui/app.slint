@@ -39,6 +39,7 @@ component ParamCell inherits Rectangle {
     in property <bool> slider: false;
     in property <bool> bare: false;
     in property <bool> value-first: true;
+    in property <length> label-font-size: 17px;
     callback changed(float);
     callback tapped();
     callback double-tapped();
@@ -67,7 +68,7 @@ component ParamCell inherits Rectangle {
         if !root.bare: Text {
             text: name;
             color: #909090;
-            font-size: 17px;
+            font-size: root.label-font-size;
             font-weight: 700;
             horizontal-alignment: center;
             overflow: elide;
@@ -151,7 +152,10 @@ component ChainTab inherits Rectangle {
     border-color: #ffffff;
     border-radius: Radius.default;
     Text {
+        x: 8px;
+        width: max(0px, root.width - 16px);
         text: label;
+        overflow: elide;
         color: active ? #ffffff : accent;
         font-size: 20px;
         font-weight: 700;
@@ -371,6 +375,7 @@ component HeaderButton inherits Rectangle {
     background: choice ? (hot ? #404040 : transparent) : (light ? #ffffff : (hot ? #1a3af8 : #000000));
     border-radius: Radius.default;
     btn-text := Text {
+        visible: !root.marked;
         width: root.width - (root.marked ? 20px : 0px);
         text: label;
         overflow: elide;
@@ -380,14 +385,29 @@ component HeaderButton inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
     }
-    if root.marked: Text {
-        x: root.width - 20px;
-        width: 16px;
-        text: "*";
-        color: #ffffff;
-        font-size: 16px;
-        font-weight: 700;
-        vertical-alignment: center;
+    if root.marked: HorizontalLayout {
+        width: min(max(0px, root.width - 16px), btn-text.preferred-width + 12px);
+        x: (root.width - self.width) / 2;
+        height: root.height;
+        spacing: 4px;
+        Text {
+            text: root.label;
+            min-width: 0px;
+            horizontal-stretch: 1;
+            overflow: elide;
+            color: #ffffff;
+            font-size: 16px;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
+        Text {
+            width: 8px;
+            text: "*";
+            color: #ffffff;
+            font-size: 16px;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
     }
     Timer {
         interval: 450ms;
@@ -498,6 +518,7 @@ component OptionRow inherits Rectangle {
 }
 
 export struct MidiRow {
+    index: int,
     name: string,
     assigned: string,
     learning: bool,
@@ -563,10 +584,14 @@ component PopupHeader inherits Rectangle {
         }
         // Same 48px band as the close button, so both share a vertical center.
         VerticalLayout {
+            min-width: 0px;
+            horizontal-stretch: 1;
             alignment: start;
             title-text := Text {
                 height: 48px;
+                min-width: 0px;
                 text: root.title;
+                overflow: elide;
                 color: #e0e0e0;
                 font-size: 26px;
                 font-weight: 700;
@@ -956,19 +981,23 @@ component ModelPicker inherits Rectangle {
     }
 }
 
-// Gear mark.
-component SettingsButton inherits Rectangle {
-    in property <bool> open;
+component MenuButton inherits Rectangle {
     callback tapped();
     width: 36px;
     height: 36px;
-    background: #000000;
+    background: transparent;
     border-radius: Radius.default;
-    property <color> ink: #ffffff;
-    Image {
-        x: 7px; y: 7px; width: 22px; height: 22px;
-        source: @image-url("icons/gear.png");
-        colorize: root.ink;
+    VerticalLayout {
+        x: root.width - 13px;
+        width: 5px;
+        alignment: center;
+        spacing: 4px;
+        for dot in 3: Rectangle {
+            width: 5px;
+            height: 5px;
+            background: #e0e0e0;
+            border-radius: 3px;
+        }
     }
     TouchArea { clicked => { root.tapped(); } }
 }
@@ -981,7 +1010,6 @@ component HeaderBar inherits Rectangle {
     in property <string> preset;
     in property <bool> model-enabled;
     in property <string> bpm-text;
-    in property <bool> settings-shown;
     in property <bool> save-dirty: false;
     in property <bool> tempo-active: false;
     in property <bool> tempo-global: true;
@@ -1011,9 +1039,9 @@ component HeaderBar inherits Rectangle {
     }
     HorizontalLayout {
         padding-left: 8px;
-        padding-right: 4px;
+        padding-right: 0px;
         spacing: 8px;
-        // Both side groups share one width so the preset name stays centered.
+        // Reserve enough room for the Scene button and menu in both orientations.
         VCenter {
             width: portrait ? 174px : 254px;
             TouchArea {
@@ -1060,25 +1088,40 @@ component HeaderBar inherits Rectangle {
                 }
             }
         }
-        VCenter { horizontal-stretch: 1; TouchArea {
+        VCenter { min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; TouchArea {
             height: 44px;
             clicked => { root.preset-list-tapped(); }
-            Text {
-                width: parent.width;
+            HorizontalLayout {
+                x: (parent.width - self.width) / 2;
+                width: min(parent.width, preset-name.preferred-width + (root.save-dirty ? 18px : 0px));
                 height: parent.height;
-                text: preset;
-                color: model-enabled ? #ececec : #606060;
-                font-size: 26px;
-                font-weight: 700;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                overflow: elide;
+                spacing: 0px;
+                preset-name := Text {
+                    min-width: 0px;
+                    horizontal-stretch: 1;
+                    text: preset;
+                    color: model-enabled ? #ececec : #606060;
+                    font-size: 26px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                if root.save-dirty: Text {
+                    width: 18px;
+                    text: "*";
+                    color: model-enabled ? #ececec : #606060;
+                    font-size: 26px;
+                    font-weight: 700;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
             }
         } }
         HorizontalLayout {
             alignment: end;
             spacing: portrait ? 8px : 14px;
-            width: portrait ? 134px : 214px;
+            width: portrait ? 154px : 214px;
             VCenter { HeaderButton {
                 label: root.scene-label;
                 min-width: 110px;
@@ -1087,8 +1130,7 @@ component HeaderBar inherits Rectangle {
                 height: 44px;
                 tapped => { root.performance-tapped(); }
             } }
-            VCenter { SettingsButton {
-                open: root.settings-shown;
+            VCenter { MenuButton {
                 tapped => { root.settings-tapped(); }
             } }
         }
@@ -1438,6 +1480,10 @@ component AmpPanel inherits Rectangle {
     }
 }
 
+component FxParamCell inherits ParamCell {
+    label-font-size: 19px;
+}
+
 component FxPanel inherits Rectangle {
     in property <[string]> presets;
     in property <[bool]> preset-assigned;
@@ -1567,19 +1613,19 @@ component FxPanel inherits Rectangle {
                 width: 100%;
                 spacing: 8px;
                 alignment: start;
-                if root.n0 != "-": ParamCell {
+                if root.n0 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n0; value: root.v0; amount: root.a0;
                     changed(v) => { root.param-changed(0, v); }
                 }
-                if root.n1 != "-": ParamCell {
+                if root.n1 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n1; value: root.v1; amount: root.a1;
                     changed(v) => { root.param-changed(1, v); }
                 }
-                if root.n2 != "-": ParamCell {
+                if root.n2 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n2; value: root.v2; amount: root.a2;
                     changed(v) => { root.param-changed(2, v); }
                 }
-                if root.n3 != "-": ParamCell {
+                if root.n3 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n3; value: root.v3; amount: root.a3;
                     changed(v) => { root.param-changed(3, v); }
                 }
@@ -1588,19 +1634,19 @@ component FxPanel inherits Rectangle {
                 width: 100%;
                 spacing: 8px;
                 alignment: start;
-                if root.n4 != "-": ParamCell {
+                if root.n4 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n4; value: root.v4; amount: root.a4;
                     changed(v) => { root.param-changed(4, v); }
                 }
-                if root.n5 != "-": ParamCell {
+                if root.n5 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n5; value: root.v5; amount: root.a5;
                     changed(v) => { root.param-changed(5, v); }
                 }
-                if root.n6 != "-": ParamCell {
+                if root.n6 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n6; value: root.v6; amount: root.a6;
                     changed(v) => { root.param-changed(6, v); }
                 }
-                if root.n7 != "-": ParamCell {
+                if root.n7 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n7; value: root.v7; amount: root.a7;
                     changed(v) => { root.param-changed(7, v); }
                 }
@@ -1609,19 +1655,19 @@ component FxPanel inherits Rectangle {
                 width: 100%;
                 spacing: 8px;
                 alignment: start;
-                if root.n8 != "-": ParamCell {
+                if root.n8 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n8; value: root.v8; amount: root.a8;
                     changed(v) => { root.param-changed(8, v); }
                 }
-                if root.n9 != "-": ParamCell {
+                if root.n9 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n9; value: root.v9; amount: root.a9;
                     changed(v) => { root.param-changed(9, v); }
                 }
-                if root.n10 != "-": ParamCell {
+                if root.n10 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n10; value: root.v10; amount: root.a10;
                     changed(v) => { root.param-changed(10, v); }
                 }
-                if root.n11 != "-": ParamCell {
+                if root.n11 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n11; value: root.v11; amount: root.a11;
                     changed(v) => { root.param-changed(11, v); }
                 }
@@ -1630,19 +1676,19 @@ component FxPanel inherits Rectangle {
                 width: 100%;
                 spacing: 8px;
                 alignment: start;
-                if root.n12 != "-": ParamCell {
+                if root.n12 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n12; value: root.v12; amount: root.a12;
                     changed(v) => { root.param-changed(12, v); }
                 }
-                if root.n13 != "-": ParamCell {
+                if root.n13 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n13; value: root.v13; amount: root.a13;
                     changed(v) => { root.param-changed(13, v); }
                 }
-                if root.n14 != "-": ParamCell {
+                if root.n14 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n14; value: root.v14; amount: root.a14;
                     changed(v) => { root.param-changed(14, v); }
                 }
-                if root.n15 != "-": ParamCell {
+                if root.n15 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n15; value: root.v15; amount: root.a15;
                     changed(v) => { root.param-changed(15, v); }
                 }
@@ -1651,19 +1697,19 @@ component FxPanel inherits Rectangle {
                 width: 100%;
                 spacing: 8px;
                 alignment: start;
-                if root.n16 != "-": ParamCell {
+                if root.n16 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n16; value: root.v16; amount: root.a16;
                     changed(v) => { root.param-changed(16, v); }
                 }
-                if root.n17 != "-": ParamCell {
+                if root.n17 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n17; value: root.v17; amount: root.a17;
                     changed(v) => { root.param-changed(17, v); }
                 }
-                if root.n18 != "-": ParamCell {
+                if root.n18 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n18; value: root.v18; amount: root.a18;
                     changed(v) => { root.param-changed(18, v); }
                 }
-                if root.n19 != "-": ParamCell {
+                if root.n19 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n19; value: root.v19; amount: root.a19;
                     changed(v) => { root.param-changed(19, v); }
                 }
@@ -1672,19 +1718,19 @@ component FxPanel inherits Rectangle {
                 width: 100%;
                 spacing: 8px;
                 alignment: start;
-                if root.n20 != "-": ParamCell {
+                if root.n20 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n20; value: root.v20; amount: root.a20;
                     changed(v) => { root.param-changed(20, v); }
                 }
-                if root.n21 != "-": ParamCell {
+                if root.n21 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n21; value: root.v21; amount: root.a21;
                     changed(v) => { root.param-changed(21, v); }
                 }
-                if root.n22 != "-": ParamCell {
+                if root.n22 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n22; value: root.v22; amount: root.a22;
                     changed(v) => { root.param-changed(22, v); }
                 }
-                if root.n23 != "-": ParamCell {
+                if root.n23 != "-": FxParamCell {
                     horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n23; value: root.v23; amount: root.a23;
                     changed(v) => { root.param-changed(23, v); }
                 }
@@ -1716,7 +1762,7 @@ component FxPanel inherits Rectangle {
                 }
                 if action == 2: Rectangle {
                     x: 8px;
-                    y: parent.height - 1px;
+                    y: 0px;
                     width: parent.width - 16px;
                     height: 1px;
                     background: #ffffff30;
@@ -1953,42 +1999,19 @@ component MeterRow inherits OptionRow {
 
 component MidiPanel inherits Rectangle {
     in property <[MidiRow]> rows;
-    in property <string> last;
+    in property <int> tab: 0;
+    in property <string> notice;
+    changed tab => { midi-list.viewport-y = 0px; }
     callback learn(int);
     callback clear(int);
-    callback clear-all();
     background: transparent;
     VerticalLayout {
         spacing: 8px;
-        HorizontalLayout {
-            spacing: 12px;
-            VerticalLayout {
-                horizontal-stretch: 1;
-                spacing: 0px;
-                Text {
-                    text: root.last == "" ? "Tap Learn, then send MIDI. Parameters need CC." : "Last: " + root.last;
-                    color: #ffffff;
-                    font-size: 16px;
-                    font-weight: 700;
-                    height: 28px;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-                Text {
-                    text: "Learn the same message on several rows to control them together.";
-                    color: #909090;
-                    font-size: 14px;
-                    height: 24px;
-                    overflow: elide;
-                }
-            }
-            VCenter { HeaderButton {
-                label: "Clear all";
-                preferred-width: 112px;
-                min-width: 112px;
-                height: 48px;
-                tapped => { root.clear-all(); }
-            } }
+        if root.notice != "": Text {
+            text: root.notice;
+            color: #ececec;
+            font-size: 16px;
+            height: 28px;
         }
         midi-list := Flickable {
             vertical-stretch: 1;
@@ -2011,13 +2034,13 @@ component MidiPanel inherits Rectangle {
                     min-width: 104px;
                     hot: !action-row.action.learning;
                     light: action-row.action.learning;
-                    tapped => { root.learn(action-row.action-index); }
+                    tapped => { root.learn(action-row.action.index); }
                 } }
                 VCenter { HeaderButton {
                     label: "Clear";
                     preferred-width: 104px;
                     min-width: 104px;
-                    tapped => { root.clear(action-row.action-index); }
+                    tapped => { root.clear(action-row.action.index); }
                 } }
             }
             ScrollFade {
@@ -2056,6 +2079,9 @@ component SwitchToggle inherits Rectangle {
 }
 
 component ToolsPanel inherits Rectangle {
+    in property <bool> autosave-enabled;
+    in property <string> autosave-status;
+    callback autosave-toggled(bool);
     in property <string> jack-mode;
     in property <bool> jack-expression;
     in property <string> usb-level;
@@ -2079,16 +2105,21 @@ component ToolsPanel inherits Rectangle {
     in property <float> meter-expression-amount;
     callback closed();
     in-out property <int> tab: 0;
+    in property <int> section: 0;
+    in-out property <int> pedal-tab: 0;
+    in-out property <int> midi-tab: 0;
     in property <[BtDevice]> bt-devices;
     callback bt-picked(int);
     callback bt-forget(int);
     in property <int> layout-mode;
     callback layout-tapped(int);
     in property <[MidiRow]> midi-rows;
-    in property <string> midi-last;
+    in property <string> midi-notice;
     callback midi-learn(int);
     callback midi-clear(int);
-    callback midi-clear-all();
+    callback clear-requested(int);
+    in property <string> clear-status;
+    in property <bool> performance-busy;
     in property <bool> save-dirty;
     callback save();
     callback refresh();
@@ -2112,7 +2143,7 @@ component ToolsPanel inherits Rectangle {
             padding: 14px;
             spacing: 7px;
             PopupHeader {
-                title: "Settings";
+                title: root.section == 1 ? "Pedals" : root.section == 2 ? "MIDI" : "Settings";
                 closed => { root.closed(); }
                 settings-flick := Flickable {
                     x: parent.tabs-x;
@@ -2125,10 +2156,21 @@ component ToolsPanel inherits Rectangle {
                         width: max(settings-flick.width, self.preferred-width);
                         alignment: end;
                         spacing: 0px;
-                        for name[i] in ["General", "Pedal", "Audio", "MIDI", "Bluetooth"]: PopupTab {
+                        for name[i] in (root.section == 1 ? ["General", "Sweeps", "Bypass", "Calibration"]
+                            : root.section == 2 ? ["Controls", "Presets 1-16", "Presets 17-32",
+                                "Presets 33-48", "Presets 49-64", "Captures", "Scenes/Gig",
+                                "Amp/Cab", "FX switches/models", "FX presets",
+                                "Pre FX 1", "Pre FX 2", "Post FX 1", "Post FX 2", "Post FX 3"]
+                            : ["General", "Audio", "Bluetooth"]): PopupTab {
                             label: name;
-                            active: i == root.tab;
-                            tapped => { root.tab = i; }
+                            active: root.section == 1 ? i == root.pedal-tab
+                                : root.section == 2 ? i == root.midi-tab
+                                : (i == 0 ? 0 : i == 1 ? 2 : 4) == root.tab;
+                            tapped => {
+                                if root.section == 1 { root.pedal-tab = i; }
+                                else if root.section == 2 { root.midi-tab = i; }
+                                else { root.tab = i == 0 ? 0 : i == 1 ? 2 : 4; }
+                            }
                         }
                     }
                 }
@@ -2148,7 +2190,9 @@ component ToolsPanel inherits Rectangle {
                 }
             }
             Rectangle { height: 2px; }
-            if root.tab != 3: settings-scroll := Flickable {
+            if root.section != 2: settings-scroll := Flickable {
+                property <int> tab-key: root.section == 1 ? root.pedal-tab : root.tab;
+                changed tab-key => { self.viewport-y = 0px; }
                 vertical-stretch: 1;
                 viewport-width: self.width;
                 viewport-height: settings-body.preferred-height;
@@ -2156,12 +2200,12 @@ component ToolsPanel inherits Rectangle {
                     x: 0px;
                     y: 0px;
                     width: settings-scroll.width - (settings-body.preferred-height > settings-scroll.height ? 16px : 0px);
-                    if root.tab == 4: BluetoothList {
+                    if root.section == 0 && root.tab == 4: BluetoothList {
                         devices: root.bt-devices;
                         picked(index) => { root.bt-picked(index); }
                         forget(index) => { root.bt-forget(index); }
                     }
-                    if root.tab == 0: VerticalLayout {
+                    if root.section == 0 && root.tab == 0: VerticalLayout {
                         spacing: 8px;
                         OptionRow {
                             label: "Global tempo";
@@ -2193,14 +2237,69 @@ component ToolsPanel inherits Rectangle {
                         }
                         OptionRow {
                             label: "Tools";
-                            VCenter { HeaderButton { label: "Tuner"; tapped => { root.tuner(); } } }
-                            VCenter { HeaderButton { label: "Refresh"; tapped => { root.refresh(); } } }
-                            VCenter { HeaderButton { label: "Save"; hot: root.save-dirty; tapped => { root.save(); } } }
+                            VCenter { horizontal-stretch: 0; HeaderButton { label: "Tuner"; tapped => { root.tuner(); } } }
+                            VCenter { horizontal-stretch: 0; HeaderButton { label: "Refresh"; tapped => { root.refresh(); } } }
+                            VCenter { horizontal-stretch: 0; HeaderButton { label: "Save"; hot: root.save-dirty; tapped => { root.save(); } } }
+                        }
+                        OptionRow {
+                            label: "Clear";
+                            for label[i] in ["MIDI", "Scenes", "FX presets"]: VCenter {
+                                width: i == 2 ? 120px : 96px;
+                                horizontal-stretch: 0;
+                                HeaderButton {
+                                    label: label;
+                                    min-width: 0px;
+                                    preferred-width: i == 2 ? 120px : 96px;
+                                    enabled: i == 0 || !root.performance-busy;
+                                    tapped => { root.clear-requested(i + 1); }
+                                }
+                            }
+                        }
+                        if root.clear-status != "": Rectangle {
+                            height: 48px;
+                            background: transparent;
+                            Text {
+                                text: root.clear-status;
+                                color: #ececec;
+                                font-size: 16px;
+                                wrap: word-wrap;
+                            }
+                            OptionRow {
+                                label: "Autosave";
+                                value: "After 5 seconds";
+                                VCenter {
+                                    Rectangle {
+                                        width: 56px;
+                                        height: 30px;
+                                        background: root.autosave-enabled ? #1a3af8 : #505050;
+                                        border-radius: 15px;
+                                        Rectangle {
+                                            width: 24px;
+                                            height: 24px;
+                                            x: root.autosave-enabled ? 29px : 3px;
+                                            y: 3px;
+                                            background: #ffffff;
+                                            border-radius: 12px;
+                                        }
+                                        TouchArea { clicked => { root.autosave-toggled(!root.autosave-enabled); } }
+                                    }
+                                }
+                            }
+                            if root.autosave-status != "": Rectangle {
+                                height: 48px;
+                                background: transparent;
+                                Text {
+                                    text: root.autosave-status;
+                                    color: #ececec;
+                                    font-size: 16px;
+                                    wrap: word-wrap;
+                                }
+                            }
                         }
                     }
-                    if root.tab == 1: VerticalLayout {
+                    if root.section == 1: VerticalLayout {
                         spacing: 8px;
-                        OptionRow {
+                        if root.pedal-tab == 0: OptionRow {
                             label: "Jack";
                             value: root.jack-mode;
                             VCenter { HeaderButton {
@@ -2208,11 +2307,11 @@ component ToolsPanel inherits Rectangle {
                                 tapped => { root.jack-selected(!root.jack-expression); }
                             } }
                         }
-                        OptionRow {
+                        if root.pedal-tab == 0: OptionRow {
                             label: "Expression";
                             value: root.expression-summary;
                         }
-                        OptionRow {
+                        if root.pedal-tab == 1 || root.pedal-tab == 2: OptionRow {
                             label: "Sweep assignments";
                             VCenter {
                                 HeaderButton {
@@ -2222,85 +2321,91 @@ component ToolsPanel inherits Rectangle {
                                 }
                             }
                         }
-                        Text {
+                        if root.pedal-tab == 1 || root.pedal-tab == 2: Text {
                             text: "Adjust heel/toe in 5% steps. Bypass modes support delay, inversion and switch latch.";
                             color: #909090;
                             font-size: 14px;
                             height: 28px;
                             vertical-alignment: center;
                         }
-                        for row in root.expression-ranges: OptionRow {
-                            label: row.name;
-                            value: row.summary;
-                            VCenter { HeaderButton {
-                                label: row.enabled ? "On" : "Off";
-                                hot: row.enabled;
-                                tapped => { root.expression-range-toggle(row.target); }
-                            } }
-                            if row.enabled: VCenter { HeaderButton {
-                                label: "Min −";
-                                tapped => { root.expression-range-adjust(row.target, 0, -1); }
-                            } }
-                            if row.enabled: VCenter { HeaderButton {
-                                label: "Min +";
-                                tapped => { root.expression-range-adjust(row.target, 0, 1); }
-                            } }
-                            if row.enabled: VCenter { HeaderButton {
-                                label: "Max −";
-                                tapped => { root.expression-range-adjust(row.target, 1, -1); }
-                            } }
-                            if row.enabled: VCenter { HeaderButton {
-                                label: "Max +";
-                                tapped => { root.expression-range-adjust(row.target, 1, 1); }
-                            } }
-                            if row.enabled: VCenter { HeaderButton {
-                                label: row.inverted ? "Rev" : "Norm";
-                                choice: true;
-                                hot: row.inverted;
-                                tapped => { root.expression-range-adjust(row.target, 2, 0); }
-                            } }
+                        if root.pedal-tab == 1: VerticalLayout {
+                            spacing: 8px;
+                            for row in root.expression-ranges: OptionRow {
+                                label: row.name;
+                                value: row.summary;
+                                VCenter { HeaderButton {
+                                    label: row.enabled ? "On" : "Off";
+                                    hot: row.enabled;
+                                    tapped => { root.expression-range-toggle(row.target); }
+                                } }
+                                if row.enabled: VCenter { HeaderButton {
+                                    label: "Min −";
+                                    tapped => { root.expression-range-adjust(row.target, 0, -1); }
+                                } }
+                                if row.enabled: VCenter { HeaderButton {
+                                    label: "Min +";
+                                    tapped => { root.expression-range-adjust(row.target, 0, 1); }
+                                } }
+                                if row.enabled: VCenter { HeaderButton {
+                                    label: "Max −";
+                                    tapped => { root.expression-range-adjust(row.target, 1, -1); }
+                                } }
+                                if row.enabled: VCenter { HeaderButton {
+                                    label: "Max +";
+                                    tapped => { root.expression-range-adjust(row.target, 1, 1); }
+                                } }
+                                if row.enabled: VCenter { HeaderButton {
+                                    label: row.inverted ? "Rev" : "Norm";
+                                    choice: true;
+                                    hot: row.inverted;
+                                    tapped => { root.expression-range-adjust(row.target, 2, 0); }
+                                } }
+                            }
                         }
-                        for row in root.expression-bypasses: OptionRow {
-                            label: row.name + " switch";
-                            value: row.summary;
-                            VCenter { HeaderButton {
-                                label: row.enabled ? "On" : "Off";
-                                hot: row.enabled;
-                                tapped => { root.expression-bypass-toggle(row.target); }
-                            } }
-                            if row.enabled: VCenter { HeaderButton {
-                                label: row.mode == 0 ? "Heel/toe" : (row.mode == 1 ? "Switch" : "Stop");
-                                choice: true;
-                                tapped => { root.expression-bypass-adjust(row.target, 0); }
-                            } }
-                            if row.enabled && row.mode != 1: VCenter { HeaderButton {
-                                label: "Delay −";
-                                tapped => { root.expression-bypass-adjust(row.target, 1); }
-                            } }
-                            if row.enabled && row.mode != 1: VCenter { HeaderButton {
-                                label: "Delay +";
-                                tapped => { root.expression-bypass-adjust(row.target, 2); }
-                            } }
-                            if row.enabled && row.mode != 2: VCenter { HeaderButton {
-                                label: row.inverted ? "Rev" : "Norm";
-                                choice: true;
-                                hot: row.inverted;
-                                tapped => { root.expression-bypass-adjust(row.target, 3); }
-                            } }
-                            if row.enabled && row.mode == 1: VCenter { HeaderButton {
-                                label: row.latch ? "Latch" : "Momentary";
-                                choice: true;
-                                hot: row.latch;
-                                tapped => { root.expression-bypass-adjust(row.target, 4); }
-                            } }
+                        if root.pedal-tab == 2: VerticalLayout {
+                            spacing: 8px;
+                            for row in root.expression-bypasses: OptionRow {
+                                label: row.name + " switch";
+                                value: row.summary;
+                                VCenter { HeaderButton {
+                                    label: row.enabled ? "On" : "Off";
+                                    hot: row.enabled;
+                                    tapped => { root.expression-bypass-toggle(row.target); }
+                                } }
+                                if row.enabled: VCenter { HeaderButton {
+                                    label: row.mode == 0 ? "Heel/toe" : (row.mode == 1 ? "Switch" : "Stop");
+                                    choice: true;
+                                    tapped => { root.expression-bypass-adjust(row.target, 0); }
+                                } }
+                                if row.enabled && row.mode != 1: VCenter { HeaderButton {
+                                    label: "Delay −";
+                                    tapped => { root.expression-bypass-adjust(row.target, 1); }
+                                } }
+                                if row.enabled && row.mode != 1: VCenter { HeaderButton {
+                                    label: "Delay +";
+                                    tapped => { root.expression-bypass-adjust(row.target, 2); }
+                                } }
+                                if row.enabled && row.mode != 2: VCenter { HeaderButton {
+                                    label: row.inverted ? "Rev" : "Norm";
+                                    choice: true;
+                                    hot: row.inverted;
+                                    tapped => { root.expression-bypass-adjust(row.target, 3); }
+                                } }
+                                if row.enabled && row.mode == 1: VCenter { HeaderButton {
+                                    label: row.latch ? "Latch" : "Momentary";
+                                    choice: true;
+                                    hot: row.latch;
+                                    tapped => { root.expression-bypass-adjust(row.target, 4); }
+                                } }
+                            }
                         }
-                        OptionRow {
+                        if root.pedal-tab == 3: OptionRow {
                             label: "Calibration";
                             value: root.calibration-status;
                             VCenter { HeaderButton { label: "Start"; tapped => { root.calibration-start(); } } }
                             VCenter { HeaderButton { label: "Save"; tapped => { root.calibration-save(); } } }
                         }
-                        Text {
+                        if root.pedal-tab == 3: Text {
                             text: "Start clears the saved range. Sweep heel-to-toe, then save.";
                             color: #909090;
                             font-size: 14px;
@@ -2308,7 +2413,7 @@ component ToolsPanel inherits Rectangle {
                             vertical-alignment: center;
                         }
                     }
-                    if root.tab == 2: VerticalLayout {
+                    if root.section == 0 && root.tab == 2: VerticalLayout {
                         spacing: 8px;
                         MeterRow {
                             label-width: 170px;
@@ -2367,13 +2472,13 @@ component ToolsPanel inherits Rectangle {
                     total: settings-scroll.viewport-height;
                 }
             }
-            if root.tab == 3: MidiPanel {
+            if root.section == 2: MidiPanel {
                 rows: root.midi-rows;
-                last: root.midi-last;
+                tab: root.midi-tab;
+                notice: root.midi-notice;
                 vertical-stretch: 100;
                 learn(index) => { root.midi-learn(index); }
                 clear(index) => { root.midi-clear(index); }
-                clear-all => { root.midi-clear-all(); }
             }
             Rectangle { vertical-stretch: 1; background: transparent; }
         }
@@ -2511,6 +2616,10 @@ component GigButton inherits Rectangle {
     background: !root.enabled ? #202020 : root.highlight ? #1a3af8 : #303030;
     border-radius: Radius.default;
     Text {
+        x: 10px;
+        y: 8px;
+        width: max(0px, root.width - 20px);
+        height: max(0px, root.height - 16px);
         text: root.label;
         color: root.enabled ? #ffffff : #777777;
         font-size: 22px;
@@ -2518,6 +2627,7 @@ component GigButton inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
         wrap: word-wrap;
+        overflow: elide;
     }
     TouchArea { enabled: root.enabled; clicked => { root.tapped(); } }
 }
@@ -2546,7 +2656,7 @@ component GigPanel inherits Rectangle {
             Text { text: "Gig"; font-size: 24px; font-weight: 700; color: #ffffff; horizontal-stretch: 1; }
             GigButton { width: 88px; label: "Editor"; tapped => { root.editor(); } }
         }
-        Text { text: root.preset; font-size: 22px; font-weight: 700; color: #ffffff; overflow: elide; }
+        Text { text: root.preset; min-width: 0px; preferred-width: 0px; font-size: 22px; font-weight: 700; color: #ffffff; overflow: elide; }
         Text { text: root.connected ? root.notice : "Disconnected - connect the Nano to play"; color: #909090; font-size: 14px; wrap: word-wrap; }
         scene-grid := Rectangle {
             min-height: 160px;
@@ -2977,11 +3087,19 @@ export component AppWindow inherits Window {
     in-out property <bool> tuner-in-tune: false;
     in-out property <bool> tuner-muted: false;
     in-out property <bool> save-dirty: false;
+    in-out property <bool> autosave-enabled: false;
+    in-out property <string> autosave-status: "";
+    callback autosave-toggled(bool);
     in-out property <bool> ble-on: false;
     in-out property <bool> bt-busy: false;
     in-out property <int> settings-tab: 0;
+    // Settings, Pedals and MIDI share the tools data and full-screen shell.
+    in-out property <int> tools-section: 0;
+    in-out property <int> pedal-tab: 0;
+    in-out property <int> midi-tab: 0;
+    in-out property <bool> header-menu-open: false;
     // Firmware polls this to refresh the device rows only while they are visible.
-    in-out property <bool> bt-open: root.settings-open && root.settings-tab == 4;
+    in-out property <bool> bt-open: root.settings-open && root.tools-section == 0 && root.settings-tab == 4;
     in-out property <bool> settings-open: false;
     in-out property <bool> model-open: false;
     in-out property <int> list-kind: 0;
@@ -3161,14 +3279,22 @@ export component AppWindow inherits Window {
     callback tools-refresh();
     in-out property <[MidiRow]> midi-rows: [];
     in-out property <string> midi-last: "";
+    in-out property <string> midi-notice: "";
     callback midi-closed();
     changed settings-open => {
         if !self.settings-open { root.midi-closed(); }
     }
+    changed midi-tab => { root.midi-closed(); }
+    changed tools-section => { root.midi-closed(); }
     callback midi-learn(int);
     callback midi-clear(int);
     callback midi-clear-all();
     callback midi-clear-all-requested();
+    callback performance-clear-all(int);
+    callback clear-requested(int);
+    in-out property <int> clear-status-kind: 0;
+    in-out property <string> clear-status: "";
+    property <int> clear-confirm-kind: 0;
     callback performance-opened();
     in-out property <bool> performance-open: false;
     in-out property <string> performance-notice: "";
@@ -3218,6 +3344,7 @@ export component AppWindow inherits Window {
         root.performance-confirm-action = 0;
         root.performance-name-action = 0;
         root.midi-clear-confirm = false;
+        root.clear-confirm-kind = 0;
     }
     callback performance-scene-recall(int);
     callback performance-scene-store(int);
@@ -3225,12 +3352,28 @@ export component AppWindow inherits Window {
     callback performance-scene-clear(int);
     property <bool> midi-clear-confirm: false;
     midi-clear-all-requested => {
+        root.clear-confirm-kind = 0;
         root.confirm-title = "Clear all MIDI bindings?";
         root.confirm-message = "All learned MIDI assignments will be removed. Nano presets and settings are unchanged.";
         root.confirm-label = "Clear all";
         root.confirm-danger = true;
         root.midi-clear-confirm = true;
         root.confirm-open = true;
+    }
+    clear-requested(kind) => {
+        if kind == 1 {
+            root.midi-clear-all-requested();
+        } else {
+            root.midi-clear-confirm = false;
+            root.clear-confirm-kind = kind;
+            root.confirm-title = kind == 2 ? "Clear all scenes?" : "Clear all FX presets?";
+            root.confirm-message = kind == 2
+                ? "All controller scenes across all Nano presets will be removed. FX presets and the current Nano sound are unchanged."
+                : "All controller FX presets across all models will be removed. Scenes and the current Nano sound are unchanged.";
+            root.confirm-label = "Clear all";
+            root.confirm-danger = true;
+            root.confirm-open = true;
+        }
     }
     callback tools-jack-selected(bool);
     in-out property <float> tools-usb-amount: 0;
@@ -3259,11 +3402,11 @@ export component AppWindow inherits Window {
     // Confirmations are cards over whatever is open, so they do not hide it.
     property <bool> popup-open: root.kbd-open || root.model-open || root.settings-open || root.performance-open || root.gig-open;
     property <bool> main-covered: root.popup-open || root.page == 2 || root.connecting;
-    changed main-covered => { root.fx-preset-menu-index = -1; }
+    changed main-covered => { root.fx-preset-menu-index = -1; root.header-menu-open = false; }
     changed chain => { root.fx-preset-menu-index = -1; }
     changed fx-preset-model => { root.fx-preset-menu-index = -1; }
     changed page => { root.fx-preset-menu-index = -1; }
-    changed portrait => { root.fx-preset-menu-index = -1; }
+    changed portrait => { root.fx-preset-menu-index = -1; root.header-menu-open = false; }
     changed performance-busy => { root.fx-preset-menu-index = -1; }
 
     Rectangle {
@@ -3284,8 +3427,7 @@ export component AppWindow inherits Window {
                 bpm-value: root.tempo-bpm-value;
                 tempo-tapped => { root.tempo-tapped(); }
                 preset-list-tapped => { root.preset-list-tapped(); }
-                settings-shown: root.settings-open;
-                settings-tapped => { root.tools-opened(); }
+                settings-tapped => { root.header-menu-open = !root.header-menu-open; }
                 performance-tapped => { root.performance-opened(); }
                 scene-label: root.scene-label;
                 scene-enabled: !root.connecting && !root.performance-busy;
@@ -3531,7 +3673,54 @@ export component AppWindow inherits Window {
             mute-tapped => { root.tuner-mute-tapped(); }
         }
 
+    if root.header-menu-open && !root.main-covered: Rectangle {
+        width: root.width;
+        height: root.height;
+        background: transparent;
+        TouchArea { clicked => { root.header-menu-open = false; } }
+        Rectangle {
+            x: parent.width - self.width - 14px;
+            y: 66px;
+            width: 220px;
+            height: 240px;
+            background: #303030;
+            border-radius: Radius.default;
+            for name[i] in ["Gig mode", "MIDI", "Pedals", "Settings"]: Rectangle {
+                x: 4px;
+                y: i * 59px;
+                width: parent.width - 8px;
+                height: 58px;
+                background: transparent;
+                Text {
+                    x: 12px;
+                    text: name;
+                    color: #f0f0f0;
+                    font-size: 18px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                TouchArea {
+                    clicked => {
+                        root.header-menu-open = false;
+                        if i == 0 {
+                            root.gig-mode-set(true);
+                        } else {
+                            root.tools-section = i == 1 ? 2 : i == 2 ? 1 : 0;
+                            root.settings-tab = 0;
+                            root.pedal-tab = 0;
+                            root.midi-tab = 0;
+                            root.tools-opened();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if root.settings-open: ToolsPanel {
+        autosave-enabled: root.autosave-enabled;
+        autosave-status: root.autosave-status;
+        autosave-toggled(enabled) => { root.autosave-toggled(enabled); }
         visible: !root.kbd-open;
         jack-mode: root.tools-jack-mode;
         jack-expression: root.tools-jack-expression;
@@ -3554,10 +3743,12 @@ export component AppWindow inherits Window {
         meter-output-amount: root.tools-meter-output-amount;
         meter-expression-amount: root.tools-meter-expression-amount;
         midi-rows: root.midi-rows;
-        midi-last: root.midi-last;
+        midi-notice: root.midi-notice;
         midi-learn(index) => { root.midi-learn(index); }
         midi-clear(index) => { root.midi-clear(index); }
-        midi-clear-all => { root.midi-clear-all-requested(); }
+        clear-requested(kind) => { root.clear-requested(kind); }
+        clear-status: root.clear-status;
+        performance-busy: root.performance-busy;
         tuner => { root.settings-open = false; root.tuner-tapped(); }
         save-dirty: root.save-dirty;
         save => { root.save-tapped(); }
@@ -3576,6 +3767,9 @@ export component AppWindow inherits Window {
         expression-save => { root.tools-expression-save(); }
         tempo-global <=> root.tempo-global;
         tab <=> root.settings-tab;
+        section: root.tools-section;
+        pedal-tab <=> root.pedal-tab;
+        midi-tab <=> root.midi-tab;
         bt-devices: root.bt-devices;
         bt-picked(index) => { root.bt-picked(index); }
         bt-forget(index) => { root.bt-forget(index); }
@@ -3654,12 +3848,16 @@ export component AppWindow inherits Window {
             if root.midi-clear-confirm {
                 root.midi-clear-confirm = false;
                 root.midi-clear-all();
+            } else if root.clear-confirm-kind != 0 {
+                root.performance-clear-all(root.clear-confirm-kind);
+                root.clear-confirm-kind = 0;
             } else {
                 root.confirm-accepted();
             }
         }
         closed => {
             root.confirm-open = false; root.midi-clear-confirm = false;
+            root.clear-confirm-kind = 0;
             root.performance-confirm-action = 0;
         }
     }

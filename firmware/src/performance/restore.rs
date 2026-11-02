@@ -66,11 +66,17 @@ impl Effect {
         if self.model.is_empty() {
             return current.valid && !current.on;
         }
+        current.on == self.enabled && self.parameters_match(current)
+    }
+
+    pub fn parameters_match(&self, current: &NanoFxBlock) -> bool {
+        if self.model.is_empty() {
+            return current.valid && current.model_id().is_empty();
+        }
         let Some(model) = crate::fx::models::find_model(&self.model) else {
             return false;
         };
         self.model_ready(current)
-            && current.on == self.enabled
             && self.parameters.iter().enumerate().all(|(index, &value)| {
                 let expected = crate::fx::params::normalize_for_model(model, index, value);
                 (current.params[index].normalized - expected).abs() <= 0.002
@@ -264,6 +270,7 @@ impl Plan {
         effect.validate(block)?;
         let mut steps = VecDeque::new();
         enqueue_effect(&mut steps, block, &effect);
+        steps.retain(|step| !matches!(step, Step::Write(Cmd::Block { .. })));
         Ok(Self {
             steps,
             target: Target::Effect { block, effect },
@@ -292,6 +299,21 @@ impl Plan {
                 {
                     return Progress::Waiting
                 }
+                Some(Step::Write(Cmd::FxModelId { block, id }))
+                    if view.effects.valid && view.effects.blocks[usize::from(*block)].valid
+                        && view.effects.blocks[usize::from(*block)].params_loaded
+                        && view.effects.blocks[usize::from(*block)].model_id() == id.as_slice() =>
+                {
+                    self.steps.pop_front();
+                    continue;
+                }
+                Some(Step::Write(Cmd::Block { slot, on }))
+                    if view.effects.valid && view.effects.blocks[usize::from(*slot)].valid
+                        && view.effects.blocks[usize::from(*slot)].on == *on =>
+                {
+                    self.steps.pop_front();
+                    continue;
+                }
                 Some(_) => match self.steps.pop_front() {
                     Some(Step::Write(command)) => return Progress::Write(command),
                     Some(Step::ModelReady { .. }) => continue,
@@ -317,7 +339,7 @@ impl Plan {
                                 && snapshot.matches(view)
                         }
                         Target::Effect { block, effect } => {
-                            effect.matches(&view.effects.blocks[*block])
+                            effect.parameters_match(&view.effects.blocks[*block])
                         }
                     } =>
             {
@@ -412,11 +434,11 @@ mod tests {
         loaded_model(&mut view, 0);
         let snapshot = Snapshot::capture(&view).unwrap();
         let mut plan = Plan::scene(snapshot.clone(), 1, 0).unwrap();
+        view.effects.blocks[0].params_loaded = false;
         assert!(matches!(
             plan.poll(&view, 1),
             Progress::Write(Cmd::FxModelId { block: 0, .. })
         ));
-        view.effects.blocks[0].params_loaded = false;
         assert!(matches!(plan.poll(&view, 2), Progress::Waiting));
         view.effects.blocks[0].params_loaded = true;
         let mut parameters = 0;
@@ -455,6 +477,45 @@ mod tests {
         view.verified_amp = view.amp;
         assert!(matches!(plan.poll(&view, 8), Progress::Complete));
         assert!(matches!(plan.poll(&view, 30_000_000), Progress::Failed(_)));
+    }
+
+    #[test]
+    fn fx_recall_preserves_bypass_even_when_saved_state_differs() {
+        for enabled in [false, true] {
+            let mut view = fixture();
+            loaded_model(&mut view, 0);
+            view.effects.blocks[0].on = enabled;
+            let mut effect = Effect::capture(&view.effects.blocks[0], 0).unwrap();
+            effect.parameters[0] = 0.8;
+            let mut plan = Plan::effect(effect.clone(), 0, 1, 0).unwrap();
+            loop {
+                match plan.poll(&view, 1) {
+                    Progress::Write(Cmd::PerformanceRefresh) => break,
+                    Progress::Write(Cmd::Param(_)) => {}
+                    Progress::Write(Cmd::FxModelId { .. } | Cmd::Block { .. }) =>
+                        panic!("Same-model recall must not reload or toggle the effect"),
+                    _ => panic!("Unexpected recall step"),
+                }
+            }
+            effect = Effect::capture(&view.effects.blocks[0], 0).unwrap();
+            effect.enabled = !enabled;
+            let mut plan = Plan::effect(effect, 0, 1, 0).unwrap();
+            loop {
+                match plan.poll(&view, 1) {
+                    Progress::Write(Cmd::PerformanceRefresh) => break,
+                    Progress::Write(Cmd::Param(_)) => {}
+                    Progress::Write(Cmd::Block { .. }) => panic!("FX preset changed bypass"),
+                    Progress::Write(Cmd::FxModelId { .. }) => panic!("Model was unnecessarily reloaded"),
+                    _ => panic!("Unexpected recall step"),
+                }
+            }
+            view.generation += 1;
+            assert!(matches!(plan.poll(&view, 2), Progress::Write(Cmd::PerformanceFxRefresh)));
+            view.generation += 1;
+            assert!(matches!(plan.poll(&view, 3), Progress::Complete),
+                "Saved bypass must not be required for FX recall verification");
+            assert_eq!(view.effects.blocks[0].on, enabled);
+        }
     }
 
     #[test]

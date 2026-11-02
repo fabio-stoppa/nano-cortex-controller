@@ -65,7 +65,11 @@ mod tuner {
 }
 
 mod state {
-    use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+    pub fn nano_state_note_sound_edit() {
+        DIRTY.store(true, Ordering::Relaxed);
+    }
+    use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+    pub static DIRTY: AtomicBool = AtomicBool::new(false);
     use nano_wire::types::{Amp, CabSettings, NanoAmpC};
     pub static PRESET: AtomicU8 = AtomicU8::new(1);
     pub static GENERATION: AtomicU32 = AtomicU32::new(1);
@@ -352,6 +356,153 @@ mod tests {
     }
 
     #[test]
+    fn controller_sound_edits_mark_the_nano_preset_dirty() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        state::DIRTY.store(false, Ordering::Relaxed);
+        performance::sound_edited();
+        assert!(state::DIRTY.load(Ordering::Relaxed));
+        state::DIRTY.store(false, Ordering::Relaxed);
+        performance::effect_edited(0);
+        assert!(state::DIRTY.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn autosave_debounces_edits_and_cancels_on_disable_or_preset_change() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        performance::load();
+        performance::set_autosave(false);
+        clock::NOW.store(0, Ordering::Relaxed);
+        performance::sound_edited();
+        clock::NOW.store(6_000_000, Ordering::Relaxed);
+        assert!(!performance::autosave_due());
+        performance::set_autosave(true);
+        assert!(!performance::autosave_due(), "Enabling must not save old edits");
+        performance::sound_edited();
+        clock::NOW.store(10_999_999, Ordering::Relaxed);
+        assert!(!performance::autosave_due());
+        performance::sound_edited();
+        clock::NOW.store(15_999_998, Ordering::Relaxed);
+        assert!(!performance::autosave_due(), "Repeated edits must restart the timer");
+        clock::NOW.store(15_999_999, Ordering::Relaxed);
+        assert!(performance::autosave_due());
+        assert!(!performance::autosave_due(), "Autosave must fire only once");
+        performance::sound_edited();
+        state::PRESET.store(2, Ordering::Relaxed);
+        clock::NOW.store(21_000_000, Ordering::Relaxed);
+        assert!(!performance::autosave_due(), "Never save another Nano preset");
+        state::PRESET.store(1, Ordering::Relaxed);
+        assert!(!performance::autosave_due());
+        performance::sound_edited();
+        performance::set_autosave(false);
+        clock::NOW.store(27_000_000, Ordering::Relaxed);
+        assert!(!performance::autosave_due());
+    }
+
+    #[test]
+    fn autosave_updates_selected_scene_and_fx_without_creating_empty_slots() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        *settings::PERFORMANCE.lock().unwrap() = None;
+        performance::load();
+        performance::set_autosave(true);
+        state::AMP.with(|amp| amp.borrow_mut().valid = true);
+        fx::SNAPSHOT.with(|snapshot| {
+            let mut view = snapshot.borrow_mut();
+            *view = types::NanoFxState::reset_with_ids();
+            view.valid = true;
+            view.gate.on_known = true;
+            for block in &mut view.blocks { block.valid = true; }
+        });
+        performance::capture_scene(1, 0, "Scene").unwrap();
+        let model = &catalog::catalog()[12];
+        loaded_fx_model(0, model);
+        performance::capture_fx(0, 0, "Effect", model.id_bytes()).unwrap();
+        performance::effect_edited(0);
+        assert!(performance::scene_dirty());
+        assert!(performance::fx_dirty(0));
+        settings::FAIL.store(true, Ordering::Relaxed);
+        let before = performance::export_json().unwrap();
+        assert!(performance::autosave_selected().is_err());
+        assert_eq!(performance::export_json().unwrap(), before);
+        assert!(performance::scene_dirty());
+        settings::FAIL.store(false, Ordering::Relaxed);
+        performance::autosave_selected().unwrap();
+        assert!(!performance::scene_dirty());
+        assert!(!performance::fx_dirty(0));
+        assert_eq!(performance::scenes(1)[0].as_deref(), Some("Scene"));
+        assert!(performance::scenes(1)[1..].iter().all(Option::is_none));
+        assert_eq!(performance::fx_presets(model.id_bytes())[0].as_ref().unwrap().name, "Effect");
+        assert!(performance::fx_presets(model.id_bytes())[1..].iter().all(Option::is_none));
+        performance::set_autosave(false);
+    }
+
+    #[test]
+    fn bulk_performance_clears_are_persistent_isolated_and_transactional() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        *settings::PERFORMANCE.lock().unwrap() = None;
+        performance::load();
+        state::AMP.with(|amp| amp.borrow_mut().valid = true);
+        fx::SNAPSHOT.with(|snapshot| {
+            let mut view = snapshot.borrow_mut();
+            *view = types::NanoFxState::reset_with_ids();
+            view.valid = true;
+            view.gate.on_known = true;
+            for block in &mut view.blocks { block.valid = true; }
+        });
+        for preset in [1, 64] {
+            state::PRESET.store(preset, Ordering::Relaxed);
+            performance::capture_scene(preset, 0, "Scene").unwrap();
+        }
+        let models = [&catalog::catalog()[12], &catalog::catalog()[13]];
+        for model in models {
+            loaded_fx_model(0, model);
+            performance::capture_fx(0, 0, "Effect", model.id_bytes()).unwrap();
+        }
+        let before = performance::export_json().unwrap();
+        settings::FAIL.store(true, Ordering::Relaxed);
+        assert!(performance::clear_all_scenes().is_err());
+        assert!(performance::clear_all_fx().is_err());
+        assert_eq!(performance::export_json().unwrap(), before);
+        assert_eq!(performance::scene(), Some(0));
+        assert_eq!(performance::fx_selected(0), Some(0));
+        settings::FAIL.store(false, Ordering::Relaxed);
+        performance::clear_all_fx().unwrap();
+        assert_eq!(performance::scene(), Some(0));
+        assert_eq!(performance::fx_selected(0), None);
+        assert!(!performance::fx_dirty(0));
+        performance::load();
+        for model in models {
+            assert!(performance::fx_presets(model.id_bytes()).iter().all(Option::is_none));
+        }
+        for preset in [1, 64] {
+            assert_eq!(performance::scenes(preset)[0].as_deref(), Some("Scene"));
+        }
+        loaded_fx_model(0, models[0]);
+        performance::capture_fx(0, 0, "Kept", models[0].id_bytes()).unwrap();
+        let fx_before = performance::fx_selected(0);
+        performance::clear_all_scenes().unwrap();
+        assert_eq!(performance::fx_selected(0), fx_before);
+        assert_eq!(performance::scene(), None);
+        assert!(!performance::scene_dirty());
+        performance::load();
+        for preset in [1, 64] {
+            assert!(performance::scenes(preset).iter().all(Option::is_none));
+        }
+        assert_eq!(performance::fx_presets(models[0].id_bytes())[0].as_ref().unwrap().name, "Kept");
+        assert!(link::pop_cmd().is_none(), "Clears must not change the Nano sound");
+        performance::recall_fx(0, 0).unwrap();
+        assert!(performance::busy());
+        let before = performance::export_json().unwrap();
+        assert!(performance::clear_all_scenes().is_err());
+        assert!(performance::clear_all_fx().is_err());
+        assert_eq!(performance::export_json().unwrap(), before);
+        performance::cancel("Test interruption");
+    }
+
+    #[test]
     fn obsolete_performance_records_are_rejected_without_migration() {
         let _guard = LOCK.lock().unwrap();
         reset();
@@ -361,6 +512,9 @@ mod tests {
         assert_eq!(performance::notice(), "Invalid performance.json");
         assert_eq!(settings::PERFORMANCE.lock().unwrap().as_deref(), Some(legacy));
         assert!(performance::clear_scene(1, 0).is_err(), "Failed reset allowed a destructive save");
+        assert!(performance::clear_all_scenes().is_err());
+        assert!(performance::clear_all_fx().is_err());
+        assert_eq!(settings::PERFORMANCE.lock().unwrap().as_deref(), Some(legacy));
         *settings::PERFORMANCE.lock().unwrap() = None;
         performance::load();
         let model = &catalog::catalog()[12];
@@ -404,6 +558,13 @@ mod tests {
         assert!(!performance::fx_dirty(0));
         assert!(!performance::fx_dirty(4), "Saving the same sound dirtied another slot");
         fx::SNAPSHOT.with(|snapshot| snapshot.borrow_mut().blocks[0].on = true);
+        performance::capture_fx(0, 0, "Bypass", shared.id_bytes()).unwrap();
+        assert!(!performance::fx_dirty(4), "Bypass-only changes must not dirty a shared parameter preset");
+        fx::SNAPSHOT.with(|snapshot| {
+            let mut snapshot = snapshot.borrow_mut();
+            snapshot.blocks[0].params[0].normalized =
+                if snapshot.blocks[0].params[0].normalized < 0.5 { 0.9 } else { 0.1 };
+        });
         performance::capture_fx(0, 0, "Bypass", shared.id_bytes()).unwrap();
         assert!(performance::fx_dirty(4), "Shared overwrite did not mark the old sound dirty");
         performance::recall_fx(0, 4).unwrap();
@@ -674,6 +835,56 @@ mod tests {
             midi::rows()[midi::ACTION_COUNT - 1].assigned
         );
         assert!(!midi::rows()[0].assigned.is_empty());
+    }
+
+    #[test]
+    fn midi_categories_cover_visible_actions_without_changing_indices() {
+        let cases = [
+            ("Tuner", 0),
+            ("Tap tempo", 0),
+            ("USB playback level", 0),
+            ("Mute input", 0),
+            ("Next preset", 0),
+            ("Previous capture", 5),
+            ("Save preset", 0),
+            ("Select preset 1", 1),
+            ("Select preset 16", 1),
+            ("Select preset 17", 2),
+            ("Select preset 32", 2),
+            ("Select preset 33", 3),
+            ("Select preset 48", 3),
+            ("Select preset 49", 4),
+            ("Select preset 64", 4),
+            ("Select capture 25", 5),
+            ("Recall scene 8", 6),
+            ("Enter gig view", 6),
+            ("Noise gate", 7),
+            ("Gate amount", 7),
+            ("Amp gain", 7),
+            ("Capture volume", 7),
+            ("Cab low-pass", 7),
+            ("Pre FX 1 on/off", 8),
+            ("Pre FX 1 knob 1", 10),
+            ("Post FX 3 knob 24", 14),
+            ("Pre FX 1 next model", 8),
+            ("Current model preset 4 in Post FX 3", 9),
+        ];
+        for (name, category) in cases {
+            assert_eq!(midi::action_category(index(name)), category, "{name}");
+        }
+        let mut counts = [0; 15];
+        for (row, action) in (0..midi::ACTION_COUNT)
+            .filter(|action| midi::active_action(*action))
+            .enumerate()
+        {
+            counts[midi::action_category(action) as usize] += 1;
+            assert_eq!(midi::visible_action(row), Some(action));
+        }
+        assert_eq!(counts.iter().sum::<usize>(), 279);
+        assert!(counts.iter().all(|count| *count > 0));
+        assert!(counts.iter().all(|count| *count <= 27), "Category too large: {counts:?}");
+        assert_eq!(&counts[1..5], &[16; 4]);
+        assert_eq!(&counts[10..], &[24; 5]);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Persists the screen layout in the first sector of the `nvs` partition.
+//! Persists screen layout and autosave preferences in the first NVS sector.
 //!
 //! Current MIDI and performance configuration live in separate partitions.
 //! The last NVS sector marks completion of the controller-wide storage reset.
@@ -28,11 +28,13 @@ fn flash() -> Option<&'static mut FlashStorage<'static>> {
     slot.as_mut().filter(|f| f.capacity() != 0)
 }
 
-fn record(mode: u8) -> [u8; 8] {
+fn record(mode: u8, autosave: bool) -> [u8; 8] {
     let mut r = [0u8; 8];
     r[..4].copy_from_slice(&MAGIC.to_le_bytes());
     r[4] = mode;
     r[5] = !mode;
+    r[6] = u8::from(autosave);
+    r[7] = !r[6];
     r
 }
 
@@ -70,19 +72,41 @@ pub fn save_layout(mode: i32) {
     if load_layout() == Some(mode as i32) {
         return;
     }
+    if let Err(error) = save_preferences(mode, load_autosave()) {
+        log::warn!("could not save layout: {error}");
+    }
+}
+
+pub fn load_autosave() -> bool {
+    with_region(|region| {
+        let mut r = [0u8; 8];
+        region.read(0, &mut r).map_err(|error| log::warn!("read autosave {error:?}")).ok()?;
+        Some(u32::from_le_bytes(r[..4].try_into().ok()?) == MAGIC
+            && r[5] == !r[4] && r[4] <= 3 && r[6] == 1 && r[7] == !r[6])
+    }).unwrap_or(false)
+}
+
+pub fn save_autosave(enabled: bool) -> Result<(), &'static str> {
+    save_preferences(load_layout().unwrap_or(0) as u8, enabled)
+}
+
+fn save_preferences(mode: u8, autosave: bool) -> Result<(), &'static str> {
+    let _pause = crate::bounce::FlashPause::begin()?;
+    let expected = record(mode, autosave);
     let saved = with_region(|region| {
         region
             .erase(0, SECTOR)
             .map_err(|e| log::warn!("erase {e:?}"))
             .ok()?;
         region
-            .write(0, &record(mode))
+            .write(0, &expected)
             .map_err(|e| log::warn!("write {e:?}"))
-            .ok()
+            .ok()?;
+        let mut readback = [0u8; 8];
+        region.read(0, &mut readback).map_err(|e| log::warn!("readback {e:?}")).ok()?;
+        (readback == expected).then_some(())
     });
-    if saved.is_none() {
-        log::warn!("could not save layout");
-    }
+    saved.ok_or("Could not save controller preferences")
 }
 
 mod midi_record;
@@ -199,6 +223,7 @@ pub fn load_midi_json() -> Result<Option<String>, &'static str> {
 }
 
 pub fn save_midi_json(json: &str) -> Result<(), &'static str> {
+    let _pause = crate::bounce::FlashPause::begin()?;
     with_json("midi", json_record::CAPACITY, |storage| json_record::save(storage, json))
 }
 
@@ -211,6 +236,7 @@ pub fn load_performance_json() -> Result<Option<String>, &'static str> {
 }
 
 pub fn save_performance_json(json: &str) -> Result<(), &'static str> {
+    let _pause = crate::bounce::FlashPause::begin()?;
     with_json("performance", PERFORMANCE_SLOT * 2, |storage| {
         json_record::save_sized(storage, json, PERFORMANCE_SLOT, crate::performance::data::MAX_JSON)
     })

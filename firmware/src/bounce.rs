@@ -58,6 +58,8 @@ static EOF_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Set after the first blanking-interval rewind, so DMA is not restarted
 /// on every frame.
 static PHASE_FIXED: AtomicU32 = AtomicU32::new(0);
+// 0 scanning, 1 stop requested, 2 stopped, 3 ISR stopping at vertical blank.
+static FLASH_PAUSE: AtomicU32 = AtomicU32::new(0);
 /// Framebuffer strip currently stored in each DMA buffer.
 static BUFFER_STRIP: [AtomicU32; N_BUFS] = [const { AtomicU32::new(0) }; N_BUFS];
 
@@ -280,6 +282,58 @@ pub fn eof_count() -> u32 {
     EOF_COUNT.load(Ordering::Relaxed)
 }
 
+pub struct FlashPause {
+    active: bool,
+}
+
+impl FlashPause {
+    pub fn begin() -> Result<Self, &'static str> {
+        if FRAMEBUFFER.load(Ordering::Acquire).is_null() {
+            return Ok(Self { active: false });
+        }
+        FLASH_PAUSE.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| "Display flash pause is already active")?;
+        let started = esp_hal::time::Instant::now();
+        while FLASH_PAUSE.load(Ordering::Acquire) != 2 {
+            if esp_hal::time::Instant::now().duration_since_epoch().as_micros()
+                - started.duration_since_epoch().as_micros() > 100_000
+            {
+                // If the ISR won the race, resume it through the guard.
+                if FLASH_PAUSE.compare_exchange(1, 0, Ordering::AcqRel, Ordering::Acquire).is_err() {
+                    while FLASH_PAUSE.load(Ordering::Acquire) != 2 {
+                        core::hint::spin_loop();
+                    }
+                    drop(Self { active: true });
+                }
+                return Err("Display did not reach vertical blank before flash save");
+            }
+            core::hint::spin_loop();
+        }
+        Ok(Self { active: true })
+    }
+}
+
+impl Drop for FlashPause {
+    fn drop(&mut self) {
+        if !self.active { return; }
+        let framebuffer = FRAMEBUFFER.load(Ordering::Acquire);
+        unsafe {
+            let bufs = ptr::addr_of_mut!(BOUNCE).cast::<u8>();
+            for i in 0..N_BUFS {
+                copy_half(framebuffer, i, bufs.add(i * HALF_BYTES));
+                BUFFER_STRIP[i].store(i as u32, Ordering::Relaxed);
+            }
+        }
+        rewind_to_left_edge();
+        PHASE_FIXED.store(0, Ordering::Relaxed);
+        FLASH_PAUSE.store(0, Ordering::Release);
+        esp_hal::peripherals::LCD_CAM::regs().lcd_user().modify(|_, w| {
+            w.lcd_update().set_bit();
+            w.lcd_start().set_bit()
+        });
+    }
+}
+
 #[ram]
 fn eof_isr() {
     let dma = esp_hal::peripherals::DMA::regs();
@@ -298,6 +352,9 @@ fn eof_isr() {
         .clr()
         .write(|w| w.out_eof().clear_bit_by_one());
 
+    if FLASH_PAUSE.load(Ordering::Acquire) == 2 {
+        return;
+    }
     let framebuffer = FRAMEBUFFER.load(Ordering::Acquire);
     if framebuffer.is_null() {
         return;
@@ -419,6 +476,16 @@ fn vsync_isr() {
     lcd.lc_dma_int_clr()
         .write(|w| w.lcd_vsync_int_clr().set_bit());
 
+    if FLASH_PAUSE.compare_exchange(1, 3, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+        lcd.lcd_user().modify(|_, w| w.lcd_start().clear_bit());
+        esp_hal::peripherals::DMA::regs().ch(0).out_link()
+            .modify(|_, w| w.outlink_stop().set_bit());
+        FLASH_PAUSE.store(2, Ordering::Release);
+        return;
+    }
+    if FLASH_PAUSE.load(Ordering::Acquire) == 2 {
+        return;
+    }
     #[cfg(feature = "scan-diag")]
     DIAG_FRAMES.fetch_add(1, Ordering::Relaxed);
     if PHASE_FIXED.load(Ordering::Relaxed) != 0 {

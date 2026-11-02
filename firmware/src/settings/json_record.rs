@@ -139,7 +139,9 @@ pub fn save_sized(
         }
     };
     let offset = index * size;
-    storage.erase(offset, offset + size)?;
+    // Only the header and new payload are read; stale tail sectors are ignored.
+    let erase_bytes = (json.len() + HEADER).div_ceil(4096) as u32 * 4096;
+    storage.erase(offset, offset + erase_bytes)?;
     storage.write(offset + HEADER as u32, json.as_bytes())?;
     let mut check = vec![0; json.len()];
     storage.read(offset + HEADER as u32, &mut check)?;
@@ -172,6 +174,7 @@ mod tests {
         bytes: alloc::vec::Vec<u8>,
         budget: Option<usize>,
         erases: usize,
+        erased_bytes: u32,
         read_failure: Option<u32>,
     }
 
@@ -198,6 +201,7 @@ mod tests {
         fn erase(&mut self, start: u32, end: u32) -> Result<(), &'static str> {
             self.bytes[start as usize..end as usize].fill(0xff);
             self.erases += 1;
+            self.erased_bytes += end - start;
             Ok(())
         }
     }
@@ -207,8 +211,26 @@ mod tests {
             bytes: vec![0xff; CAPACITY as usize],
             budget: None,
             erases: 0,
+            erased_bytes: 0,
             read_failure: None,
         }
+    }
+
+    #[test]
+    fn saves_erase_only_new_payload_sectors_and_ignore_old_tails() {
+        let mut flash = flash();
+        let large = "x".repeat(9000);
+        save(&mut flash, &large).unwrap();
+        assert_eq!(flash.erased_bytes, 12_288);
+        save(&mut flash, "other").unwrap();
+        save(&mut flash, "small").unwrap();
+        assert_eq!(flash.erased_bytes, 20_480);
+        assert_eq!(load(&mut flash).unwrap().as_deref(), Some("small"));
+        let before = flash.erased_bytes;
+        save(&mut flash, "small").unwrap();
+        assert_eq!(flash.erased_bytes, before);
+        save(&mut flash, &large).unwrap();
+        assert_eq!(load(&mut flash).unwrap().as_deref(), Some(large.as_str()));
     }
 
     #[test]

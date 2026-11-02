@@ -577,6 +577,23 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
             }
         }
         crate::state::poll();
+        if crate::performance::autosave_due() {
+            let result = crate::performance::autosave_selected();
+            match result {
+                Err(error) => crate::performance::report(error),
+                Ok(()) => {
+                    if crate::state::nano_state_preset_dirty() {
+                        if crate::state::nano_state_save_preset() {
+                            crate::performance::report("Autosave sent to Nano");
+                        } else {
+                            crate::performance::report("Autosave failed: Nano preset save was refused");
+                        }
+                    } else {
+                        crate::performance::report("Autosaved selected controller presets");
+                    }
+                }
+            }
+        }
         flush_writes(client, c304.handle, c304_no_rsp).await;
     }
 }
@@ -592,7 +609,6 @@ fn apply_cmd(cmd: crate::link::Cmd) {
         | crate::link::Cmd::AmpKnob { .. } | crate::link::Cmd::CaptureVolume(_)
         | crate::link::Cmd::CabParam { .. } | crate::link::Cmd::Capture(_)
         | crate::link::Cmd::CaptureAt(_) | crate::link::Cmd::CabAt(_)
-        | crate::link::Cmd::Preset(_) | crate::link::Cmd::PresetAt(_)
     ) {
         crate::performance::sound_edited();
         match &cmd {
