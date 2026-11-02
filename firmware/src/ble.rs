@@ -167,11 +167,14 @@ static NANO_READY: AtomicBool = AtomicBool::new(false);
 static NANO_SEARCHING: AtomicBool = AtomicBool::new(false);
 
 fn traffic_summary() {
+    let (write_queue_peak, command_queue_peak) = crate::link::queue_peaks();
     log::info!(
-        "Nano traffic: rx={}, tx={}, write_failures={}",
+        "Nano traffic: rx={}, tx={}, write_failures={}, write_queue_peak={}, command_queue_peak={}, dropped_notifications=unavailable",
         RX_PACKETS.load(Ordering::Relaxed),
         TX_PACKETS.load(Ordering::Relaxed),
-        WRITE_FAILURES.load(Ordering::Relaxed)
+        WRITE_FAILURES.load(Ordering::Relaxed),
+        write_queue_peak,
+        command_queue_peak
     );
 }
 
@@ -507,6 +510,7 @@ where
         RX_PACKETS.store(0, Ordering::Relaxed);
         TX_PACKETS.store(0, Ordering::Relaxed);
         WRITE_FAILURES.store(0, Ordering::Relaxed);
+        crate::link::reset_queue_peaks();
         // GATT construction has large temporary buffers. Keep session polling
         // out of the parent future's stack frame.
         let restarted = matches!(
@@ -694,6 +698,7 @@ where
     NANO_SETUP_ACTIVE.store(true, Ordering::Relaxed);
     stage(connection::Stage::Connecting);
     mark(nano, 1);
+    let setup_started = Instant::now();
     let conn = bounded(
         Operation::Connect,
         CONNECT_TIMEOUT,
@@ -742,6 +747,7 @@ where
     };
     let client = Box::new(client);
     log::info!("nano ATT MTU {}", conn.att_mtu());
+    let att_mtu = conn.att_mtu();
 
     // Ends when the Nano drops, so `nano_loop` scans again.
     let _ = select(
@@ -750,7 +756,7 @@ where
                 report_failure(Operation::Receive, &error);
             }
         },
-        nano_link(&client),
+        nano_link(&client, setup_started, interval_us, att_mtu),
     )
     .await;
 }
@@ -763,7 +769,12 @@ where
     foot_link(stack, addr, guard).await;
 }
 
-async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8>) {
+async fn nano_link<C: Controller, P: PacketPool>(
+    client: &GattClient<'_, C, P, 8>,
+    setup_started: Instant,
+    interval_us: u64,
+    att_mtu: u16,
+) {
     let services = match bounded(Operation::Services, SETUP_TIMEOUT, client.services()).await {
         Ok(services) => services,
         Err(()) => return,
@@ -843,7 +854,7 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
 
     connection::run_io(
         receive_notifications(&mut listener),
-        nano_commands(client, &c304, c304_no_rsp),
+        nano_commands(client, &c304, c304_no_rsp, setup_started, interval_us, att_mtu),
     )
     .await;
 }
@@ -866,6 +877,9 @@ async fn nano_commands<C: Controller, P: PacketPool>(
     client: &GattClient<'_, C, P, 8>,
     c304: &Characteristic<[u8]>,
     c304_no_rsp: bool,
+    setup_started: Instant,
+    interval_us: u64,
+    att_mtu: u16,
 ) {
     stage(connection::Stage::Loading);
     clear_sliders();
@@ -1021,6 +1035,16 @@ async fn nano_commands<C: Controller, P: PacketPool>(
             ) {
                 ready = true;
                 stage(connection::Stage::Ready);
+                let (write_queue_peak, command_queue_peak) = crate::link::queue_peaks();
+                log::info!(
+                    "Nano connection metrics: setup_ms={}, att_mtu={}, interval_us={}, write_queue_peak={}, command_queue_peak={}, write_failures={}, dropped_notifications=unavailable",
+                    (Instant::now() - setup_started).as_millis(),
+                    att_mtu,
+                    interval_us,
+                    write_queue_peak,
+                    command_queue_peak,
+                    WRITE_FAILURES.load(Ordering::Relaxed),
+                );
             }
         }
         if crate::scenes::autosave_due() {

@@ -48,6 +48,10 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - The Bluetooth picker remembers the selected Nano across reboot and displays
   device addresses to distinguish nearby units. Choose another Nano clears the
   preference and lets the picker discover alternatives.
+- BLE Ready and periodic traffic summaries report setup duration, negotiated
+  MTU/connection interval, write/command queue peaks, and failed writes.
+  Dropped-notification counts are marked unavailable because TrouBLE's listener
+  discards its lag count before firmware can observe it.
 - ATT authentication/encryption failures are called out with stale-pairing
   cleanup steps. This firmware does not enable TrouBLE security or persist bonds,
   so it cannot automatically remove/recreate a bond; recovery is explicitly

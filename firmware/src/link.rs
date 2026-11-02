@@ -10,7 +10,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::ffi::CStr;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
@@ -33,7 +33,33 @@ static OUT: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<QueuedWrite>>> =
 static CMDS: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<Cmd>>> =
     Mutex::new(RefCell::new(VecDeque::new()));
 
+static WRITE_QUEUE_PEAK: AtomicU32 = AtomicU32::new(0);
+static COMMAND_QUEUE_PEAK: AtomicU32 = AtomicU32::new(0);
+
 pub(crate) const COMMAND_CAPACITY: usize = 512;
+
+fn record_peak(peak: &AtomicU32, len: usize) {
+    let len = len.min(u32::MAX as usize) as u32;
+    let mut current = peak.load(Ordering::Relaxed);
+    while len > current {
+        match peak.compare_exchange_weak(current, len, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+pub fn reset_queue_peaks() {
+    WRITE_QUEUE_PEAK.store(0, Ordering::Relaxed);
+    COMMAND_QUEUE_PEAK.store(0, Ordering::Relaxed);
+}
+
+pub fn queue_peaks() -> (u32, u32) {
+    (
+        WRITE_QUEUE_PEAK.load(Ordering::Relaxed),
+        COMMAND_QUEUE_PEAK.load(Ordering::Relaxed),
+    )
+}
 
 pub enum Cmd {
     Gig(bool),
@@ -164,6 +190,7 @@ fn write_inner(label: Option<&CStr>, data: &[u8]) -> bool {
             live,
             label: label.and_then(|label| label.to_str().ok()).map(String::from),
         });
+        record_peak(&WRITE_QUEUE_PEAK, queue.len());
         true
     })
 }
@@ -208,6 +235,7 @@ pub fn push_cmd(cmd: Cmd) {
             return;
         }
         queue.push_back(cmd);
+        record_peak(&COMMAND_QUEUE_PEAK, queue.len());
     });
 }
 
@@ -259,6 +287,7 @@ pub fn push_midi(actions: impl Iterator<Item = usize>, value: u8, continuous: bo
                 queue.push_back(cmd);
             }
         }
+        record_peak(&COMMAND_QUEUE_PEAK, queue.len());
         true
     })
 }
@@ -288,4 +317,18 @@ pub fn set_param(block: u8, wire: u8, norm: f32) {
 
 pub fn take_param() -> Option<ParamWrite> {
     PARAM.lock(|slot| slot.borrow_mut().take())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queue_peak_only_tracks_the_high_water_mark() {
+        let peak = AtomicU32::new(0);
+        record_peak(&peak, 3);
+        record_peak(&peak, 1);
+        record_peak(&peak, 5);
+        assert_eq!(peak.load(Ordering::Relaxed), 5);
+    }
 }
