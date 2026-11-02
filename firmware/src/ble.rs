@@ -40,6 +40,18 @@ pub mod connection;
 use connection::{Failure, Operation, CONNECT_TIMEOUT, LOAD_TIMEOUT, SETUP_TIMEOUT, WRITE_TIMEOUT};
 
 fn stage(stage: connection::Stage) {
+    NANO_SETUP_ACTIVE.store(
+        matches!(
+            stage,
+            connection::Stage::Connecting
+                | connection::Stage::Discovering
+                | connection::Stage::Subscribing
+                | connection::Stage::Loading
+        ),
+        Ordering::Relaxed,
+    );
+    NANO_READY.store(stage == connection::Stage::Ready, Ordering::Relaxed);
+    NANO_SEARCHING.store(stage == connection::Stage::Searching, Ordering::Relaxed);
     log::info!("Nano connection: {}", stage.label());
     crate::ui::set_connection_stage(stage.label());
 }
@@ -110,6 +122,9 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 static RX_PACKETS: AtomicU32 = AtomicU32::new(0);
 static TX_PACKETS: AtomicU32 = AtomicU32::new(0);
 static WRITE_FAILURES: AtomicU32 = AtomicU32::new(0);
+static NANO_SETUP_ACTIVE: AtomicBool = AtomicBool::new(false);
+static NANO_READY: AtomicBool = AtomicBool::new(false);
+static NANO_SEARCHING: AtomicBool = AtomicBool::new(false);
 
 fn traffic_summary() {
     log::info!("Nano traffic: rx={}, tx={}, write_failures={}",
@@ -414,6 +429,9 @@ where
         LIBRARY_WANTED.store(false, Ordering::Relaxed);
         crate::state::nano_state_reset();
         crate::screen::nano_ui_set_ble_connected(false);
+        NANO_SETUP_ACTIVE.store(false, Ordering::Relaxed);
+        NANO_READY.store(false, Ordering::Relaxed);
+        NANO_SEARCHING.store(false, Ordering::Relaxed);
         stage(connection::Stage::Searching);
         reset_state(true);
         log::warn!("nano link ended, scanning again");
@@ -475,7 +493,14 @@ where
             if nano { "Nano" } else { "footswitch" }
         );
     }
-    let found = with_timeout(Duration::from_secs(3), signal.wait()).await.ok();
+    let scan_duration = if nano
+        || (!NANO_READY.load(Ordering::Relaxed) && !NANO_SEARCHING.load(Ordering::Relaxed))
+    {
+        Duration::from_secs(3)
+    } else {
+        Duration::from_millis(500)
+    };
+    let found = with_timeout(scan_duration, signal.wait()).await.ok();
     if found.is_none() && (attempt <= 4 || attempt % 10 == 0) {
         log::warn!(
             "BLE scan #{attempt}: no {}; advertisements={}, named={}, malformed={}",
@@ -488,7 +513,14 @@ where
     // Dropping the session asks the runner to disable scanning.
     drop(scan);
     drop(scanner);
-    Timer::after(Duration::from_millis(200)).await;
+    let cooldown = if !nano && NANO_READY.load(Ordering::Relaxed) {
+        Duration::from_secs(5)
+    } else if !nano && NANO_SEARCHING.load(Ordering::Relaxed) {
+        Duration::from_millis(100)
+    } else {
+        Duration::from_millis(200)
+    };
+    Timer::after(cooldown).await;
     found
 }
 
@@ -504,6 +536,11 @@ where
 {
     loop {
         let guard = radio.lock().await;
+        if !nano && NANO_SETUP_ACTIVE.load(Ordering::Relaxed) {
+            drop(guard);
+            Timer::after(Duration::from_millis(100)).await;
+            continue;
+        }
         if let Some(addr) = scan_for(stack, hunt, nano).await {
             return (addr, guard);
         }
@@ -531,6 +568,7 @@ where
         scan_config: listen(&nano_filter),
     };
     log::info!("connecting to nano");
+    NANO_SETUP_ACTIVE.store(true, Ordering::Relaxed);
     stage(connection::Stage::Connecting);
     mark(nano, 1);
     let conn = bounded(Operation::Connect, CONNECT_TIMEOUT, central.connect(&connect)).await;
