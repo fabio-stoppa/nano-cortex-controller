@@ -36,6 +36,12 @@ use trouble_host::prelude::*;
 use crate::panel::Board;
 
 mod advertisement;
+pub mod connection;
+
+fn stage(stage: connection::Stage) {
+    log::info!("Nano connection: {}", stage.label());
+    crate::ui::set_connection_stage(stage.label());
+}
 
 const NANO_PREFIX: &[u8] = b"Neural DSP Nano Cortex";
 const FOOT: &[u8] = b"FootCtrl";
@@ -466,6 +472,7 @@ where
         + ControllerCmdSync<LeSetDataLength>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 {
+    stage(connection::Stage::Searching);
     log::info!("scanning for nano");
     let (nano, guard) = find(stack, hunt, radio, true).await;
 
@@ -476,6 +483,7 @@ where
         scan_config: listen(&nano_filter),
     };
     log::info!("connecting to nano");
+    stage(connection::Stage::Connecting);
     mark(nano, 1);
     let conn = central.connect(&connect).await;
     drop(guard);
@@ -491,6 +499,7 @@ where
     mark(nano, 2);
     crate::link::set_up(true);
     crate::screen::nano_ui_set_ble_connected(true);
+    stage(connection::Stage::Discovering);
     // One 251-byte PDU is about 2.1 ms. Without this, the link stays at
     // 27-byte PDUs and one event still carries more packets than the
     // controller can buffer.
@@ -548,6 +557,7 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
         if c304_no_rsp { "yes" } else { "no" }
     );
 
+    stage(connection::Stage::Subscribing);
     let mut listener = match client.subscribe(&c305, false).await {
         Ok(listener) => listener,
         Err(_) => {
@@ -556,6 +566,7 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
         }
     };
 
+    stage(connection::Stage::Loading);
     let mut payload = [0u8; 16];
     let n = nano_wire::editor::read_settings_payload(&mut payload);
     if n > 0 {

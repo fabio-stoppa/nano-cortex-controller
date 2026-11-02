@@ -1024,6 +1024,13 @@ static LIBRARY_ASKED: core::sync::atomic::AtomicBool = core::sync::atomic::Atomi
 static LOADED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static LOAD_TICK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
+pub fn set_connection_stage(stage: &str) {
+    ensure();
+    let ui = state().as_mut().unwrap();
+    ui.app.set_connection_stage(stage.into());
+    ui.window.request_redraw();
+}
+
 /// How long to wait for the pedal's dump before showing the app anyway.
 const LOAD_TIMEOUT_MS: u32 = 20_000;
 
@@ -1058,6 +1065,7 @@ pub fn refresh_loading() {
         }
     };
     if status.is_empty() || waited > LOAD_TIMEOUT_MS {
+        ui.app.set_connection_stage("Ready".into());
         LOADED.store(true, Relaxed);
         ui.app.set_load_status("".into());
         ui.app.set_connecting(false);

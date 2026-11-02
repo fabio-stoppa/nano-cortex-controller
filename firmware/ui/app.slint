@@ -2445,6 +2445,7 @@ component StatusLine inherits Rectangle {
 }
 
 component ConnectingOverlay inherits Rectangle {
+    in property <string> stage: "Searching";
     in property <int> amp-state: -1;
     in property <int> foot-state: -1;
     in property <string> loading: "";
@@ -2500,7 +2501,12 @@ component ConnectingOverlay inherits Rectangle {
             horizontal-alignment: center;
         }
         Rectangle { height: 8px; }
-        StatusLine { label: "Nano Cortex"; state: root.amp-state; }
+        Text {
+            text: "Nano Cortex: " + root.stage;
+            color: #ffffff;
+            font-size: 16px;
+            horizontal-alignment: center;
+        }
         StatusLine { label: "Footswitch"; state: root.foot-state; }
         Text {
             text: root.loading;
@@ -3006,6 +3012,7 @@ component NameKeyboard inherits Rectangle {
 
 export component AppWindow inherits Window {
     in-out property <bool> connecting: true;
+    in-out property <string> connection-stage: "Searching";
     in-out property <bool> portrait: false;
     in-out property <int> layout-mode: 0;
     in-out property <int> page: 0;
@@ -4021,6 +4028,7 @@ export component AppWindow inherits Window {
     }
 
     if root.connecting && !root.usb-storage-open && !root.scene-library-open && !root.gig-open: ConnectingOverlay {
+        stage: root.connection-stage;
         amp-state: root.conn-amp;
         foot-state: root.conn-foot;
         loading: root.load-status;
