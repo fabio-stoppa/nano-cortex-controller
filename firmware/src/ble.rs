@@ -568,28 +568,41 @@ where
 }
 
 async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8>) {
-    let mut required = [false; 2];
-    for (index, uuid) in [UUID_A002, UUID_A003].iter().enumerate() {
-        match bounded("Nano service discovery", SETUP_TIMEOUT,
-            client.services_by_uuid(&Uuid::new_short(*uuid))).await {
-            Ok(services) => required[index] = !services.is_empty(),
-            Err(error) => {
-                log::error!("Nano service discovery failed: {error:?}");
-                return;
+    let services = match bounded("Nano service discovery", SETUP_TIMEOUT, client.services()).await {
+        Ok(services) => services,
+        Err(()) => return,
+    };
+    let required = [UUID_A002, UUID_A003].map(|uuid|
+        services.iter().any(|svc| svc.uuid() == Uuid::new_short(uuid)));
+    if let Err(error) = connection::validate_capabilities(required[0], required[1], true, true) {
+        log::error!("{error}");
+        crate::scenes::report(error);
+        return;
+    }
+    let mut c304 = None;
+    let mut c305 = None;
+    for service in services.iter().filter(|svc|
+        svc.uuid() == Uuid::new_short(UUID_A002) || svc.uuid() == Uuid::new_short(UUID_A003))
+    {
+        let characteristics = match bounded("Nano characteristic discovery", SETUP_TIMEOUT,
+            client.characteristics::<16>(service)).await {
+            Ok(characteristics) => characteristics,
+            Err(()) => return,
+        };
+        for ch in characteristics {
+            if ch.uuid == Uuid::new_short(UUID_C304) {
+                c304 = Some(ch);
+            } else if ch.uuid == Uuid::new_short(UUID_C305) {
+                c305 = Some(ch);
+            } else if ch.uuid == Uuid::new_short(UUID_C306) {
+                log::info!("C306 handle {} left unsubscribed", ch.handle);
             }
         }
     }
-    let Some(c304) = find_char(client, UUID_C304).await else {
-        log::warn!("C304 missing");
+    let (Some(c304), Some(c305)) = (c304, c305) else {
+        crate::scenes::report("Discovery failed: required C304/C305 characteristics are missing");
         return;
     };
-    let Some(c305) = find_char(client, UUID_C305).await else {
-        log::warn!("C305 missing");
-        return;
-    };
-    if let Some(c306) = find_char(client, UUID_C306).await {
-        log::info!("C306 handle {} left unsubscribed", c306.handle);
-    }
     log::info!("C304 handle {} C305 handle {}", c304.handle, c305.handle);
     let c304_no_rsp = c304.props.any(&[CharacteristicProp::WriteWithoutResponse]);
     if let Err(error) = connection::validate_capabilities(
@@ -1201,24 +1214,6 @@ async fn foot_link<C: Controller>(
         },
     )
     .await;
-}
-
-async fn find_char<C: Controller, P: PacketPool>(
-    client: &GattClient<'_, C, P, 8>,
-    uuid: u16,
-) -> Option<Characteristic<[u8]>> {
-    for svc_uuid in [UUID_A002, UUID_A003] {
-        let svcs = bounded("Nano service discovery", SETUP_TIMEOUT,
-            client.services_by_uuid(&Uuid::new_short(svc_uuid))).await.ok()?;
-        for svc in svcs.iter() {
-            if let Ok(ch) = bounded("Nano characteristic discovery", SETUP_TIMEOUT,
-                client.characteristic_by_uuid::<[u8]>(svc, &Uuid::new_short(uuid))).await
-            {
-                return Some(ch);
-            }
-        }
-    }
-    None
 }
 
 fn listen(filter: &[Address]) -> ScanConfig<'_> {
