@@ -183,13 +183,6 @@ pub enum RetryAction {
     StateRead,
     PresetRead,
     LibraryRead,
-    LiveControl,
-    Save,
-    Copy,
-    Rename,
-    Move,
-    Delete,
-    UnknownWrite,
 }
 
 pub const fn retry_after_reconnect(action: RetryAction) -> bool {
@@ -269,17 +262,5 @@ mod tests {
         ] {
             assert!(retry_after_reconnect(action));
         }
-        for action in [
-            RetryAction::LiveControl,
-            RetryAction::Save,
-            RetryAction::Copy,
-            RetryAction::Rename,
-            RetryAction::Move,
-            RetryAction::Delete,
-            RetryAction::UnknownWrite,
-        ] {
-            assert!(!retry_after_reconnect(action));
-        }
     }
-
 }
