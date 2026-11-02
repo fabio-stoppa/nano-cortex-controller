@@ -161,8 +161,8 @@ mod settings {
         Ok(())
     }
 
-    pub fn save_midi(keys: &[u16]) -> bool {
-        crate::midi::json_for_keys(keys)
+    pub fn save_midi(keys: &[u16], zero_is_press: &[bool]) -> bool {
+        crate::midi::json_for_bindings(keys, zero_is_press)
             .and_then(|json| save_midi_json(&json))
             .is_ok()
     }
@@ -776,6 +776,60 @@ mod tests {
     }
 
     #[test]
+    fn learned_zero_cc_press_triggers_button_and_survives_reload() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        let actions = [
+            (index("Tuner"), 1),
+            (index("Recall scene 1"), 2),
+            (index("Recall scene 2"), 3),
+        ];
+        for &(action, number) in &actions {
+            midi::toggle_learn(action);
+            cc(number, 0);
+        }
+        assert!(queued().is_empty());
+        for &(action, _) in &actions {
+            assert!(midi::rows()[action].assigned.contains("press=0"));
+        }
+
+        let saved = midi::export_json().unwrap();
+        assert!(saved.contains("\"zero_is_press\": true"));
+        midi::import_json(&saved).unwrap();
+
+        for (index, &(action, number)) in actions.iter().enumerate() {
+            cc(number, 127);
+            assert!(queued().is_empty(), "release must not trigger action {action}");
+            cc(number, 0);
+            assert_eq!(queued(), [(action, 0)]);
+            let Some(command) = midi::command(action, 0, false) else {
+                panic!("learned action {action} must map to a command");
+            };
+            let expected = match index {
+                0 => matches!(command, link::Cmd::TunerToggle),
+                1 => matches!(command, link::Cmd::SceneRecall(0)),
+                2 => matches!(command, link::Cmd::SceneRecall(1)),
+                _ => false,
+            };
+            assert!(expected, "learned action {action} mapped to the wrong command");
+        }
+    }
+
+    #[test]
+    fn version_one_midi_bindings_keep_nonzero_press_behavior() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        midi::import_json(
+            r#"{"format":"nano-midi","version":1,"bindings":[{"action":6,"kind":"cc","channel":1,"number":7}]}"#,
+        )
+        .unwrap();
+        cc(7, 0);
+        assert!(queued().is_empty());
+        cc(7, 127);
+        assert_eq!(queued(), [(6, 127)]);
+    }
+
+    #[test]
     fn parameter_learn_requires_cc_and_note_off_never_triggers() {
         let _guard = LOCK.lock().unwrap();
         reset();
@@ -1106,7 +1160,7 @@ mod tests {
         assert_eq!(midi::export_json().unwrap(), original);
         let invalid = [
             r#"{"format":"other","version":1,"bindings":[]}"#,
-            r#"{"format":"nano-midi","version":2,"bindings":[]}"#,
+            r#"{"format":"nano-midi","version":3,"bindings":[]}"#,
             r#"{"format":"nano-midi","version":1,"bindings":[{"action":0,"kind":"cc","channel":0,"number":7}]}"#,
             r#"{"format":"nano-midi","version":1,"bindings":[{"action":0,"kind":"cc","channel":17,"number":7}]}"#,
             r#"{"format":"nano-midi","version":1,"bindings":[{"action":0,"kind":"cc","channel":1,"number":128}]}"#,

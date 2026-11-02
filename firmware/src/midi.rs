@@ -223,6 +223,7 @@ pub fn is_continuous(index: usize) -> bool {
 
 struct Table {
     keys: [u16; ACTION_COUNT],
+    zero_is_press: [bool; ACTION_COUNT],
     learning: Option<usize>,
     /// Bumped on every change the page has to repaint.
     version: u32,
@@ -234,6 +235,7 @@ struct Table {
 
 static TABLE: Mutex<CriticalSectionRawMutex, RefCell<Table>> = Mutex::new(RefCell::new(Table {
     keys: [0; ACTION_COUNT],
+    zero_is_press: [false; ACTION_COUNT],
     learning: None,
     version: 1,
     unsaved: false,
@@ -244,10 +246,11 @@ static TABLE: Mutex<CriticalSectionRawMutex, RefCell<Table>> = Mutex::new(RefCel
 
 pub fn load() {
     match crate::settings::load_midi_json() {
-        Ok(Some(json)) => match keys_from_json(&json) {
-            Ok(keys) => TABLE.lock(|t| {
+        Ok(Some(json)) => match backup::decode(&json) {
+            Ok((keys, zero_is_press)) => TABLE.lock(|t| {
                 let mut t = t.borrow_mut();
                 t.keys = keys;
+                t.zero_is_press = zero_is_press;
                 t.version += 1;
             }),
             Err(err) => report(err),
@@ -286,7 +289,11 @@ pub fn rows() -> alloc::vec::Vec<Row> {
                 } else {
                     action_name(i)
                 },
-                assigned: key_text(t.keys[i]),
+                assigned: if t.zero_is_press[i] {
+                    format!("{} (press=0)", key_text(t.keys[i]))
+                } else {
+                    key_text(t.keys[i])
+                },
                 learning: t.learning == Some(i),
             })
             .collect()
@@ -350,8 +357,9 @@ pub fn clear(index: usize) {
     }
     TABLE.lock(|t| {
         let mut t = t.borrow_mut();
-        if t.keys[index] != 0 {
+        if t.keys[index] != 0 || t.zero_is_press[index] {
             t.keys[index] = 0;
+            t.zero_is_press[index] = false;
             t.unsaved = true;
             t.retry_save_us = 0;
         }
@@ -361,31 +369,43 @@ pub fn clear(index: usize) {
 }
 
 pub fn clear_all() -> Result<(), &'static str> {
-    let json = backup::encode(&[0; ACTION_COUNT])?;
+    let json = backup::encode(&[0; ACTION_COUNT], &[false; ACTION_COUNT])?;
     // Always commit defaults, even if an invalid saved file loaded no bindings.
     import_json(&json)
 }
 
 pub fn export_json() -> Result<String, &'static str> {
-    let keys = TABLE.lock(|t| t.borrow().keys);
-    backup::encode(&keys)
+    TABLE.lock(|t| {
+        let t = t.borrow();
+        backup::encode(&t.keys, &t.zero_is_press)
+    })
 }
 
+#[cfg(test)]
 pub fn json_for_keys(keys: &[u16]) -> Result<String, &'static str> {
     let keys = keys.try_into().map_err(|_| "Invalid MIDI action count")?;
-    backup::encode(keys)
+    backup::encode(keys, &[false; ACTION_COUNT])
+}
+
+pub fn json_for_bindings(keys: &[u16], zero_is_press: &[bool]) -> Result<String, &'static str> {
+    let keys = keys.try_into().map_err(|_| "Invalid MIDI action count")?;
+    let zero_is_press = zero_is_press
+        .try_into()
+        .map_err(|_| "Invalid MIDI action count")?;
+    backup::encode(keys, zero_is_press)
 }
 
 pub fn keys_from_json(json: &str) -> Result<[u16; ACTION_COUNT], &'static str> {
-    backup::decode(json)
+    backup::decode(json).map(|(keys, _)| keys)
 }
 
 pub fn import_json(json: &str) -> Result<(), &'static str> {
-    let keys = keys_from_json(json)?;
+    let (keys, zero_is_press) = backup::decode(json)?;
     crate::settings::save_midi_json(json)?;
     TABLE.lock(|t| {
         let mut t = t.borrow_mut();
         t.keys = keys;
+        t.zero_is_press = zero_is_press;
         t.unsaved = false;
         t.learning = None;
         t.last = 0;
@@ -400,15 +420,15 @@ pub fn import_json(json: &str) -> Result<(), &'static str> {
 /// Writes changed bindings to flash. Called from the UI task.
 pub fn persist() {
     let now = crate::clock::now_us();
-    let keys = TABLE.lock(|t| {
+    let bindings = TABLE.lock(|t| {
         let t = t.borrow();
-        (t.unsaved && now >= t.retry_save_us).then_some(t.keys)
+        (t.unsaved && now >= t.retry_save_us).then_some((t.keys, t.zero_is_press))
     });
-    if let Some(keys) = keys {
-        let saved = crate::settings::save_midi(&keys);
+    if let Some((keys, zero_is_press)) = bindings {
+        let saved = crate::settings::save_midi(&keys, &zero_is_press);
         TABLE.lock(|t| {
             let mut t = t.borrow_mut();
-            if saved && t.keys == keys {
+            if saved && t.keys == keys && t.zero_is_press == zero_is_press {
                 t.unsaved = false;
                 if t.notice == "Bindings not saved; retrying." {
                     t.notice = "";
@@ -509,20 +529,28 @@ fn dispatch(status: u8, data: [u8; 2]) {
                 return None;
             }
             t.keys[index] = key;
+            t.zero_is_press[index] =
+                !continuous_action(index) && msg.kind == Kind::Cc && msg.value == 0;
             t.unsaved = true;
             t.retry_save_us = 0;
             t.notice = "";
             return None;
         }
-        Some(t.keys)
+        Some((t.keys, t.zero_is_press))
     });
-    if let Some(keys) = keys {
+    if let Some((keys, zero_is_press)) = keys {
         let actions = keys.iter().enumerate().filter_map(|(index, assigned)| {
             (*assigned == key
                 && active_action(index)
                 && (!continuous_action(index) || msg.kind == Kind::Cc)
-                && (continuous_action(index) || msg.kind != Kind::Cc || msg.value > 0))
-                .then_some(index)
+                && (continuous_action(index)
+                    || msg.kind != Kind::Cc
+                    || if zero_is_press[index] {
+                        msg.value == 0
+                    } else {
+                        msg.value > 0
+                    }))
+            .then_some(index)
         });
         if !crate::link::push_midi(actions, msg.value, msg.kind == Kind::Cc) {
             TABLE.lock(|t| {

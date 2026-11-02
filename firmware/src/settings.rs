@@ -272,8 +272,9 @@ pub fn initialize() -> Result<bool, &'static str> {
     )
 }
 
-pub fn save_midi(keys: &[u16]) -> bool {
-    let result = crate::midi::json_for_keys(keys).and_then(|json| save_midi_json(&json));
+pub fn save_midi(keys: &[u16], zero_is_press: &[bool]) -> bool {
+    let result =
+        crate::midi::json_for_bindings(keys, zero_is_press).and_then(|json| save_midi_json(&json));
     if let Err(err) = result {
         log::warn!("Could not save MIDI bindings: {err}");
     }
