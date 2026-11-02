@@ -91,10 +91,20 @@ fn install(config: Config) {
     });
 }
 
-#[cfg(test)]
 pub fn export_json() -> Result<String, &'static str> {
-    let config = with(|state| state.config().clone());
-    config.encode()
+    with(|state| {
+        if let Some(error) = state.load_error {
+            return Err(error);
+        }
+        state.config().encode()
+    })
+}
+
+pub fn import_json(json: &str) -> Result<(), &'static str> {
+    let config = Config::decode(json)?;
+    crate::settings::save_scenes_json(json)?;
+    install(config);
+    Ok(())
 }
 fn edit(f: impl FnOnce(&mut Config) -> Result<(), &'static str>) -> Result<(), &'static str> {
     if let Some(error) = with(|state| state.load_error) {

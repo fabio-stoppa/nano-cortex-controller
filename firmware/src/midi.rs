@@ -366,7 +366,6 @@ pub fn clear_all() {
     crate::link::clear_midi();
 }
 
-#[cfg(test)]
 pub fn export_json() -> Result<String, &'static str> {
     let keys = TABLE.lock(|t| t.borrow().keys);
     backup::encode(&keys)
@@ -381,7 +380,6 @@ pub fn keys_from_json(json: &str) -> Result<[u16; ACTION_COUNT], &'static str> {
     backup::decode(json)
 }
 
-#[cfg(test)]
 pub fn import_json(json: &str) -> Result<(), &'static str> {
     let keys = keys_from_json(json)?;
     crate::settings::save_midi_json(json)?;

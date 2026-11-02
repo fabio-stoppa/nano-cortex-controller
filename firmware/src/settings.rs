@@ -94,6 +94,13 @@ fn save_preferences(mode: u8, autosave: bool) -> Result<(), &'static str> {
     let _pause = crate::bounce::FlashPause::begin()?;
     let expected = record(mode, autosave);
     let saved = with_region(|region| {
+        let mut current = [0u8; 8];
+        region.read(0, &mut current)
+            .map_err(|e| log::warn!("read preferences {e:?}"))
+            .ok()?;
+        if current == expected {
+            return Some(());
+        }
         region
             .erase(0, SECTOR)
             .map_err(|e| log::warn!("erase {e:?}"))
@@ -112,6 +119,11 @@ fn save_preferences(mode: u8, autosave: bool) -> Result<(), &'static str> {
 mod midi_record;
 mod json_record;
 mod reset;
+pub mod preferences;
+
+pub fn import_preferences(preferences: &preferences::Preferences) -> Result<(), &'static str> {
+    save_preferences(preferences.orientation.layout(), preferences.autosave)
+}
 
 pub fn initialize() -> Result<bool, &'static str> {
     let flash = flash().ok_or("Flash unavailable for controller factory reset")?;

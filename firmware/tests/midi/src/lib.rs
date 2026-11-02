@@ -2,6 +2,13 @@
 
 extern crate alloc;
 
+#[path = "../../../src/usb_storage/disk.rs"]
+mod usb_disk;
+#[path = "../../../src/usb_storage/config.rs"]
+mod usb_config;
+#[path = "../../../src/settings/preferences.rs"]
+pub mod preferences;
+
 #[path = "../../../src/fx/catalog.rs"]
 pub mod catalog;
 #[path = "../../../src/hci.rs"]
@@ -109,16 +116,32 @@ mod state {
 mod settings {
     use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Mutex;
+    pub use crate::preferences;
 
     pub static FAIL: AtomicBool = AtomicBool::new(false);
+    pub static FAIL_MIDI: AtomicBool = AtomicBool::new(false);
     pub static SAVES: AtomicUsize = AtomicUsize::new(0);
+    pub static SCENE_SAVES: AtomicUsize = AtomicUsize::new(0);
     pub static RECORD: Mutex<Option<String>> = Mutex::new(None);
     pub static SCENE_RECORD: Mutex<Option<String>> = Mutex::new(None);
+    pub static PREFERENCES: Mutex<(u8, bool)> = Mutex::new((0, false));
+    pub static PREFERENCE_SAVES: AtomicUsize = AtomicUsize::new(0);
+    pub static FAIL_PREFERENCES: AtomicBool = AtomicBool::new(false);
+
+    pub fn import_preferences(preferences: &preferences::Preferences) -> Result<(), &'static str> {
+        PREFERENCE_SAVES.fetch_add(1, Ordering::Relaxed);
+        if FAIL_PREFERENCES.load(Ordering::Relaxed) {
+            return Err("Mock preferences save failed");
+        }
+        *PREFERENCES.lock().unwrap() = (preferences.orientation.layout(), preferences.autosave);
+        Ok(())
+    }
 
     pub fn load_scenes_json() -> Result<Option<String>, &'static str> {
         Ok(SCENE_RECORD.lock().unwrap().clone())
     }
     pub fn save_scenes_json(json: &str) -> Result<(), &'static str> {
+        SCENE_SAVES.fetch_add(1, Ordering::Relaxed);
         if FAIL.load(Ordering::Relaxed) {
             return Err("Mock flash save failed");
         }
@@ -138,7 +161,7 @@ mod settings {
 
     pub fn save_midi_json(json: &str) -> Result<(), &'static str> {
         SAVES.fetch_add(1, Ordering::Relaxed);
-        if FAIL.load(Ordering::Relaxed) {
+        if FAIL.load(Ordering::Relaxed) || FAIL_MIDI.load(Ordering::Relaxed) {
             return Err("Mock flash save failed");
         }
         *RECORD.lock().unwrap() = Some(json.to_owned());
@@ -159,6 +182,11 @@ mod tests {
         link::set_up(true);
         clock::NOW.store(10_000_000, Ordering::Relaxed);
         settings::FAIL.store(false, Ordering::Relaxed);
+        settings::FAIL_MIDI.store(false, Ordering::Relaxed);
+        settings::FAIL_PREFERENCES.store(false, Ordering::Relaxed);
+        settings::PREFERENCE_SAVES.store(0, Ordering::Relaxed);
+        *settings::PREFERENCES.lock().unwrap() = (0, false);
+        settings::SCENE_SAVES.store(0, Ordering::Relaxed);
         settings::SAVES.store(0, Ordering::Relaxed);
         for i in 0..midi::ACTION_COUNT {
             midi::clear(i);
@@ -178,6 +206,82 @@ mod tests {
         (0..midi::ACTION_COUNT)
             .find(|&i| midi::action_name(i) == name)
             .unwrap()
+    }
+
+    #[test]
+    fn usb_validates_all_files_before_any_save_and_reports_partial_failure() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        *settings::SCENE_RECORD.lock().unwrap() = None;
+        scenes::load();
+        let original_scenes = scenes::export_json().unwrap();
+        let changed_scenes = r#"{"format":"nano-scenes","version":3,"preset_scenes":[{"preset":2,"scenes":[null,null,null,null,null,null,null,null]}]}"#;
+        let original_midi = midi::export_json().unwrap();
+        let mut keys = midi::keys_from_json(&original_midi).unwrap();
+        keys[0] = 0x900a;
+        let changed_midi = midi::json_for_keys(&keys).unwrap();
+        let preferences = preferences::Preferences::new(3, true).unwrap().encode().unwrap();
+        assert_ne!(changed_midi, original_midi);
+        settings::SAVES.store(0, Ordering::Relaxed);
+        settings::SCENE_SAVES.store(0, Ordering::Relaxed);
+
+        assert!(usb_config::import(&changed_midi, "{}", &preferences).is_err());
+        assert!(usb_config::import("{}", changed_scenes, &preferences).is_err());
+        assert!(usb_config::import(&changed_midi, changed_scenes, "{}").is_err());
+        assert_eq!(settings::SAVES.load(Ordering::Relaxed), 0);
+        assert_eq!(settings::SCENE_SAVES.load(Ordering::Relaxed), 0);
+        assert_eq!(settings::PREFERENCE_SAVES.load(Ordering::Relaxed), 0);
+        assert_eq!(*settings::PREFERENCES.lock().unwrap(), (0, false));
+        assert_eq!(midi::export_json().unwrap(), original_midi);
+        assert_eq!(scenes::export_json().unwrap(), original_scenes);
+
+        settings::FAIL.store(true, Ordering::Relaxed);
+        assert!(usb_config::import(&changed_midi, changed_scenes, &preferences).is_err());
+        assert_eq!(settings::SAVES.load(Ordering::Relaxed), 0);
+        assert_eq!(midi::export_json().unwrap(), original_midi);
+        assert_eq!(scenes::export_json().unwrap(), original_scenes);
+        assert_eq!(settings::PREFERENCE_SAVES.load(Ordering::Relaxed), 0);
+        settings::FAIL.store(false, Ordering::Relaxed);
+
+        settings::FAIL_MIDI.store(true, Ordering::Relaxed);
+        assert!(usb_config::import(&changed_midi, changed_scenes, &preferences)
+            .unwrap_err()
+            .contains("Scenes saved, but MIDI save failed"));
+        assert_eq!(midi::export_json().unwrap(), original_midi);
+        assert_eq!(scenes::export_json().unwrap(), changed_scenes);
+        assert_eq!(
+            settings::SCENE_RECORD.lock().unwrap().as_deref(),
+            Some(changed_scenes)
+        );
+        settings::FAIL_MIDI.store(false, Ordering::Relaxed);
+        assert_eq!(settings::PREFERENCE_SAVES.load(Ordering::Relaxed), 0);
+
+        settings::FAIL_PREFERENCES.store(true, Ordering::Relaxed);
+        assert!(usb_config::import(&changed_midi, changed_scenes, &preferences)
+            .unwrap_err().contains("MIDI and scenes saved, but preferences save failed"));
+        assert_eq!(midi::export_json().unwrap(), changed_midi);
+        assert_eq!(*settings::PREFERENCES.lock().unwrap(), (0, false));
+        settings::FAIL_PREFERENCES.store(false, Ordering::Relaxed);
+
+        usb_config::import(&changed_midi, changed_scenes, &preferences).unwrap();
+        assert_eq!(midi::export_json().unwrap(), changed_midi);
+        assert_eq!(
+            settings::RECORD.lock().unwrap().as_deref(),
+            Some(changed_midi.as_str())
+        );
+        assert_eq!(*settings::PREFERENCES.lock().unwrap(), (3, true));
+    }
+
+    #[test]
+    fn usb_scene_export_does_not_hide_unreadable_saved_data() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        let previous = settings::SCENE_RECORD.lock().unwrap().replace("invalid JSON".into());
+        scenes::load();
+        assert_eq!(scenes::export_json().unwrap_err(), "Invalid scenes.json");
+        *settings::SCENE_RECORD.lock().unwrap() = previous;
+        scenes::load();
+        assert!(scenes::export_json().is_ok());
     }
 
     fn cc(number: u8, value: u8) {

@@ -277,6 +277,9 @@ fn ensure() {
         }
     });
     app.on_tools_refresh(move || crate::link::push_cmd(Cmd::ToolsOpen));
+    app.on_usb_storage_requested(crate::usb_storage::request);
+    app.on_usb_storage_cancel(crate::usb_storage::cancel);
+    app.on_usb_storage_restart(|| esp_hal::system::software_reset());
     app.on_midi_closed(|| crate::midi::cancel_learn());
     app.on_midi_learn(|index| {
         if let Some(action) = crate::midi::visible_action(index.max(0) as usize) {
@@ -1073,8 +1076,35 @@ pub fn set_bluetooth_busy() {
 static MIDI_SHOWN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static MIDI_TAB_SHOWN: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(-1);
 
+pub fn usb_storage_status(message: &str, finished: bool) {
+    if let Some(ui) = state().as_mut() {
+        ui.app.set_settings_open(false);
+        ui.app.set_model_open(false);
+        ui.app.set_kbd_open(false);
+        ui.app.set_confirm_open(false);
+        ui.app.set_scene_library_open(false);
+        ui.app.set_gig_open(false);
+        ui.app.set_usb_storage_open(true);
+        ui.app.set_usb_storage_finished(finished);
+        ui.app.set_usb_storage_message(message.into());
+        ui.window.request_redraw();
+    }
+}
+
+pub fn export_preferences_json() -> Result<alloc::string::String, &'static str> {
+    let ui = state().as_ref().ok_or("Controller UI is not initialized")?;
+    crate::settings::preferences::Preferences::new(
+        ui.app.get_layout_mode(),
+        ui.app.get_autosave_enabled(),
+    )?
+    .encode()
+}
+
 /// Repaints the MIDI page when its bindings change and saves new ones.
 pub fn refresh_midi() {
+    if state().as_ref().is_some_and(|ui| ui.app.get_usb_storage_open()) {
+        return;
+    }
     if let Some(ui) = state().as_ref() { scenes_ui::refresh(&ui.app, false); }
     if let Some(ui) = state().as_ref() {
         if ui.app.get_autosave_enabled() {

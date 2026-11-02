@@ -2049,6 +2049,7 @@ component ToolsPanel inherits Rectangle {
     callback midi-clear(int);
     callback clear-requested(int);
     in property <string> clear-status;
+    callback usb-storage();
     in property <bool> scene-library-busy;
     in property <bool> save-dirty;
     callback save();
@@ -2194,6 +2195,16 @@ component ToolsPanel inherits Rectangle {
                                 color: #ececec;
                                 font-size: 16px;
                                 wrap: word-wrap;
+                            }
+                        }
+                        OptionRow {
+                            label: "Configuration";
+                            VCenter {
+                                HeaderButton {
+                                    label: "USB drive";
+                                    enabled: !root.scene-library-busy;
+                                    tapped => { root.usb-storage(); }
+                                }
                             }
                         }
                         OptionRow {
@@ -2450,6 +2461,7 @@ component ConnectingOverlay inherits Rectangle {
     in property <string> loading: "";
     in property <string> version: "";
     callback scene-library();
+    callback usb-storage();
     background: #1e1e1e;
     TouchArea {}
     VerticalLayout {
@@ -2524,6 +2536,14 @@ component ConnectingOverlay inherits Rectangle {
             horizontal-alignment: center;
             wrap: word-wrap;
         }
+    }
+    HeaderButton {
+        x: parent.width - self.width - Surface.screen-margin;
+        y: Surface.screen-margin;
+        width: 120px;
+        height: 40px;
+        label: "USB drive";
+        tapped => { root.usb-storage(); }
     }
     Text {
         x: Surface.screen-margin;
@@ -3228,6 +3248,12 @@ export component AppWindow inherits Window {
     callback midi-clear(int);
     callback midi-clear-all();
     callback midi-clear-all-requested();
+    callback usb-storage-requested();
+    callback usb-storage-cancel();
+    callback usb-storage-restart();
+    in-out property <bool> usb-storage-open: false;
+    in-out property <bool> usb-storage-finished: false;
+    in-out property <string> usb-storage-message: "";
     callback scene-library-clear-all(int);
     callback clear-requested(int);
     in-out property <int> clear-status-kind: 0;
@@ -3322,7 +3348,7 @@ export component AppWindow inherits Window {
     // The software renderer draws everything under an overlay, so hide what an
     // opaque or full-screen layer covers.
     // Confirmations are cards over whatever is open, so they do not hide it.
-    property <bool> popup-open: root.kbd-open || root.model-open || root.settings-open || root.scene-library-open || (root.gig-open && root.page != 2);
+    property <bool> popup-open: root.kbd-open || root.model-open || root.settings-open || root.usb-storage-open || root.scene-library-open || (root.gig-open && root.page != 2);
     property <bool> main-covered: root.popup-open || root.connecting;
     changed main-covered => { root.header-menu-open = false; root.header-scene-menu-open = false; }
     changed portrait => { root.header-menu-open = false; root.header-scene-menu-open = false; }
@@ -3685,6 +3711,7 @@ export component AppWindow inherits Window {
         midi-learn(index) => { root.midi-learn(index); }
         midi-clear(index) => { root.midi-clear(index); }
         clear-requested(kind) => { root.clear-requested(kind); }
+        usb-storage => { root.usb-storage-requested(); }
         clear-status: root.clear-status;
         scene-library-busy: root.scene-library-busy;
         tuner => { root.settings-open = false; root.tuner-tapped(); }
@@ -3812,11 +3839,44 @@ export component AppWindow inherits Window {
         closed => { root.kbd-open = false; root.scene-library-name-action = 0; }
     }
 
-    if root.connecting && !root.scene-library-open && !root.gig-open: ConnectingOverlay {
+    if root.connecting && !root.usb-storage-open && !root.scene-library-open && !root.gig-open: ConnectingOverlay {
         amp-state: root.conn-amp;
         foot-state: root.conn-foot;
         loading: root.load-status;
         version: root.app-version;
         scene-library => { root.scene-library-opened(); }
+        usb-storage => { root.usb-storage-requested(); }
+    }
+
+    if root.usb-storage-open: Rectangle {
+        width: root.width;
+        height: root.height;
+        background: Surface.background;
+        TouchArea {}
+        VerticalLayout {
+            padding: Surface.screen-margin;
+            spacing: 16px;
+            Text {
+                text: "USB configuration drive";
+                color: #ffffff;
+                font-size: 26px;
+                font-weight: 700;
+            }
+            Text {
+                text: root.usb-storage-message;
+                color: #ececec;
+                font-size: 20px;
+                wrap: word-wrap;
+            }
+            Rectangle { background: transparent; vertical-stretch: 1; }
+            DialogButton {
+                label: root.usb-storage-finished ? "Restart controller" : "Cancel USB edits";
+                fill: #1a3af8;
+                tapped => {
+                    if root.usb-storage-finished { root.usb-storage-restart(); }
+                    else { root.usb-storage-cancel(); }
+                }
+            }
+        }
     }
 }

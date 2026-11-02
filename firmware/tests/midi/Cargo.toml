@@ -9,6 +9,7 @@ bt-hci = "0.9"
 embedded-io = "0.7"
 critical-section = { version = "1", features = ["std"] }
 embassy-sync = "0.8"
+fatfs = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 libm = "0.2"
 log = "0.4"
 nano-wire = { path = "../../../crates/nano-wire" }

@@ -167,15 +167,70 @@ landscape and portrait. Changing the Nano preset externally or disconnecting
 clears stale scene selection. Gig view itself is a temporary UI mode, not a
 Nano preset or persisted sound setting.
 
-### Internal configuration storage
+### USB configuration drive and internal storage
 
 MIDI assignments and Scenes data remain saved as checked JSON records in
 internal flash. Configure them using the controller's touch UI or MIDI Learn.
-The USB configuration drive is deferred: this firmware does not expose editable
-files to a computer and has no import/export controls or serial backup commands.
-USB serial monitoring/flashing and the Nano's USB playback-level control are unchanged.
-The firmware uses the published Embassy runtime dependencies from the pre-USB build,
-without the USB-specific Git patches.
+To back up or load JSON files, connect the board's native USB data port to a
+computer and tap **USB drive** on the connection screen, or
+**Settings → General → Configuration → USB drive** when connected.
+Bluetooth control and MIDI editing pause until the controller is restarted.
+Use a data cable; a separate USB-to-serial port does not expose the drive.
+
+The computer mounts a disposable 3 MiB FAT12 volume named **NANO CONFIG** containing:
+
+- `midi.json`: learned MIDI assignments (maximum 48 KiB).
+- `scenes.json`: all controller scenes, using the current version-3 `nano-scenes`
+  format (maximum 1,048,544 bytes). Older banks/`performance.json` are not imported.
+- `preferences.json`: controller screen orientation and Autosave (maximum 4 KiB).
+  Does not include Nano settings or Bluetooth pairings.
+- `README.TXT`: editing instructions and active MIDI action IDs.
+
+Copy the JSON files to your computer for backup, or edit/replace them on the
+drive, keeping all three filenames in its root directory. **Safely eject the drive**
+to import: all three files must pass filesystem, UTF-8 and configuration validation
+before any are written to flash. Check the controller screen for the result,
+then tap **Restart controller** to resume normal operation.
+Saving a file or flushing the drive alone does not import it. **Cancel USB edits**
+discards the disposable drive without saving computer changes; restart afterward.
+Unplugging without eject does not commit changes.
+
+Invalid, missing, oversized or reformatted files are rejected. MIDI and scenes use
+the existing checked, two-generation flash journals with readback verification.
+Preferences use the existing shared layout/Autosave record in NVS, also verified
+by readback; it is not a two-generation journal and an interrupted preferences
+write can require setting the preferences again.
+The files are **not one atomic transaction**: scenes, MIDI, then preferences
+are saved in that order. Errors explicitly identify partial saves; a preferences
+save failure does not roll back MIDI or scenes. Back up all three files before editing.
+USB mode refuses to export over unreadable saved configuration rather than
+silently replacing it with defaults. Do not format the volume; additional files
+are temporary and are not imported.
+
+Native USB switches to mass storage during this mode, so its serial connection
+may disappear until restart; normal flashing/serial operation returns afterward.
+The Nano's USB playback-level control is unrelated and unchanged.
+The USB stack, driver and USB-internal synchronization are pinned to Git for MSC
+support. Controller/Bluetooth synchronization and the shared Embassy
+time/futures runtime remain on their published dependencies.
+
+`preferences.json` example:
+
+```json
+{
+  "format": "nano-controller-preferences",
+  "version": 1,
+  "orientation": "landscape",
+  "autosave": false
+}
+```
+
+`orientation` accepts `landscape`, `portrait`, `portrait_flipped`, or
+`landscape_flipped`. `autosave` must be a JSON boolean. Missing/unknown fields,
+unsupported versions and invalid values are rejected rather than defaulted.
+Imported preferences take effect on **Restart controller**, so the USB screen
+does not rotate mid-import. Existing touch settings and boot behavior are unchanged;
+unchanged preference records are not rewritten.
 
 Settings → General → Clear → **MIDI** asks for confirmation before removing all
 learned assignments. Cancel leaves them unchanged. This does not change presets

@@ -28,8 +28,11 @@ mod state;
 mod syncutil;
 mod tuner;
 mod ui;
+mod usb_storage;
 
+use alloc::boxed::Box;
 use embassy_executor::Spawner;
+use embassy_futures::select::select;
 use esp_backtrace as _;
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -78,7 +81,7 @@ async fn main(_spawner: Spawner) {
     #[cfg(feature = "ui-only")]
     {
         log::warn!("UI-only diagnostic: Bluetooth controller is disabled");
-        ble::touch_only(&mut board).await;
+        select(ble::touch_only(&mut board), usb_storage::requested()).await;
     }
     #[cfg(not(feature = "ui-only"))]
     {
@@ -89,7 +92,8 @@ async fn main(_spawner: Spawner) {
             Ok(connector) => connector,
             Err(err) => {
                 log::error!("ble controller init failed: {err:?}");
-                ble::touch_only(&mut board).await;
+                select(ble::touch_only(&mut board), usb_storage::requested()).await;
+                Box::pin(usb_storage::run(rest.usb, &mut board)).await;
                 return;
             }
         };
@@ -101,6 +105,11 @@ async fn main(_spawner: Spawner) {
         };
         #[cfg(not(feature = "original-hci"))]
         let controller = hci::SerialController::new(connector);
-        ble::run(controller, &mut board).await;
+        select(
+            Box::pin(ble::run(controller, &mut board)),
+            usb_storage::requested(),
+        )
+        .await;
     }
+    Box::pin(usb_storage::run(rest.usb, &mut board)).await;
 }

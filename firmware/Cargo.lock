@@ -1249,7 +1249,7 @@ checksum = "b0641612053b2f34fc250bb63f6630ae75de46e02ade7f457268447081d709ce"
 dependencies = [
  "embassy-futures",
  "embassy-hal-internal",
- "embassy-sync 0.8.0",
+ "embassy-sync 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
@@ -1305,6 +1305,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "embassy-net-driver-channel"
+version = "0.4.0"
+source = "git+https://github.com/embassy-rs/embassy?rev=14cf6a68ec0bfd0ecf873f7e3dbb2eb69013fa29#14cf6a68ec0bfd0ecf873f7e3dbb2eb69013fa29"
+dependencies = [
+ "embassy-sync 0.8.0 (git+https://github.com/embassy-rs/embassy?rev=14cf6a68ec0bfd0ecf873f7e3dbb2eb69013fa29)",
+ "xarxa-driver",
+]
+
+[[package]]
 name = "embassy-sync"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1339,6 +1348,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7bbd85cf5a5ae56bdf26f618364af642d1d0a4e245cdd75cd9aabda382f65a81"
 dependencies = [
  "cfg-if",
+ "critical-section",
+ "embedded-io-async 0.7.0",
+ "futures-core",
+ "futures-sink",
+ "heapless 0.9.3",
+]
+
+[[package]]
+name = "embassy-sync"
+version = "0.8.0"
+source = "git+https://github.com/embassy-rs/embassy?rev=14cf6a68ec0bfd0ecf873f7e3dbb2eb69013fa29#14cf6a68ec0bfd0ecf873f7e3dbb2eb69013fa29"
+dependencies = [
  "critical-section",
  "embedded-io-async 0.7.0",
  "futures-core",
@@ -1382,10 +1403,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "embassy-usb"
+version = "0.6.0"
+source = "git+https://github.com/embassy-rs/embassy?rev=14cf6a68ec0bfd0ecf873f7e3dbb2eb69013fa29#14cf6a68ec0bfd0ecf873f7e3dbb2eb69013fa29"
+dependencies = [
+ "aligned",
+ "bitflags 2.13.2",
+ "embassy-futures",
+ "embassy-net-driver-channel",
+ "embassy-sync 0.8.0 (git+https://github.com/embassy-rs/embassy?rev=14cf6a68ec0bfd0ecf873f7e3dbb2eb69013fa29)",
+ "embassy-time",
+ "embassy-usb-driver",
+ "embedded-io-async 0.7.0",
+ "heapless 0.9.3",
+ "log",
+ "portable-atomic",
+]
+
+[[package]]
 name = "embassy-usb-driver"
 version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa675c5f4349b6aa0fcffc4bf9b241f18cd11b97c1f8323273fb9a5449937fbd"
+source = "git+https://github.com/embassy-rs/embassy?rev=14cf6a68ec0bfd0ecf873f7e3dbb2eb69013fa29#14cf6a68ec0bfd0ecf873f7e3dbb2eb69013fa29"
 dependencies = [
  "embedded-io-async 0.6.1",
  "embedded-io-async 0.7.0",
@@ -1398,7 +1436,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6efd0c0e0b21bcf91b475b8fa47347c1df32c9a99728ae1e1b0e6625862dfd1a"
 dependencies = [
  "critical-section",
- "embassy-sync 0.8.0",
+ "embassy-sync 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "embassy-time",
  "embassy-usb-driver",
  "portable-atomic",
@@ -1645,7 +1683,7 @@ dependencies = [
  "document-features",
  "embassy-embedded-hal",
  "embassy-futures",
- "embassy-sync 0.8.0",
+ "embassy-sync 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "embassy-usb-driver",
  "embassy-usb-synopsys-otg",
  "embedded-can",
@@ -1717,7 +1755,7 @@ version = "0.2.0"
 source = "git+https://github.com/esp-rs/esp-hal?tag=esp-hal-v1.2.2#915465df59aee91b627fe538f0b442e56c7f4fc9"
 dependencies = [
  "document-features",
- "embassy-sync 0.8.0",
+ "embassy-sync 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "esp-config",
  "esp-hal",
  "esp-metadata-generated",
@@ -1749,7 +1787,7 @@ dependencies = [
  "bt-hci-transport",
  "docsplay",
  "document-features",
- "embassy-sync 0.8.0",
+ "embassy-sync 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "embedded-io 0.6.1",
  "embedded-io 0.7.1",
  "embedded-io-async 0.6.1",
@@ -1819,7 +1857,7 @@ dependencies = [
  "defmt",
  "document-features",
  "embassy-executor",
- "embassy-sync 0.8.0",
+ "embassy-sync 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "embassy-time-driver",
  "embassy-time-queue-utils",
  "esp-alloc",
@@ -1858,7 +1896,7 @@ dependencies = [
  "document-features",
  "embassy-sync 0.6.2",
  "embassy-sync 0.7.2",
- "embassy-sync 0.8.0",
+ "embassy-sync 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "esp-metadata-generated",
  "riscv",
  "xtensa-lx",
@@ -3545,8 +3583,9 @@ dependencies = [
  "bt-hci",
  "embassy-executor",
  "embassy-futures",
- "embassy-sync 0.8.0",
+ "embassy-sync 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "embassy-time",
+ "embassy-usb",
  "embedded-io 0.7.1",
  "esp-alloc",
  "esp-backtrace",
@@ -5672,7 +5711,7 @@ checksum = "bb9fe2be24000037431b036ba244cdb1d26f40e1719548553fb43c3fc62d496b"
 dependencies = [
  "bt-hci",
  "embassy-futures",
- "embassy-sync 0.8.0",
+ "embassy-sync 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "embassy-time",
  "embedded-io 0.7.1",
  "futures",
@@ -6544,6 +6583,14 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
+
+[[package]]
+name = "xarxa-driver"
+version = "0.1.0"
+source = "git+https://github.com/embassy-rs/xarxa?rev=8f6f33b131deb9ff3290e0e01079537e1ed7b2ad#8f6f33b131deb9ff3290e0e01079537e1ed7b2ad"
+dependencies = [
+ "document-features",
+]
 
 [[package]]
 name = "xattr"

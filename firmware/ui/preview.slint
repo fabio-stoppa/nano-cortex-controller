@@ -36,6 +36,17 @@ export component Preview inherits AppWindow {
     property <[string]> demo-scenes: ["Clean", "Lead", "Ambient", "", "Crunch", "Solo", "", ""];
     scene-library-open: root.popup == "scenes";
     gig-open: root.popup == "gig";
+    usb-storage-requested => {
+        root.popup = "none";
+        root.usb-storage-open = true;
+        root.usb-storage-finished = false;
+        root.usb-storage-message = "Preview only - no USB drive is exposed. Firmware exports midi.json, scenes.json and preferences.json; safely eject to import, then restart.";
+    }
+    usb-storage-cancel => {
+        root.usb-storage-finished = true;
+        root.usb-storage-message = "Preview USB edits discarded.";
+    }
+    usb-storage-restart => { root.usb-storage-open = false; }
     changed popup => {
         root.scene-library-open = root.popup == "scenes";
         root.gig-open = root.popup == "gig";
