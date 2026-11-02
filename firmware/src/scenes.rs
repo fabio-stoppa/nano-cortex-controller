@@ -56,7 +56,18 @@ impl State {
 
 pub fn load() {
     let config = crate::settings::load_scenes_json()
-        .and_then(|json| json.as_deref().map(Config::decode).transpose())
+        .and_then(|json| {
+            json.as_deref()
+                .map(|json| {
+                    let (config, migrated) = Config::decode_with_migration(json)?;
+                    if migrated {
+                        crate::settings::save_scenes_json(&config.encode()?)?;
+                        log::warn!("Scenes migrated to six slots per preset; scenes 7-8 removed");
+                    }
+                    Ok(config)
+                })
+                .transpose()
+        })
         .map(Option::unwrap_or_default);
     match config {
         Ok(config) => {
@@ -103,7 +114,7 @@ pub fn export_json() -> Result<String, &'static str> {
 
 pub fn import_json(json: &str) -> Result<(), &'static str> {
     let config = Config::decode(json)?;
-    crate::settings::save_scenes_json(json)?;
+    crate::settings::save_scenes_json(&config.encode()?)?;
     install(config);
     Ok(())
 }
@@ -159,6 +170,9 @@ pub fn busy() -> bool {
 }
 pub fn scene() -> Option<usize> {
     with(|state| state.scene)
+}
+pub fn recalling_scene() -> Option<usize> {
+    with(|state| state.pending.as_ref().map(|pending| pending.index))
 }
 pub fn scene_dirty() -> bool {
     with(|state| state.scene_dirty)

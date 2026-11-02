@@ -77,7 +77,7 @@ fn prepare() -> Result<disk::Disk, &'static str> {
          All three files are required. Invalid files are rejected before any are saved.\r\n\
          Saves are verified individually, not atomic across files; check any error.\r\n\
          Do not format the drive. Other files are temporary and are not imported.\r\n\
-         midi.json limit: 48 KiB. scenes.json limit: 1048544 bytes (format version 3).\r\n\
+         midi.json limit: 48 KiB. scenes.json limit: 1048544 bytes (format version 4, six scenes per preset).\r\n\
          preferences.json limit: 4 KiB; format nano-controller-preferences, version 1.\r\n\
          orientation: landscape, portrait, portrait_flipped, landscape_flipped.\r\n\
          autosave: true or false. Preferences take effect after restart, not on the Nano.\r\n\

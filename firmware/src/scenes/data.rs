@@ -1,7 +1,7 @@
 use alloc::{string::String, vec::Vec};
 use serde::{Deserialize, Serialize};
 
-pub const SCENES: usize = 8;
+pub const SCENES: usize = 6;
 pub const NAME_LIMIT: usize = 16;
 // Each scenes journal slot is 1 MiB, including its 32-byte record header.
 pub const MAX_JSON: usize = 1024 * 1024 - 32;
@@ -20,6 +20,22 @@ pub struct Config {
 pub struct PresetScenes {
     pub preset: u8,
     pub scenes: [Option<Scene>; SCENES],
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredConfig {
+    format: String,
+    version: u8,
+    #[serde(default)]
+    preset_scenes: Vec<StoredPresetScenes>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredPresetScenes {
+    preset: u8,
+    scenes: Vec<Option<Scene>>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -94,7 +110,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             format: String::from("nano-scenes"),
-            version: 3,
+            version: 4,
             preset_scenes: Vec::new(),
         }
     }
@@ -122,7 +138,7 @@ fn valid_name_characters(name: &str) -> &'static str {
 
 impl Config {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.format != "nano-scenes" || self.version != 3 {
+        if self.format != "nano-scenes" || self.version != 4 {
             return Err("Unsupported scene configuration format/version");
         }
         if self.preset_scenes.len() > 64 {
@@ -157,12 +173,39 @@ impl Config {
     }
 
     pub fn decode(json: &str) -> Result<Self, &'static str> {
+        Self::decode_with_migration(json).map(|(config, _)| config)
+    }
+
+    pub fn decode_with_migration(json: &str) -> Result<(Self, bool), &'static str> {
         if json.len() > MAX_JSON {
             return Err("scenes.json exceeds the 1 MiB journal slot");
         }
-        let config: Self = serde_json::from_str(json).map_err(|_| "Invalid scenes.json")?;
+        let stored: StoredConfig = serde_json::from_str(json).map_err(|_| "Invalid scenes.json")?;
+        if stored.format != "nano-scenes" || !matches!(stored.version, 3 | 4) {
+            return Err("Unsupported scene configuration format/version");
+        }
+        let migrated = stored.version == 3;
+        let mut preset_scenes = Vec::new();
+        for mut collection in stored.preset_scenes {
+            if collection.scenes.len() != if migrated { 8 } else { SCENES } {
+                return Err("Invalid scene slot count");
+            }
+            collection.scenes.truncate(SCENES);
+            preset_scenes.push(PresetScenes {
+                preset: collection.preset,
+                scenes: collection
+                    .scenes
+                    .try_into()
+                    .map_err(|_| "Invalid scene slot count")?,
+            });
+        }
+        let config = Self {
+            format: stored.format,
+            version: 4,
+            preset_scenes,
+        };
         config.validate()?;
-        Ok(config)
+        Ok((config, migrated))
     }
 
     pub fn encode(&self) -> Result<String, &'static str> {
@@ -222,6 +265,36 @@ mod tests {
         );
         assert!(Config::decode(&old).is_err());
         assert!(Config::decode(&old.replace("\"version\":2", "\"version\":3")).is_err());
+    }
+
+    #[test]
+    fn eight_slot_records_migrate_to_six_and_reencode_as_version_four() {
+        let scenes: Vec<_> = (0..8)
+            .map(|index| {
+                Some(Scene {
+                    name: alloc::format!("Scene {}", index + 1),
+                    snapshot: snapshot(),
+                })
+            })
+            .collect();
+        let old = alloc::format!(
+            r#"{{"format":"nano-scenes","version":3,"preset_scenes":[{{"preset":1,"scenes":{}}}]}}"#,
+            serde_json::to_string(&scenes).unwrap(),
+        );
+        let (config, migrated) = Config::decode_with_migration(&old).unwrap();
+        assert!(migrated);
+        assert_eq!(config.version, 4);
+        assert_eq!(config.preset_scenes[0].scenes.len(), 6);
+        assert_eq!(
+            config.preset_scenes[0].scenes[5].as_ref().unwrap().name,
+            "Scene 6"
+        );
+        let canonical = config.encode().unwrap();
+        assert!(!canonical.contains("Scene 7"));
+        assert!(!canonical.contains("Scene 8"));
+        assert!(!Config::decode_with_migration(&canonical).unwrap().1);
+        assert!(Config::decode(&old.replace("\"version\":3", "\"version\":4")).is_err());
+        assert!(Config::decode(&canonical.replace("\"version\":4", "\"version\":3")).is_err());
     }
 
     #[test]

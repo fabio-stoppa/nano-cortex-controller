@@ -1,8 +1,8 @@
 use super::AppWindow;
 use crate::link::Cmd;
-use alloc::{format, string::String};
+use alloc::{format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 static SHOWN: AtomicU32 = AtomicU32::new(0);
 
@@ -10,6 +10,13 @@ fn outcome(result: Result<(), &'static str>) {
     if let Err(error) = result {
         crate::scenes::report(error);
     }
+}
+
+fn changed_model<T: Clone + PartialEq + 'static>(
+    current: ModelRc<T>,
+    values: Vec<T>,
+) -> Option<ModelRc<T>> {
+    (!current.iter().eq(values.iter().cloned())).then(|| ModelRc::new(VecModel::from(values)))
 }
 
 pub(super) fn refresh(app: &AppWindow, force: bool) {
@@ -47,38 +54,48 @@ pub(super) fn refresh(app: &AppWindow, force: bool) {
         }
         .into(),
     );
-    app.set_gig_scene(selected.map_or(-1, |index| index as i32));
-    app.set_gig_scene_assigned(slint::ModelRc::new(slint::VecModel::from(
+    app.set_gig_scene(
+        crate::scenes::recalling_scene()
+            .or(selected)
+            .map_or(-1, |index| index as i32),
+    );
+    if let Some(model) = changed_model(
+        app.get_gig_scene_assigned(),
         current
             .iter()
             .map(Option::is_some)
             .collect::<alloc::vec::Vec<_>>(),
-    )));
-    let labels = |scenes: alloc::vec::Vec<Option<String>>| {
-        slint::ModelRc::new(slint::VecModel::from(
-            scenes
-                .into_iter()
-                .enumerate()
-                .map(|(index, name)| {
-                    format!("{}: {}", index + 1, name.as_deref().unwrap_or("(empty)")).into()
-                })
-                .collect::<alloc::vec::Vec<slint::SharedString>>(),
-        ))
-    };
-    app.set_gig_scenes(labels(current));
+    ) {
+        app.set_gig_scene_assigned(model);
+    }
+    if let Some(model) = changed_model(
+        app.get_gig_scenes(),
+        current
+            .into_iter()
+            .map(|name| name.unwrap_or_else(|| String::from("(empty)")).into())
+            .collect(),
+    ) {
+        app.set_gig_scenes(model);
+    }
     let scenes = crate::scenes::scenes(app.get_scene_preset() as usize);
-    app.set_scene_assigned(slint::ModelRc::new(slint::VecModel::from(
+    if let Some(model) = changed_model(
+        app.get_scene_assigned(),
         scenes
             .iter()
             .map(Option::is_some)
             .collect::<alloc::vec::Vec<_>>(),
-    )));
-    app.set_scene_library_scenes(slint::ModelRc::new(slint::VecModel::from(
+    ) {
+        app.set_scene_assigned(model);
+    }
+    if let Some(model) = changed_model(
+        app.get_scene_library_scenes(),
         scenes
             .into_iter()
             .map(|name| name.unwrap_or_else(|| String::from("(empty)")).into())
             .collect::<alloc::vec::Vec<slint::SharedString>>(),
-    )));
+    ) {
+        app.set_scene_library_scenes(model);
+    }
     app.set_scene_library_scene(if app.get_scene_preset() == i32::from(preset) {
         selected.map_or(-1, |index| index as i32)
     } else {

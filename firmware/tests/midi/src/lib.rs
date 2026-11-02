@@ -228,6 +228,7 @@ mod tests {
         scenes::load();
         let original_scenes = scenes::export_json().unwrap();
         let changed_scenes = r#"{"format":"nano-scenes","version":3,"preset_scenes":[{"preset":2,"scenes":[null,null,null,null,null,null,null,null]}]}"#;
+        let migrated_scenes = scenes::data::Config::decode(changed_scenes).unwrap().encode().unwrap();
         let original_midi = midi::export_json().unwrap();
         let mut keys = midi::keys_from_json(&original_midi).unwrap();
         keys[0] = 0x900a;
@@ -260,10 +261,10 @@ mod tests {
             .unwrap_err()
             .contains("Scenes saved, but MIDI save failed"));
         assert_eq!(midi::export_json().unwrap(), original_midi);
-        assert_eq!(scenes::export_json().unwrap(), changed_scenes);
+        assert_eq!(scenes::export_json().unwrap(), migrated_scenes);
         assert_eq!(
             settings::SCENE_RECORD.lock().unwrap().as_deref(),
-            Some(changed_scenes)
+            Some(migrated_scenes.as_str())
         );
         settings::FAIL_MIDI.store(false, Ordering::Relaxed);
         assert_eq!(settings::PREFERENCE_SAVES.load(Ordering::Relaxed), 0);
@@ -435,6 +436,8 @@ mod tests {
         settings::FAIL.store(false, Ordering::Relaxed);
         scenes::recall_scene(0).unwrap();
         assert!(scenes::busy());
+        assert_eq!(scenes::recalling_scene(), Some(0));
+        assert_eq!(scenes::scene(), None, "Pending recall is not verified");
         for _ in 0..64 {
             if matches!(scenes::poll(), Some(link::Cmd::SceneRefresh)) {
                 state::GENERATION.fetch_add(1, Ordering::Relaxed);
@@ -444,6 +447,7 @@ mod tests {
             }
         }
         assert!(!scenes::busy());
+        assert_eq!(scenes::recalling_scene(), None);
         assert_eq!(scenes::scene(), Some(0));
         scenes::sound_edited();
         assert_eq!(scenes::scene(), Some(0));
@@ -455,23 +459,26 @@ mod tests {
         assert!(scenes::scene_dirty(), "Renaming saved unsaved sound edits");
         assert_eq!(scenes::scene(), Some(0));
         scenes::rename_scene(1, 0, "Clean").unwrap();
-        assert!(scenes::capture_scene(1, 7, "12345678901234567").is_err());
-        scenes::capture_scene(1, 7, "Eighth").unwrap();
-        assert_eq!(scenes::scenes(1).len(), 8);
-        assert_eq!(scenes::scene(), Some(7));
+        assert!(scenes::capture_scene(1, 5, "12345678901234567").is_err());
+        scenes::capture_scene(1, 5, "Sixth").unwrap();
+        assert_eq!(scenes::scenes(1).len(), 6);
+        assert_eq!(scenes::scene(), Some(5));
         assert!(!scenes::scene_dirty());
-        assert!(scenes::capture_scene(1, 8, "Overflow").is_err());
-        scenes::recall_scene(7).unwrap();
+        assert!(scenes::capture_scene(1, 6, "Overflow").is_err());
+        assert!(scenes::recall_scene(6).is_err());
+        scenes::recall_scene(5).unwrap();
         for _ in 0..64 {
             if matches!(scenes::poll(), Some(link::Cmd::SceneRefresh)) {
                 state::GENERATION.fetch_add(1, Ordering::Relaxed);
             }
             if !scenes::busy() { break; }
         }
-        assert_eq!(scenes::scene(), Some(7));
+        assert_eq!(scenes::scene(), Some(5));
         assert!(!scenes::busy());
         scenes::recall_scene(0).unwrap();
+        assert_eq!(scenes::recalling_scene(), Some(0));
         scenes::cancel("Test interruption");
+        assert_eq!(scenes::recalling_scene(), None);
         assert!(scenes::scene().is_none());
         state::PRESET.store(2, Ordering::Relaxed);
         scenes::poll();
@@ -480,7 +487,7 @@ mod tests {
         scenes::capture_scene(2, 0, "Other").unwrap();
         scenes::load();
         assert_eq!(scenes::scenes(1)[0].as_deref(), Some("Clean"));
-        assert_eq!(scenes::scenes(1)[7].as_deref(), Some("Eighth"));
+        assert_eq!(scenes::scenes(1)[5].as_deref(), Some("Sixth"));
         assert_eq!(scenes::scenes(2)[0].as_deref(), Some("Other"));
         scenes::clear_scene(2, 0).unwrap();
         assert!(scenes::scenes(2)[0].is_none());
@@ -1033,7 +1040,7 @@ mod tests {
             ("Select preset 49", 4),
             ("Select preset 64", 4),
             ("Select capture 25", 5),
-            ("Recall scene 8", 6),
+            ("Recall scene 6", 6),
             ("Enter gig view", 6),
             ("Noise gate", 7),
             ("Gate amount", 7),
@@ -1056,7 +1063,7 @@ mod tests {
             counts[midi::action_category(action) as usize] += 1;
             assert_eq!(midi::visible_action(row), Some(action));
         }
-        assert_eq!(counts.iter().sum::<usize>(), 259);
+        assert_eq!(counts.iter().sum::<usize>(), 257);
         assert!(counts.iter().all(|count| *count > 0));
         assert!(counts.iter().all(|count| *count <= 27), "Category too large: {counts:?}");
         assert_eq!(&counts[1..5], &[16; 4]);
@@ -1064,16 +1071,59 @@ mod tests {
     }
 
     #[test]
+    fn scene_migration_is_persisted_and_does_not_overwrite_on_save_failure() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        let old = r#"{"format":"nano-scenes","version":3,"preset_scenes":[{"preset":1,"scenes":[null,null,null,null,null,null,null,null]}]}"#;
+        *settings::SCENE_RECORD.lock().unwrap() = Some(old.into());
+        settings::FAIL.store(true, Ordering::Relaxed);
+        scenes::load();
+        assert!(scenes::export_json().is_err());
+        assert_eq!(settings::SCENE_RECORD.lock().unwrap().as_deref(), Some(old));
+        settings::FAIL.store(false, Ordering::Relaxed);
+        scenes::load();
+        let saved = settings::SCENE_RECORD.lock().unwrap().clone().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(value["version"], 4);
+        assert_eq!(value["preset_scenes"][0]["scenes"].as_array().unwrap().len(), 6);
+        assert_eq!(scenes::export_json().unwrap(), saved);
+        scenes::import_json(old).unwrap();
+        assert_eq!(settings::SCENE_RECORD.lock().unwrap().as_deref(), Some(saved.as_str()));
+    }
+
+    #[test]
+    fn retired_scene_midi_bindings_are_removed_without_renumbering_survivors() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        let old = r#"{"format":"nano-midi","version":2,"bindings":[{"action":270,"kind":"cc","channel":1,"number":6},{"action":271,"kind":"cc","channel":1,"number":7},{"action":272,"kind":"cc","channel":1,"number":8}]}"#;
+        midi::import_json(old).unwrap();
+        let saved = settings::RECORD.lock().unwrap().clone().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        let bindings = value["bindings"].as_array().unwrap();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0]["action"], 270);
+        assert_eq!(midi::keys_from_json(&saved).unwrap()[270], 0x9006);
+        assert!(midi::command(271, 127, false).is_none());
+        assert!(midi::command(272, 127, false).is_none());
+        *settings::RECORD.lock().unwrap() = Some(old.into());
+        midi::load();
+        assert_eq!(settings::RECORD.lock().unwrap().as_deref(), Some(saved.as_str()));
+    }
+
+    #[test]
     fn expanded_actions_and_endpoints_use_compact_indices() {
         let _guard = LOCK.lock().unwrap();
         reset();
-        assert_eq!(midi::ACTION_COUNT, 273);
-        assert_eq!(midi::visible_rows().len(), 259);
+        assert_eq!(midi::ACTION_COUNT, 271);
+        assert_eq!(midi::visible_rows().len(), 257);
         assert_eq!(midi::visible_action(249), Some(263));
         assert_eq!(midi::visible_action(253), Some(267));
         assert_eq!(midi::visible_action(254), Some(268));
-        assert_eq!(midi::visible_action(258), Some(272));
-        for scene in 4..8 {
+        assert_eq!(midi::visible_action(256), Some(270));
+        assert_eq!(midi::visible_action(257), None);
+        assert!(!midi::active_action(271));
+        assert!(!midi::active_action(272));
+        for scene in 4..6 {
             let index = 269 + scene - 4;
             assert_eq!(midi::action_name(index), format!("Recall scene {}", scene + 1));
             assert!(matches!(midi::command(index, 127, false), Some(link::Cmd::SceneRecall(slot)) if usize::from(slot) == scene));

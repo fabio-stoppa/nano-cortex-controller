@@ -77,21 +77,25 @@ pub fn decode(json: &str) -> Result<([u16; ACTION_COUNT], [bool; ACTION_COUNT]),
     if backup.format != "nano-midi" || !(1..=2).contains(&backup.version) {
         return Err("Unsupported MIDI backup format/version");
     }
-    if backup.bindings.len() > ACTION_COUNT {
+    // The last two historical IDs recalled scenes 7-8; other IDs are unchanged.
+    const PREVIOUS_ACTION_COUNT: usize = 273;
+    if backup.bindings.len() > PREVIOUS_ACTION_COUNT {
         return Err("Too many MIDI backup bindings");
     }
     let mut keys = [0u16; ACTION_COUNT];
     let mut zero_is_press = [false; ACTION_COUNT];
+    let mut seen = [false; PREVIOUS_ACTION_COUNT];
     for binding in backup.bindings {
-        if binding.action >= ACTION_COUNT
+        if binding.action >= PREVIOUS_ACTION_COUNT
             || !(1..=16).contains(&binding.channel)
             || binding.number > 127
         {
             return Err("MIDI backup binding out of range");
         }
-        if keys[binding.action] != 0 {
+        if seen[binding.action] {
             return Err("Duplicate MIDI backup action");
         }
+        seen[binding.action] = true;
         let kind = match binding.kind {
             Kind::Note => 0,
             Kind::Cc => 1,
@@ -104,6 +108,13 @@ pub fn decode(json: &str) -> Result<([u16; ACTION_COUNT], [bool; ACTION_COUNT]),
             && (backup.version == 1 || kind != 1 || continuous_action(binding.action))
         {
             return Err("Invalid MIDI press value");
+        }
+        if binding.action >= ACTION_COUNT {
+            log::warn!(
+                "Removed MIDI binding for retired scene action {}",
+                binding.action
+            );
+            continue;
         }
         keys[binding.action] =
             0x8000 | kind << 12 | u16::from(binding.channel - 1) << 8 | u16::from(binding.number);

@@ -1706,7 +1706,13 @@ async fn touch_loop(board: &mut Board<'_>) {
             Err(gt911::Error::NotReady) => crate::ui::frame(&mut board.framebuffer),
             Err(_) => log::info!("touch read failed"),
         }
-        let poll_ms = if crate::ui::keyboard_open() { 10 } else { 50 };
+        let poll_ms = if crate::ui::keyboard_open() {
+            10
+        } else if crate::ui::gig_open() {
+            16
+        } else {
+            50
+        };
         Timer::after(Duration::from_millis(poll_ms)).await;
     }
 }

@@ -33,7 +33,7 @@ export component Preview inherits AppWindow {
     property <int> demo-block-index: root.chain == 0 ? 0 : root.chain == 1 ? 1 : root.chain == 3 ? 2 : root.chain == 4 ? 3 : 4;
     property <int> demo-model-index: root.demo-block-models[root.demo-block-index];
     property <[string]> demo-model-names: ["Analog Delay", "Room", "Gentle chorus", "Compressor", "Parametric EQ", "Digital Delay"];
-    property <[string]> demo-scenes: ["Clean", "Lead", "Ambient", "", "Crunch", "Solo", "", ""];
+    property <[string]> demo-scenes: ["Crystal Clean", "Lead", "Ambient", "", "Wide Ambient Pad", "Solo"];
     scene-library-open: root.popup == "scenes";
     gig-open: root.popup == "gig";
     usb-storage-requested => {
@@ -61,7 +61,7 @@ export component Preview inherits AppWindow {
     scene-preset: 2;
     scene-title: "2: Summer Drive scenes";
     scene-assigned: [root.demo-scenes[0] != "", root.demo-scenes[1] != "", root.demo-scenes[2] != "", root.demo-scenes[3] != "",
-        root.demo-scenes[4] != "", root.demo-scenes[5] != "", root.demo-scenes[6] != "", root.demo-scenes[7] != ""];
+        root.demo-scenes[4] != "", root.demo-scenes[5] != ""];
     scene-library-scenes: [
         root.demo-scenes[0] == "" ? "(empty)" : root.demo-scenes[0],
         root.demo-scenes[1] == "" ? "(empty)" : root.demo-scenes[1],
@@ -69,8 +69,6 @@ export component Preview inherits AppWindow {
         root.demo-scenes[3] == "" ? "(empty)" : root.demo-scenes[3],
         root.demo-scenes[4] == "" ? "(empty)" : root.demo-scenes[4],
         root.demo-scenes[5] == "" ? "(empty)" : root.demo-scenes[5],
-        root.demo-scenes[6] == "" ? "(empty)" : root.demo-scenes[6],
-        root.demo-scenes[7] == "" ? "(empty)" : root.demo-scenes[7],
     ];
     scene-library-scene: 0;
     scene-label: root.scene-library-scene >= 0 ? root.demo-scenes[root.scene-library-scene] + (root.scene-dirty ? " *" : "") : "Scene";

@@ -90,6 +90,10 @@ pub fn keyboard_open() -> bool {
     state().as_ref().is_some_and(|ui| ui.app.get_kbd_open())
 }
 
+pub fn gig_open() -> bool {
+    state().as_ref().is_some_and(|ui| ui.app.get_gig_open())
+}
+
 pub fn pointer(framebuffer: &mut Framebuffer, point: Option<(u16, u16)>) {
     ensure();
     let ui = state().as_mut().unwrap();
@@ -1009,6 +1013,9 @@ pub fn library_updated() {
 
 fn redraw(framebuffer: &mut Framebuffer) {
     let ui = state().as_mut().unwrap();
+    if !ui.app.get_usb_storage_open() {
+        scenes_ui::refresh(&ui.app, false);
+    }
     let layout_changed = apply_layout(ui);
     slint::platform::update_timers_and_animations();
     // The old layout's pixels are still in the framebuffer, and a rotation
@@ -1111,9 +1118,6 @@ pub fn refresh_midi() {
         .is_some_and(|ui| ui.app.get_usb_storage_open())
     {
         return;
-    }
-    if let Some(ui) = state().as_ref() {
-        scenes_ui::refresh(&ui.app, false);
     }
     if let Some(ui) = state().as_ref() {
         if ui.app.get_autosave_enabled() {

@@ -203,6 +203,9 @@ component ChainTab inherits Rectangle {
 
 component ChainRail inherits Rectangle {
     in property <bool> horizontal: false;
+    in property <bool> two-rows: false;
+    in property <length> horizontal-spacing: 4px;
+    in property <length> horizontal-inset: 0px;
     in property <int> page;
     in property <int> chain;
     in property <string> tab-0;
@@ -291,8 +294,82 @@ component ChainRail inherits Rectangle {
         }
     }
 
-    if root.horizontal: HorizontalLayout {
-        spacing: 4px;
+    if root.horizontal && root.two-rows: VerticalLayout {
+        spacing: 8px;
+        padding-left: root.horizontal-inset;
+        padding-right: root.horizontal-inset;
+        HorizontalLayout {
+            spacing: root.horizontal-spacing;
+            ChainTab {
+                label: tab-0;
+                accent: FxPalette.category-color(root.category-0);
+                active: on-0;
+                selected: (root.page == 0 || root.page == 1) && root.chain == 0;
+                horizontal-stretch: 1;
+                tapped => { root.chain-tapped(0); }
+                held => { root.chain-held(0); }
+                double-tapped => { root.chain-double(0); }
+            }
+            ChainTab {
+                label: tab-1;
+                accent: FxPalette.category-color(root.category-1);
+                active: on-1;
+                selected: (root.page == 0 || root.page == 1) && root.chain == 1;
+                horizontal-stretch: 1;
+                tapped => { root.chain-tapped(1); }
+                held => { root.chain-held(1); }
+                double-tapped => { root.chain-double(1); }
+            }
+            ChainTab {
+                label: "AMP";
+                accent: #f8281a;
+                active: true;
+                selected: (root.page == 0 || root.page == 1) && root.chain == 2;
+                horizontal-stretch: 1;
+                tapped => { root.chain-tapped(2); }
+                held => { root.chain-held(2); }
+                double-tapped => { root.chain-double(2); }
+            }
+        }
+        HorizontalLayout {
+            spacing: root.horizontal-spacing;
+            ChainTab {
+                label: tab-3;
+                accent: FxPalette.category-color(root.category-3);
+                active: on-3;
+                selected: (root.page == 0 || root.page == 1) && root.chain == 3;
+                horizontal-stretch: 1;
+                tapped => { root.chain-tapped(3); }
+                held => { root.chain-held(3); }
+                double-tapped => { root.chain-double(3); }
+            }
+            ChainTab {
+                label: tab-4;
+                accent: FxPalette.category-color(root.category-4);
+                active: on-4;
+                selected: (root.page == 0 || root.page == 1) && root.chain == 4;
+                horizontal-stretch: 1;
+                tapped => { root.chain-tapped(4); }
+                held => { root.chain-held(4); }
+                double-tapped => { root.chain-double(4); }
+            }
+            ChainTab {
+                label: tab-5;
+                accent: FxPalette.category-color(root.category-5);
+                active: on-5;
+                selected: (root.page == 0 || root.page == 1) && root.chain == 5;
+                horizontal-stretch: 1;
+                tapped => { root.chain-tapped(5); }
+                held => { root.chain-held(5); }
+                double-tapped => { root.chain-double(5); }
+            }
+        }
+    }
+
+    if root.horizontal && !root.two-rows: HorizontalLayout {
+        spacing: root.horizontal-spacing;
+        padding-left: root.horizontal-inset;
+        padding-right: root.horizontal-inset;
         ChainTab {
             label: tab-0;
             accent: FxPalette.category-color(root.category-0);
@@ -389,8 +466,8 @@ component HeaderButton inherits Rectangle {
         vertical-alignment: center;
     }
     if root.marked: HorizontalLayout {
-        width: min(max(0px, root.width - 16px), btn-text.preferred-width + 12px);
-        x: (root.width - self.width) / 2;
+        width: min(max(0px, root.width - 16px), btn-text.preferred-width + root.text-size * 0.75 + 4px);
+        x: 0px;
         height: root.height;
         spacing: 4px;
         Text {
@@ -398,16 +475,17 @@ component HeaderButton inherits Rectangle {
             min-width: 0px;
             horizontal-stretch: 1;
             overflow: elide;
-            color: #ffffff;
-            font-size: 16px;
+            color: root.choice ? (root.hot ? #ffffff : #666666) : (root.light ? #000000 : (root.hot ? #ffffff : #e0e0e0));
+            font-size: root.text-size;
             font-weight: 700;
+            horizontal-alignment: left;
             vertical-alignment: center;
         }
         Text {
-            width: 8px;
+            width: root.text-size * 0.75;
             text: "*";
-            color: #ffffff;
-            font-size: 16px;
+            color: root.choice ? (root.hot ? #ffffff : #666666) : (root.light ? #000000 : (root.hot ? #ffffff : #e0e0e0));
+            font-size: root.text-size;
             font-weight: 700;
             vertical-alignment: center;
         }
@@ -562,13 +640,15 @@ component VCenter inherits VerticalLayout {
 // children (e.g. tabs) on the right, and a separator drawn over the bottom edge.
 component PopupHeader inherits Rectangle {
     in property <string> title;
+    in property <string> subtitle;
     in property <length> right-reserved-width: 0px;
     callback closed();
     height: 58px;
     HorizontalLayout {
+        width: root.width;
+        height: root.height;
         spacing: 12px;
         padding-right: root.right-reserved-width;
-        alignment: start;
         // Pinned to the top so its gap to the popup edge equals the side padding.
         VerticalLayout {
             width: 42px;
@@ -588,20 +668,29 @@ component PopupHeader inherits Rectangle {
                 TouchArea { clicked => { root.closed(); } }
             }
         }
-        // Same 48px band as the close button, so both share a vertical center.
+        // Title and optional subtitle share the close button's 48px band.
         VerticalLayout {
-            min-width: 0px;
+            width: max(0px, root.width - root.right-reserved-width - 54px);
             horizontal-stretch: 1;
             alignment: start;
             title-text := Text {
-                height: 48px;
-                min-width: 0px;
+                width: parent.width;
+                height: root.subtitle == "" ? 48px : 36px;
                 text: root.title;
                 overflow: elide;
                 color: #e0e0e0;
                 font-size: 26px;
                 font-weight: 700;
                 vertical-alignment: center;
+            }
+            if root.subtitle != "": Text {
+                width: parent.width;
+                height: 18px;
+                text: root.subtitle;
+                color: #909090;
+                font-size: 14px;
+                font-weight: 700;
+                overflow: elide;
             }
         }
     }
@@ -1021,7 +1110,9 @@ component TempoReadout inherits Rectangle {
     in property <int> bpm-value: 0;
     in property <bool> tempo-global: true;
     in property <bool> animate-beat: true;
+    in property <bool> stacked: false;
     in property <length> text-size: 21px;
+    in property <bool> right-aligned: false;
     property <bool> beat-on: false;
     callback tapped();
     background: transparent;
@@ -1031,20 +1122,20 @@ component TempoReadout inherits Rectangle {
         triggered => { root.beat-on = true; fade.running = true; }
     }
     fade := Timer {
-        interval: 120ms;
+        interval: 160ms;
         running: false;
         triggered => { root.beat-on = false; self.running = false; }
     }
     TouchArea {
         clicked => { root.tapped(); }
         HorizontalLayout {
-            alignment: start;
+            alignment: root.right-aligned ? end : start;
             spacing: 6px;
             VCenter { Rectangle {
                 width: 20px;
                 height: 20px;
                 property <color> tint: #ffffff;
-                opacity: root.beat-on || root.bpm-value == 0 ? 1 : 0.8;
+                opacity: root.beat-on || root.bpm-value == 0 || !root.animate-beat ? 1 : 0.2;
                 if root.tempo-global: Rectangle {
                     border-width: 2.5px;
                     border-color: parent.tint;
@@ -1066,12 +1157,30 @@ component TempoReadout inherits Rectangle {
                     border-radius: 6px;
                 }
             } }
-            Text {
+            if !root.stacked: Text {
                 text: root.bpm-text;
                 color: #ffffff;
                 font-size: root.text-size;
                 font-weight: 800;
                 vertical-alignment: center;
+            }
+            if root.stacked: VerticalLayout {
+                spacing: 0px;
+                alignment: center;
+                Text {
+                    text: root.bpm-value > 0 ? "" + root.bpm-value : "-";
+                    color: #ffffff;
+                    font-size: root.text-size;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "BPM";
+                    color: #ffffff;
+                    font-size: 12px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                }
             }
         }
     }
@@ -1096,7 +1205,68 @@ component HeaderBar inherits Rectangle {
     callback scene-library-tapped();
     callback scene-held();
     background: transparent;
-    HorizontalLayout {
+    if root.portrait: Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        Rectangle {
+            x: 2px;
+            y: 0px;
+            width: max(0px, parent.width - 132px);
+            height: parent.height;
+            HeaderButton {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: 28px;
+                min-width: 0px;
+                preferred-width: 0px;
+                background: transparent;
+                label: root.preset;
+                text-size: 24px;
+                text-alignment: left;
+                marked: root.save-dirty;
+                tapped => { root.preset-list-tapped(); }
+            }
+            HeaderButton {
+                x: 0px;
+                y: 28px;
+                width: parent.width;
+                height: 20px;
+                min-width: 0px;
+                preferred-width: 0px;
+                background: transparent;
+                label: root.scene-label;
+                text-size: 15px;
+                text-alignment: left;
+                enabled: root.scene-enabled;
+                hold-enabled: true;
+                held => { root.scene-held(); }
+                tapped => { root.scene-library-tapped(); }
+            }
+        }
+        TempoReadout {
+            x: parent.width - 122px;
+            y: 2px;
+            width: 78px;
+            height: 44px;
+            bpm-text: root.bpm-text;
+            bpm-value: root.bpm-value;
+            tempo-global: root.tempo-global;
+            animate-beat: root.animate-beat;
+            text-size: 18px;
+            right-aligned: true;
+            stacked: true;
+            tapped => { root.tempo-tapped(); }
+        }
+        MenuButton {
+            x: parent.width - self.width;
+            y: 6px;
+            tapped => { root.settings-tapped(); }
+        }
+    }
+    if !root.portrait: HorizontalLayout {
         padding-left: 8px;
         padding-right: 0px;
         spacing: 8px;
@@ -1405,15 +1575,6 @@ component AmpPanel inherits Rectangle {
                 amount: gate-amnt-amount;
                 changed(v) => { root.slider-moved(6, v); }
             }
-            ParamCell {
-                height: root.row-h;
-                horizontal-stretch: 1;
-                slider: true;
-                name: "Gain";
-                value: gain-text;
-                amount: gain-amount;
-                changed(v) => { root.slider-moved(0, v); }
-            }
         }
         if root.portrait: HorizontalLayout {
             width: 100%;
@@ -1441,16 +1602,25 @@ component AmpPanel inherits Rectangle {
                 height: root.row-h;
                 horizontal-stretch: 1;
                 slider: true;
-                name: "Bass";
-                value: bass-text;
-                amount: bass-amount;
-                changed(v) => { root.slider-moved(2, v); }
+                name: "Gain";
+                value: gain-text;
+                amount: gain-amount;
+                changed(v) => { root.slider-moved(0, v); }
             }
         }
         if root.portrait: HorizontalLayout {
             width: 100%;
             height: root.row-h;
             spacing: 8px;
+            ParamCell {
+                height: root.row-h;
+                horizontal-stretch: 1;
+                slider: true;
+                name: "Bass";
+                value: bass-text;
+                amount: bass-amount;
+                changed(v) => { root.slider-moved(2, v); }
+            }
             ParamCell {
                 height: root.row-h;
                 horizontal-stretch: 1;
@@ -1468,11 +1638,6 @@ component AmpPanel inherits Rectangle {
                 value: treble-text;
                 amount: treble-amount;
                 changed(v) => { root.slider-moved(4, v); }
-            }
-            Rectangle {
-                min-width: 0px;
-                preferred-width: 0px;
-                horizontal-stretch: 1;
             }
         }
         HorizontalLayout {
@@ -1520,6 +1685,7 @@ component FxParamCell inherits ParamCell {
 }
 
 component FxPanel inherits Rectangle {
+    in property <bool> portrait: false;
     in property <string> n0;
     in property <string> v0;
     in property <float> a0;
@@ -1597,7 +1763,20 @@ component FxPanel inherits Rectangle {
     callback model-list-tapped();
     callback model-stepped(int);
     callback param-changed(int, float);
-    property <length> cell-width: (root.width - 4px - 24px) / 4;
+    property <int> columns: root.portrait ? 3 : 4;
+    property <[string]> names: [root.n0, root.n1, root.n2, root.n3, root.n4, root.n5,
+        root.n6, root.n7, root.n8, root.n9, root.n10, root.n11, root.n12, root.n13,
+        root.n14, root.n15, root.n16, root.n17, root.n18, root.n19, root.n20,
+        root.n21, root.n22, root.n23];
+    property <[string]> values: [root.v0, root.v1, root.v2, root.v3, root.v4, root.v5,
+        root.v6, root.v7, root.v8, root.v9, root.v10, root.v11, root.v12, root.v13,
+        root.v14, root.v15, root.v16, root.v17, root.v18, root.v19, root.v20,
+        root.v21, root.v22, root.v23];
+    property <[float]> amounts: [root.a0, root.a1, root.a2, root.a3, root.a4, root.a5,
+        root.a6, root.a7, root.a8, root.a9, root.a10, root.a11, root.a12, root.a13,
+        root.a14, root.a15, root.a16, root.a17, root.a18, root.a19, root.a20,
+        root.a21, root.a22, root.a23];
+    property <length> cell-width: (root.width - 4px - (root.columns - 1) * 8px) / root.columns;
     background: transparent;
     clip: true;
     Flickable {
@@ -1611,130 +1790,25 @@ component FxPanel inherits Rectangle {
             padding: 2px;
             padding-top: 0px;
             spacing: 8px;
-            if root.n0 != "-" || root.n1 != "-" || root.n2 != "-" || root.n3 != "-": HorizontalLayout {
-                width: 100%;
+            for row in 24 / root.columns: HorizontalLayout {
+                property <int> first: row * root.columns;
+                property <bool> populated: root.names[self.first] != "-" || root.names[self.first + 1] != "-"
+                    || root.names[self.first + 2] != "-" || (root.columns == 4 && root.names[self.first + 3] != "-");
+                height: self.populated ? 100px : 0px;
+                visible: self.populated;
                 spacing: 8px;
                 alignment: start;
-                if root.n0 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n0; value: root.v0; amount: root.a0;
-                    changed(v) => { root.param-changed(0, v); }
-                }
-                if root.n1 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n1; value: root.v1; amount: root.a1;
-                    changed(v) => { root.param-changed(1, v); }
-                }
-                if root.n2 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n2; value: root.v2; amount: root.a2;
-                    changed(v) => { root.param-changed(2, v); }
-                }
-                if root.n3 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n3; value: root.v3; amount: root.a3;
-                    changed(v) => { root.param-changed(3, v); }
-                }
-            }
-            if root.n4 != "-" || root.n5 != "-" || root.n6 != "-" || root.n7 != "-": HorizontalLayout {
-                width: 100%;
-                spacing: 8px;
-                alignment: start;
-                if root.n4 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n4; value: root.v4; amount: root.a4;
-                    changed(v) => { root.param-changed(4, v); }
-                }
-                if root.n5 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n5; value: root.v5; amount: root.a5;
-                    changed(v) => { root.param-changed(5, v); }
-                }
-                if root.n6 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n6; value: root.v6; amount: root.a6;
-                    changed(v) => { root.param-changed(6, v); }
-                }
-                if root.n7 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n7; value: root.v7; amount: root.a7;
-                    changed(v) => { root.param-changed(7, v); }
-                }
-            }
-            if root.n8 != "-" || root.n9 != "-" || root.n10 != "-" || root.n11 != "-": HorizontalLayout {
-                width: 100%;
-                spacing: 8px;
-                alignment: start;
-                if root.n8 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n8; value: root.v8; amount: root.a8;
-                    changed(v) => { root.param-changed(8, v); }
-                }
-                if root.n9 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n9; value: root.v9; amount: root.a9;
-                    changed(v) => { root.param-changed(9, v); }
-                }
-                if root.n10 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n10; value: root.v10; amount: root.a10;
-                    changed(v) => { root.param-changed(10, v); }
-                }
-                if root.n11 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n11; value: root.v11; amount: root.a11;
-                    changed(v) => { root.param-changed(11, v); }
-                }
-            }
-            if root.n12 != "-" || root.n13 != "-" || root.n14 != "-" || root.n15 != "-": HorizontalLayout {
-                width: 100%;
-                spacing: 8px;
-                alignment: start;
-                if root.n12 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n12; value: root.v12; amount: root.a12;
-                    changed(v) => { root.param-changed(12, v); }
-                }
-                if root.n13 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n13; value: root.v13; amount: root.a13;
-                    changed(v) => { root.param-changed(13, v); }
-                }
-                if root.n14 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n14; value: root.v14; amount: root.a14;
-                    changed(v) => { root.param-changed(14, v); }
-                }
-                if root.n15 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n15; value: root.v15; amount: root.a15;
-                    changed(v) => { root.param-changed(15, v); }
-                }
-            }
-            if root.n16 != "-" || root.n17 != "-" || root.n18 != "-" || root.n19 != "-": HorizontalLayout {
-                width: 100%;
-                spacing: 8px;
-                alignment: start;
-                if root.n16 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n16; value: root.v16; amount: root.a16;
-                    changed(v) => { root.param-changed(16, v); }
-                }
-                if root.n17 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n17; value: root.v17; amount: root.a17;
-                    changed(v) => { root.param-changed(17, v); }
-                }
-                if root.n18 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n18; value: root.v18; amount: root.a18;
-                    changed(v) => { root.param-changed(18, v); }
-                }
-                if root.n19 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n19; value: root.v19; amount: root.a19;
-                    changed(v) => { root.param-changed(19, v); }
-                }
-            }
-            if root.n20 != "-" || root.n21 != "-" || root.n22 != "-" || root.n23 != "-": HorizontalLayout {
-                width: 100%;
-                spacing: 8px;
-                alignment: start;
-                if root.n20 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n20; value: root.v20; amount: root.a20;
-                    changed(v) => { root.param-changed(20, v); }
-                }
-                if root.n21 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n21; value: root.v21; amount: root.a21;
-                    changed(v) => { root.param-changed(21, v); }
-                }
-                if root.n22 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n22; value: root.v22; amount: root.a22;
-                    changed(v) => { root.param-changed(22, v); }
-                }
-                if root.n23 != "-": FxParamCell {
-                    horizontal-stretch: 0; width: root.cell-width; slider: true; name: root.n23; value: root.v23; amount: root.a23;
-                    changed(v) => { root.param-changed(23, v); }
+                for column in root.columns: FxParamCell {
+                    property <int> index: row * root.columns + column;
+                    visible: root.names[self.index] != "-";
+                    width: self.visible ? root.cell-width : 0px;
+                    height: 100px;
+                    horizontal-stretch: 0;
+                    slider: true;
+                    name: root.names[self.index];
+                    value: root.values[self.index];
+                    amount: root.amounts[self.index];
+                    changed(v) => { root.param-changed(self.index, v); }
                 }
             }
         }
@@ -1742,6 +1816,7 @@ component FxPanel inherits Rectangle {
 }
 
 component TunerPanel inherits Rectangle {
+    in property <bool> portrait: false;
     in property <string> note;
     in property <string> cents;
     in property <string> reference;
@@ -1821,7 +1896,7 @@ component TunerPanel inherits Rectangle {
 
         Rectangle {
             x: 0px;
-            width: 200px;
+            width: root.portrait ? 140px : 200px;
             height: 56px;
             y: (parent.height - self.height) / 2;
             Rectangle {
@@ -1855,9 +1930,9 @@ component TunerPanel inherits Rectangle {
         }
 
         ParamCell {
-            x: (parent.width - self.width) / 2;
+            x: root.portrait ? 148px : (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: 300px;
+            width: root.portrait ? max(0px, parent.width - 252px) : 300px;
             height: 56px;
             slider: true;
             bare: true;
@@ -1872,7 +1947,7 @@ component TunerPanel inherits Rectangle {
         Rectangle {
             x: parent.width - self.width;
             y: (parent.height - self.height) / 2;
-            width: 140px;
+            width: root.portrait ? 96px : 140px;
             height: 56px;
             background: #000000;
             border-radius: Radius.default;
@@ -2592,27 +2667,65 @@ component ConnectingOverlay inherits Rectangle {
 }
 
 component GigButton inherits Rectangle {
+    in property <int> number;
     in property <string> label;
     in property <bool> highlight: false;
     in property <bool> enabled: true;
+    in property <bool> busy: false;
     callback tapped();
-    background: !root.enabled ? #202020 : root.highlight ? #1a3af8 : #303030;
+    background: root.highlight ? #1a3af8 : !root.enabled ? #202020 : #303030;
     border-radius: Radius.default;
     Text {
-        x: 10px;
-        y: 8px;
-        width: max(0px, root.width - 20px);
-        height: max(0px, root.height - 16px);
+        x: 14px;
+        y: 10px;
+        width: max(0px, root.width - 28px);
+        height: 30px;
+        text: "0" + root.number;
+        color: #ffffff70;
+        font-size: 24px;
+        font-weight: 700;
+        horizontal-alignment: left;
+        vertical-alignment: top;
+    }
+    Text {
+        x: 14px;
+        y: 42px;
+        width: max(0px, root.width - 28px);
+        height: max(0px, root.height - 52px);
         text: root.label;
         color: root.enabled ? #ffffff : #777777;
-        font-size: 22px;
+        font-size: 30px;
         font-weight: 700;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+        horizontal-alignment: left;
+        vertical-alignment: top;
         wrap: word-wrap;
         overflow: elide;
     }
-    TouchArea { enabled: root.enabled; clicked => { root.tapped(); } }
+    TouchArea { enabled: root.enabled && !root.busy; clicked => { root.tapped(); } }
+}
+
+component GigHeader inherits PopupHeader {
+    in property <bool> portrait;
+    in property <string> capture-value;
+    in property <string> cab-value;
+    in property <string> bpm-text;
+    in property <int> bpm-value;
+    in property <bool> tempo-global;
+    callback tempo();
+    subtitle: root.capture-value + " / " + root.cab-value;
+    right-reserved-width: root.portrait ? 90px : 154px;
+    TempoReadout {
+        x: parent.width - self.width;
+        y: 3px;
+        width: root.portrait ? 78px : 142px;
+        height: 42px;
+        bpm-text: root.bpm-text;
+        bpm-value: root.bpm-value;
+        tempo-global: root.tempo-global;
+        right-aligned: true;
+        stacked: root.portrait;
+        tapped => { root.tempo(); }
+    }
 }
 
 component GigPanel inherits Rectangle {
@@ -2620,12 +2733,21 @@ component GigPanel inherits Rectangle {
     in property <bool> connected;
     in property <bool> busy;
     in property <string> preset;
-    in property <string> notice;
+    in property <string> bpm-text;
+    in property <int> bpm-value;
+    in property <bool> tempo-global;
+    in property <[string]> fx-labels;
+    in property <[int]> fx-categories;
+    in property <[bool]> fx-on;
+    in property <string> capture-value;
+    in property <string> cab-value;
     in property <[string]> scenes;
     in property <[bool]> scene-assigned;
     in property <int> scene: -1;
     callback scene-recall(int);
-    callback tuner();
+    callback chain-tapped(int);
+    callback chain-held(int);
+    callback chain-double(int);
     callback tempo();
     callback editor();
     background: Surface.background;
@@ -2633,34 +2755,67 @@ component GigPanel inherits Rectangle {
     VerticalLayout {
         padding: Surface.screen-margin;
         spacing: 8px;
-        HorizontalLayout {
-            height: 56px;
-            spacing: 8px;
-            Text { text: "Gig"; font-size: 24px; font-weight: 700; color: #ffffff; horizontal-stretch: 1; }
-            GigButton { width: 88px; label: "Editor"; tapped => { root.editor(); } }
+        GigHeader {
+            width: parent.width - 2 * Surface.screen-margin;
+            portrait: root.portrait;
+            title: root.preset;
+            capture-value: root.capture-value;
+            cab-value: root.cab-value;
+            bpm-text: root.bpm-text;
+            bpm-value: root.bpm-value;
+            tempo-global: root.tempo-global;
+            closed => { root.editor(); }
+            tempo => { root.tempo(); }
         }
-        Text { text: root.preset; min-width: 0px; preferred-width: 0px; font-size: 22px; font-weight: 700; color: #ffffff; overflow: elide; }
-        Text { text: root.connected ? root.notice : "Disconnected - connect the Nano to play"; color: #909090; font-size: 14px; wrap: word-wrap; }
         scene-grid := Rectangle {
             min-height: 160px;
             vertical-stretch: 1;
             background: transparent;
             for label[index] in root.scenes: GigButton {
-                width: root.portrait ? (scene-grid.width - 8px) / 2 : (scene-grid.width - 24px) / 4;
-                height: (scene-grid.height - (ceil(root.scenes.length / (root.portrait ? 2 : 4)) - 1) * 8px) / max(1, ceil(root.scenes.length / (root.portrait ? 2 : 4)));
-                x: mod(index, root.portrait ? 2 : 4) * (self.width + 8px);
-                y: floor(index / (root.portrait ? 2 : 4)) * (self.height + 8px);
+                width: root.portrait ? (scene-grid.width - 8px) / 2 : (scene-grid.width - 16px) / 3;
+                height: (scene-grid.height - (ceil(root.scenes.length / (root.portrait ? 2 : 3)) - 1) * 8px) / max(1, ceil(root.scenes.length / (root.portrait ? 2 : 3)));
+                x: mod(index, root.portrait ? 2 : 3) * (self.width + 8px);
+                y: floor(index / (root.portrait ? 2 : 3)) * (self.height + 8px);
                 label: label;
+                number: index + 1;
                 highlight: root.scene == index;
-                enabled: root.connected && !root.busy && root.scene-assigned[index];
+                enabled: root.connected && root.scene-assigned[index];
+                busy: root.busy;
                 tapped => { root.scene-recall(index); }
             }
         }
-        HorizontalLayout {
-            height: 60px;
-            spacing: 8px;
-            GigButton { label: "Tuner"; enabled: root.connected && !root.busy; tapped => { root.tuner(); } }
-            GigButton { label: "Tap tempo"; enabled: root.connected && !root.busy; tapped => { root.tempo(); } }
+        ChainRail {
+            height: root.portrait ? 88px : 60px;
+            horizontal: true;
+            two-rows: root.portrait;
+            horizontal-spacing: 8px;
+            horizontal-inset: root.portrait ? 2px : 0px;
+            page: -1;
+            chain: -1;
+            tab-0: root.fx-labels[0];
+            tab-1: root.fx-labels[1];
+            tab-3: root.fx-labels[3];
+            tab-4: root.fx-labels[4];
+            tab-5: root.fx-labels[5];
+            category-0: root.fx-categories[0];
+            category-1: root.fx-categories[1];
+            category-3: root.fx-categories[3];
+            category-4: root.fx-categories[4];
+            category-5: root.fx-categories[5];
+            on-0: root.fx-on[0];
+            on-1: root.fx-on[1];
+            on-3: root.fx-on[3];
+            on-4: root.fx-on[4];
+            on-5: root.fx-on[5];
+            chain-tapped(index) => {
+                if root.connected && !root.busy { root.chain-tapped(index); }
+            }
+            chain-held(index) => {
+                if root.connected && !root.busy { root.chain-held(index); }
+            }
+            chain-double(index) => {
+                if root.connected && !root.busy { root.chain-double(index); }
+            }
         }
     }
 }
@@ -3397,7 +3552,7 @@ export component AppWindow inherits Window {
     // The software renderer draws everything under an overlay, so hide what an
     // opaque or full-screen layer covers.
     // Confirmations are cards over whatever is open, so they do not hide it.
-    property <bool> popup-open: root.kbd-open || root.model-open || root.settings-open || root.usb-storage-open || root.scene-library-open || (root.gig-open && root.page != 2);
+    property <bool> popup-open: root.kbd-open || root.model-open || root.settings-open || root.usb-storage-open || root.scene-library-open || root.gig-open;
     property <bool> main-covered: root.popup-open || root.connecting;
     changed main-covered => { root.header-menu-open = false; root.header-scene-menu-open = false; }
     changed portrait => { root.header-menu-open = false; root.header-scene-menu-open = false; }
@@ -3417,6 +3572,7 @@ export component AppWindow inherits Window {
                 tempo-active: root.tempo-active;
                 tempo-global: root.tempo-global;
                 bpm-value: root.tempo-bpm-value;
+                animate-beat: !root.main-covered;
                 tempo-tapped => { root.tempo-tapped(); }
                 preset-list-tapped => { root.preset-list-tapped(); }
                 settings-tapped => {
@@ -3506,6 +3662,7 @@ export component AppWindow inherits Window {
                         gate-tapped => { root.gate-tapped(); }
                     }
                     if root.page == 1: FxPanel {
+                        portrait: root.portrait;
                         model-name: root.model;
                         model-enabled: root.model-enabled;
                         model-list-tapped => { root.model-list-tapped(); }
@@ -3587,6 +3744,7 @@ export component AppWindow inherits Window {
                         gate-tapped => { root.gate-tapped(); }
                     }
                     if root.page == 1: FxPanel {
+                        portrait: root.portrait;
                         model-name: root.model;
                         model-enabled: root.model-enabled;
                         model-list-tapped => { root.model-list-tapped(); }
@@ -3619,8 +3777,11 @@ export component AppWindow inherits Window {
                     }
                 }
                 ChainRail {
-                    height: 52px;
+                    height: root.portrait ? 88px : 60px;
                     horizontal: true;
+                    two-rows: root.portrait;
+                    horizontal-spacing: 8px;
+                    horizontal-inset: 2px;
                     page: root.page;
                     chain: root.chain;
                     tab-0: root.tab-0;
@@ -3644,6 +3805,7 @@ export component AppWindow inherits Window {
                 }
             }
             if root.page == 2: TunerPanel {
+                portrait: root.portrait;
                 vertical-stretch: 1;
                 note: root.tuner-note;
                 cents: root.tuner-cents;
@@ -3836,16 +3998,74 @@ export component AppWindow inherits Window {
         closed => { root.scene-library-open = false; }
     }
 
+    if root.gig-open && root.page == 2: Rectangle {
+        background: Surface.background;
+        TouchArea {}
+        VerticalLayout {
+            padding: Surface.screen-margin;
+            GigHeader {
+                width: parent.width - 2 * Surface.screen-margin;
+                portrait: root.portrait;
+                title: root.preset;
+                capture-value: root.capture-value;
+                cab-value: root.cab-value;
+                bpm-text: root.bpm-text;
+                bpm-value: root.tempo-bpm-value;
+                tempo-global: root.tempo-global;
+                tempo => { root.tempo-tapped(); }
+                closed => {
+                    root.tuner-tapped();
+                    root.gig-mode-set(false);
+                }
+            }
+            TunerPanel {
+                portrait: root.portrait;
+                vertical-stretch: 1;
+                note: root.tuner-note;
+                cents: root.tuner-cents;
+                reference: root.tuner-reference;
+                cents-pos: root.tuner-pos;
+                has-pitch: root.tuner-has-pitch;
+                in-tune: root.tuner-in-tune;
+                active: root.tuner-active;
+                muted: root.tuner-muted;
+                reference-hz: root.tuner-reference-hz;
+                tuner-tapped => { root.tuner-tapped(); }
+                reference-set(hz) => { root.tuner-reference-set(hz); }
+                mute-tapped => { root.tuner-mute-tapped(); }
+            }
+        }
+    }
+
     if root.gig-open && root.page != 2: GigPanel {
         width: root.width; height: root.height;
         portrait: root.portrait;
         connected: !root.connecting;
         busy: root.scene-library-busy;
         preset: root.preset;
-        notice: root.scene-library-notice;
+        bpm-text: root.bpm-text;
+        bpm-value: root.tempo-bpm-value;
+        tempo-global: root.tempo-global;
+        fx-labels: [root.tab-0, root.tab-1, "AMP", root.tab-3, root.tab-4, root.tab-5];
+        fx-categories: [root.category-0, root.category-1, 0, root.category-3, root.category-4, root.category-5];
+        fx-on: [root.on-0, root.on-1, true, root.on-3, root.on-4, root.on-5];
+        capture-value: root.capture-value;
+        cab-value: root.cab-value;
         scenes: root.gig-scenes; scene-assigned: root.gig-scene-assigned; scene: root.gig-scene;
         scene-recall(index) => { root.gig-scene-recall(index); }
-        tuner => { root.tuner-tapped(); }
+        chain-tapped(index) => {
+            if index == 2 {
+                root.gig-mode-set(false);
+                root.chain-tapped(index);
+            } else {
+                root.chain-held(index);
+            }
+        }
+        chain-held(index) => { root.chain-held(index); }
+        chain-double(index) => {
+            root.gig-mode-set(false);
+            root.chain-double(index);
+        }
         tempo => { root.tempo-tapped(); }
         editor => { root.gig-mode-set(false); }
     }

@@ -74,7 +74,7 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - **Pedals page** (header three-dot menu → Pedals) — General controls the EXP/MIDI jack and shows expression status; Sweeps edits per-preset heel/toe assignments; Bypass edits expression switch assignments; Calibration guides pedal calibration. Audio meters and USB playback level remain in Settings → Audio.
 - **MIDI learn page** (header three-dot menu → MIDI) — 14 horizontally scrollable tabs: Controls; Presets 1–16, 17–32, 33–48, 49–64; Captures; Scenes/Gig; Amp/Cab; FX switches/models; and a parameter tab for each of Pre FX 1, Pre FX 2, Post FX 1, Post FX 2, Post FX 3. Categories contain at most 27 actions; each FX parameter tab has 24. Tap Learn on an action, then send a BLE-MIDI note, CC, or program change. Learn the same message on several rows to control multiple targets; Clear removes only that row's binding. Changing tabs or closing the page cancels learning. Bulk clearing lives in Settings → General. Buttons cover FX block on/off, gate, tuner, tap tempo, preset/capture step, direct preset 1–64 and capture 1–25 selection, FX model step, save, and explicit input/output/tuner mute/unmute. CC-only parameters cover all five amp controls, capture volume, cab level/high-pass/low-pass, gate amount, USB playback level, and up to 24 displayed knobs per FX block (only knobs present on the current model apply). For discrete CC actions, learn records whether 0 or a nonzero value is the press; the opposite value is treated as release. CC values still set continuous parameters across their full range. Repeated CC values for a pending parameter are coalesced; different targets are retained. Saved in flash with readback verification.
 - **Preset manager** — browse presets in 12-slot tabs and use the three-dot menu to rename (on-screen keyboard; 4–64 ASCII letters, digits, spaces, `-`, `_`, unique), delete, move, or copy to any slot. Overwriting an occupied slot asks for confirmation
-- **Scenes** — eight named scenes per Nano preset, available from the scene selector and large-button Gig view. Touch and MIDI recalls share staged, transient restoration; scene data is saved in internal flash. Sets/custom banks are deferred.
+- **Scenes** — six named scenes per Nano preset, available from the scene selector and large-button Gig view. Touch and MIDI recalls share staged, transient restoration; scene data is saved in internal flash. Sets/custom banks are deferred.
 - Open preset lists update in place when the refreshed catalog arrives after a rename, delete, move, or copy.
 - Refresh and Nano preset Save live in Settings → General → Tools next to Tuner (Save is highlighted with unsaved changes); the header has a background-free scene selector (hold a selected scene for Rename, Save, or Delete) and a vertical three-dot menu with Gig mode, a separator, then MIDI, Pedals, and Settings. BPM text and icon are white. An asterisk after the current Nano preset title marks unsaved Nano edits.
 - In portrait the FX chain sits at the bottom of the screen, below the page content.
@@ -168,7 +168,7 @@ These are simulated transport tests, not radio or Nano firmware validation.
 
 ### Scenes
 
-Each Nano preset (1-64) has eight named **Scenes**, independent of Sets. Tap the
+Each Nano preset (1-64) has six named **Scenes**, independent of Sets. Tap the
 header **Scene** indicator to open its card grid: two columns in portrait,
 three in landscape. The title includes
 the Nano preset number and name. Tap a populated card to recall it; the selector
@@ -181,7 +181,7 @@ name; saving an occupied card immediately replaces it using its existing name.
 An asterisk on the selected card marks its unsaved controller edits, not edits
 to other scenes. Renaming changes only the stored name, not the sound.
 Saving, deleting and recalling scenes take effect without confirmation dialogs.
-Eight MIDI Learn actions recall scenes of the current Nano preset.
+Six MIDI Learn actions recall scenes of the current Nano preset.
 
 New scene names are limited to **16 ASCII characters** (letters,
 numbers, spaces, `-`, `_`, no outer spaces), unique within their collection.
@@ -201,8 +201,13 @@ interval, and multiple writes, model loading and readback can span many interval
 Timeout/disconnect errors warn that sound may be partly updated; reload the
 original Nano preset to recover. Actual sound recall still requires hardware validation.
 
-Scene storage uses format version 3 (`nano-scenes`) with eight-slot
-`preset_scenes`.
+Scene storage uses format version 4 (`nano-scenes`) with six-slot
+`preset_scenes`. Version-3 eight-slot records are migrated on load or import:
+scenes 1-6 are retained, and scenes 7-8 are permanently removed. Loading saves
+the migrated record before making it available; failed writes are reported and
+leave the original record intact for retry. Back up old exports before upgrading.
+MIDI bindings for scenes 7-8 are removed on load/import; surviving action IDs
+are unchanged.
 **The first boot of this firmware permanently factory-resets all controller
 storage**: layout/settings, MIDI
 bindings, scenes and legacy Sets. The entire `nvs`, `midi` and `scenes`
@@ -213,9 +218,9 @@ saved data survives subsequent boots. An interrupted or failed reset is logged
 and stops startup before settings are loaded; reboot retries the full reset.
 Nano Cortex's own presets/settings and the app/PHY partitions are not erased.
 MIDI action IDs are compacted after removing the FX preset slots; the action
-table now contains 273 entries and 259 active actions. Set actions and old shelf
+table now contains 271 entries and 257 active actions. Set actions and old shelf
 slots 5-32 remain unavailable. Scene JSON is encoded
-compactly; all 64 eight-scene collections fit the storage limit.
+compactly; all 64 six-scene collections fit the storage limit.
 The JSON limit uses the full 1 MiB journal slot minus its 32-byte header, within
 the existing 2 MiB scenes partition.
 
@@ -227,11 +232,42 @@ without connecting to a Nano or writing flash.
 
 ### Gig view
 
-Enter gig view through MIDI Learn's **Enter gig view** action for eight large
+Enter gig view through MIDI Learn's **Enter gig view** action for six large
 scene buttons for the current Nano preset (or use **Gig** in the desktop preview).
 Loading/verification disables recall controls, and empty/disconnected recalls are disabled.
-Tuner **EXIT** returns to gig view; **Tap tempo** uses the existing tempo control.
-**Editor** explicitly leaves gig view. MIDI Learn also includes enter/exit gig
+An accepted recall highlights its scene immediately, before readback completes;
+Gig view omits routine recall status text. Failures remain in the serial log.
+Gig view polls touch and
+redraws at a 16 ms interval without rebuilding unchanged scene models.
+The standard page header shows the preset name, an **X** back to the editor,
+and tappable BPM on the right with a high-contrast, 160ms beat flash
+(no continuous animation). In portrait, the BPM label sits below the value
+to leave more room for the preset title.
+Scene cards have a dimmed number at the top left and a large, left-aligned
+name immediately below. Six cards use two columns in portrait and three in
+landscape. The preview includes a maximum-length, 16-character scene name.
+Compact amp/capture and cab/IR names share one line directly beneath the preset title
+inside the header, aligned with the title and without labels.
+Both lines fit within the standard 58px header height.
+The portrait editor uses two rows of three FX-chain buttons with the parameter cells'
+8px gaps and 2px inner side insets; portrait Gig view uses the same
+chain dimensions. Portrait tuner controls use
+a narrower reference slider between MUTE and EXIT without overlapping them.
+The portrait editor header stacks the left-aligned preset title above its
+smaller scene selector, with BPM and the menu on the right.
+FX parameters use three columns in portrait and four in landscape, with
+vertical scrolling for additional rows.
+Portrait amp controls group Input Gate and Gate Amount on the first row;
+Capture Level, Master Level, and Gain on the second; Bass, Mid, and Treble
+on the third; and Cab Output, High Pass, and Low Pass on the fourth.
+Below the scenes, the live category-colored FX chain replaces the tuner and
+tap-tempo buttons. Tap or hold an FX block to toggle it using the editor's
+bypass action; double-tap opens its model picker in the editor. Tap AMP to return
+to the amp editor. Chain controls are disabled during recall or disconnection.
+The FX chain uses the same 8px horizontal gaps and screen margins as the scene
+cards. Tuning from Gig view retains the Gig header; tuner **EXIT** or turning
+the tuner off returns to the scenes, while the header **X** exits to the editor.
+MIDI Learn also includes enter/exit gig
 actions; scene actions work in either view. Layouts support both
 landscape and portrait. Changing the Nano preset externally or disconnecting
 clears stale scene selection. Gig view itself is a temporary UI mode, not a
@@ -258,7 +294,7 @@ The USB screen shows this warning; it does not detect whether a monitor is open.
 The computer mounts a disposable 3 MiB FAT12 volume named **NANO CONFIG** containing:
 
 - `midi.json`: learned MIDI assignments (maximum 48 KiB).
-- `scenes.json`: all controller scenes, using the current version-3 `nano-scenes`
+- `scenes.json`: all controller scenes, using the current version-4 `nano-scenes`
   format (maximum 1,048,544 bytes). Older banks/`performance.json` are not imported.
 - `preferences.json`: controller screen orientation and Autosave (maximum 4 KiB).
   Does not include Nano settings or Bluetooth pairings.

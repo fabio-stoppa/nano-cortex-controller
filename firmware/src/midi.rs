@@ -247,12 +247,24 @@ static TABLE: Mutex<CriticalSectionRawMutex, RefCell<Table>> = Mutex::new(RefCel
 pub fn load() {
     match crate::settings::load_midi_json() {
         Ok(Some(json)) => match backup::decode(&json) {
-            Ok((keys, zero_is_press)) => TABLE.lock(|t| {
-                let mut t = t.borrow_mut();
-                t.keys = keys;
-                t.zero_is_press = zero_is_press;
-                t.version += 1;
-            }),
+            Ok((keys, zero_is_press)) => {
+                let canonical = backup::encode(&keys, &zero_is_press);
+                let saved = canonical.and_then(|canonical| {
+                    if canonical != json {
+                        crate::settings::save_midi_json(&canonical)?;
+                    }
+                    Ok(())
+                });
+                if let Err(error) = saved {
+                    report(error);
+                }
+                TABLE.lock(|t| {
+                    let mut t = t.borrow_mut();
+                    t.keys = keys;
+                    t.zero_is_press = zero_is_press;
+                    t.version += 1;
+                });
+            }
             Err(err) => report(err),
         },
         Ok(None) => {}
@@ -401,7 +413,7 @@ pub fn keys_from_json(json: &str) -> Result<[u16; ACTION_COUNT], &'static str> {
 
 pub fn import_json(json: &str) -> Result<(), &'static str> {
     let (keys, zero_is_press) = backup::decode(json)?;
-    crate::settings::save_midi_json(json)?;
+    crate::settings::save_midi_json(&backup::encode(&keys, &zero_is_press)?)?;
     TABLE.lock(|t| {
         let mut t = t.borrow_mut();
         t.keys = keys;

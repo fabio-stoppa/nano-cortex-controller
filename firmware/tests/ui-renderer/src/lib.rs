@@ -129,7 +129,7 @@ mod tests {
                 });
             };
             draw();
-            let position = LogicalPosition::new(40.0, if portrait { 760.0 } else { 90.0 });
+            let position = LogicalPosition::new(40.0, if portrait { 720.0 } else { 90.0 });
             let original_on = app.get_preview_fx_on();
             window.dispatch_event(WindowEvent::PointerPressed {
                 position,
@@ -154,7 +154,10 @@ mod tests {
             slint::platform::update_timers_and_animations();
             for _ in 0..2 {
                 draw();
-                tap(width as f32 - 110.0, 38.0);
+                tap(
+                    if portrait { 100.0 } else { width as f32 - 110.0 },
+                    if portrait { 50.0 } else { 38.0 },
+                );
                 assert_eq!(app.get_popup(), "scenes");
                 draw();
                 tap(35.0, 35.0);
@@ -358,6 +361,82 @@ mod tests {
         render(window, &mut px, RenderingRotation::NoRotation, true);
     }
 
+    fn check_tempo_and_gig_title(
+        app: &AppWindow,
+        window: &MinimalSoftwareWindow,
+        time: &Rc<std::cell::Cell<std::time::Duration>>,
+    ) {
+        let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
+        let draw = |pixels: &mut [Rgb565Pixel], width| {
+            window.request_redraw();
+            window.draw_if_needed(|renderer| {
+                renderer.set_rendering_rotation(RenderingRotation::NoRotation);
+                renderer.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+                renderer.render(pixels, width);
+                renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            });
+        };
+        app.set_page(0);
+        app.set_tempo_bpm_value(120);
+        app.set_bpm_text("120 BPM".into());
+        app.set_capture_value("Capture".into());
+        app.set_cab_value("Cab".into());
+        for portrait in [false, true] {
+            let width = if portrait { 480 } else { 800 };
+            app.set_portrait(portrait);
+            window.set_size(PhysicalSize::new(width, if portrait { 800 } else { 480 }));
+            for gig in [false, true] {
+                app.set_gig_open(gig);
+                for global in [false, true] {
+                    app.set_tempo_global(global);
+                    draw(&mut pixels, width as usize);
+                    time.set(time.get() + std::time::Duration::from_millis(500));
+                    slint::platform::update_timers_and_animations();
+                    draw(&mut pixels, width as usize);
+                    let bright = pixels.clone();
+                    time.set(time.get() + std::time::Duration::from_millis(160));
+                    slint::platform::update_timers_and_animations();
+                    draw(&mut pixels, width as usize);
+                    let contrast = bright[..58 * width as usize]
+                        .iter()
+                        .zip(&pixels[..58 * width as usize])
+                        .map(|(on, off)| (on.0 >> 11).saturating_sub(off.0 >> 11))
+                        .max()
+                        .unwrap();
+                    assert!(
+                        contrast >= 20,
+                        "Beat flash has insufficient contrast: portrait={portrait}, gig={gig}, global={global}"
+                    );
+                }
+                if gig {
+                    for page in [0, 2] {
+                        app.set_page(page);
+                        app.set_preset("".into());
+                        draw(&mut pixels, width as usize);
+                        let empty = pixels.clone();
+                        app.set_preset("Summer Drive".into());
+                        assert_eq!(app.get_preset().as_str(), "Summer Drive");
+                        draw(&mut pixels, width as usize);
+                        let changed = (12..42)
+                            .flat_map(|y| (66..width as usize - 170).map(move |x| y * width as usize + x))
+                            .filter(|&index| pixels[index] != empty[index])
+                            .count();
+                        assert!(
+                            changed > 100,
+                            "Gig preset title is missing: portrait={portrait}, page={page}"
+                        );
+                    }
+                    app.set_page(0);
+                }
+            }
+        }
+        app.set_tempo_bpm_value(0);
+        app.set_tempo_global(true);
+        app.set_gig_open(false);
+        app.set_portrait(false);
+        window.set_size(PhysicalSize::new(800, 480));
+    }
+
     fn check_long_names(app: &AppWindow, window: &MinimalSoftwareWindow) {
         app.set_portrait(false);
         window.set_size(PhysicalSize::new(800, 480));
@@ -538,6 +617,7 @@ mod tests {
             name: "Nano Cortex".into(),
             kind: "Amp".into(),
             state: 2,
+            selected: false,
         }])));
         app.set_settings_open(true);
         app.set_settings_tab(0);
@@ -684,12 +764,12 @@ mod tests {
             app.set_save_dirty(true);
             window.request_redraw();
             render(window, &mut pixels, RenderingRotation::NoRotation, true);
-            let marker_x = if portrait { 282 } else { 542 };
+            let marker_x = if portrait { 322 } else { 542 };
             assert!(
                 (20..54).any(|y| (marker_x..marker_x + 18).any(|x| {
                     pixels[y * width as usize + x] != clean[y * width as usize + x]
                 })),
-                "unsaved marker missing on an elided header"
+                "unsaved marker missing on an elided header, portrait={portrait}"
             );
             app.set_save_dirty(false);
             window.request_redraw();
@@ -754,14 +834,20 @@ mod tests {
             let header = pixels[..60 * width as usize].to_vec();
             for gig in [false, true] {
                 app.set_gig_open(gig);
+                let expected_header = if gig {
+                    render(window, &mut pixels, RenderingRotation::NoRotation, true);
+                    pixels[..60 * width as usize].to_vec()
+                } else {
+                    header.clone()
+                };
                 app.set_page(2);
                 app.set_tuner_muted(false);
                 window.request_redraw();
                 render(window, &mut pixels, RenderingRotation::NoRotation, true);
                 assert_eq!(
                     &pixels[..header.len()],
-                    header.as_slice(),
-                    "Tuner lost the editor header: portrait={portrait}, gig={gig}"
+                    expected_header.as_slice(),
+                    "Tuner lost its originating header: portrait={portrait}, gig={gig}"
                 );
                 assert_eq!(
                     pixels[90 * width as usize + 12].0,
@@ -799,9 +885,21 @@ mod tests {
         window.set_size(PhysicalSize::new(800, 480));
     }
 
-    fn check_fx_cell_contrast(app: &AppWindow, window: &MinimalSoftwareWindow) {
+    fn check_fx_cell_contrast(
+        app: &AppWindow,
+        window: &MinimalSoftwareWindow,
+        time: &Rc<std::cell::Cell<std::time::Duration>>,
+    ) {
         app.set_page(1);
         app.set_fx_n0("Mix".into());
+        app.set_fx_n1("Rate".into());
+        app.set_fx_n2("Depth".into());
+        app.set_fx_n3("Feedback".into());
+        let changed = Rc::new(std::cell::Cell::new(-1));
+        app.on_param_changed({
+            let changed = changed.clone();
+            move |index, _| changed.set(index)
+        });
         let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
         for portrait in [false, true] {
             app.set_portrait(portrait);
@@ -822,6 +920,27 @@ mod tests {
                 "FX cell not lightened: portrait={portrait}"
             );
             assert_ne!(pixels[y * width as usize + x].0, pixels[0].0);
+            if portrait {
+                for x in [30, 182, 334] {
+                    assert_eq!(pixels[75 * width as usize + x].0, cell, "Portrait FX row needs three columns");
+                }
+                assert_eq!(pixels[183 * width as usize + 30].0, cell, "Fourth FX parameter did not wrap");
+                let start = LogicalPosition::new(30.0, 225.0);
+                window.dispatch_event(WindowEvent::PointerPressed {
+                    position: start,
+                    button: PointerEventButton::Left,
+                });
+                time.set(time.get() + std::time::Duration::from_millis(210));
+                slint::platform::update_timers_and_animations();
+                window.dispatch_event(WindowEvent::PointerMoved {
+                    position: LogicalPosition::new(90.0, 225.0),
+                });
+                window.dispatch_event(WindowEvent::PointerReleased {
+                    position: LogicalPosition::new(90.0, 225.0),
+                    button: PointerEventButton::Left,
+                });
+                assert_eq!(changed.get(), 3, "Wrapped FX slider changed the wrong parameter");
+            }
             if !portrait {
                 app.set_page(0);
                 window.request_redraw();
@@ -836,6 +955,9 @@ mod tests {
             }
         }
         app.set_fx_n0("-".into());
+        app.set_fx_n1("-".into());
+        app.set_fx_n2("-".into());
+        app.set_fx_n3("-".into());
         app.set_page(0);
         app.set_portrait(false);
         window.set_size(PhysicalSize::new(800, 480));
@@ -1099,7 +1221,7 @@ mod tests {
         impl slint::Model for Actions {
             type Data = MidiRow;
             fn row_count(&self) -> usize {
-                259
+                257
             }
             fn row_data(&self, index: usize) -> Option<MidiRow> {
                 if index >= self.row_count() {
@@ -1155,7 +1277,7 @@ mod tests {
             render(&mut pixels, width as usize);
             assert!(
                 actions.visited.borrow().len() <= 20,
-                "Opening MIDI eagerly fetched {} of 259 actions",
+                "Opening MIDI eagerly fetched {} of 257 actions",
                 actions.visited.borrow().len()
             );
             for _ in 0..3 {
@@ -1167,7 +1289,7 @@ mod tests {
                 render(&mut pixels, width as usize);
             }
             assert!(
-                actions.visited.borrow().contains(&258),
+                actions.visited.borrow().contains(&256),
                 "Final MIDI action is unreachable"
             );
             for y in (height - 100..height).step_by(2) {
@@ -1180,7 +1302,7 @@ mod tests {
                     position,
                     button: PointerEventButton::Left,
                 });
-                if learned.get() == 258 {
+                if learned.get() == 256 {
                     let position = LogicalPosition::new(width as f32 - 78.0, y as f32);
                     window.dispatch_event(WindowEvent::PointerPressed {
                         position,
@@ -1193,8 +1315,8 @@ mod tests {
                     break;
                 }
             }
-            assert_eq!(learned.get(), 258, "Virtualized Learn changed action index");
-            assert_eq!(cleared.get(), 258, "Virtualized Clear changed action index");
+            assert_eq!(learned.get(), 256, "Virtualized Learn changed action index");
+            assert_eq!(cleared.get(), 256, "Virtualized Clear changed action index");
         }
         app.set_midi_rows(slint::ModelRc::default());
         app.set_settings_open(false);
@@ -1247,10 +1369,10 @@ mod tests {
         app.set_scene_library_scene(0);
         app.set_scene_dirty(true);
         app.set_scene_assigned(slint::ModelRc::new(slint::VecModel::from(vec![
-            true, true, true, true, true, true, true, false,
+            true, true, true, true, true, false,
         ])));
         app.set_scene_library_scenes(slint::ModelRc::new(slint::VecModel::from(
-            (1..=8).map(|index| format!("Scene name {index}").into()).collect::<Vec<_>>(),
+            (1..=6).map(|index| format!("Scene name {index}").into()).collect::<Vec<_>>(),
         )));
         app.set_scene_library_notice("Preview only - must not be displayed".into());
         for (width, height, portrait) in [(800, 480, false), (480, 800, true)] {
@@ -1266,7 +1388,10 @@ mod tests {
                 renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
             });
             let before = openings.get();
-            let position = LogicalPosition::new(width as f32 - 110.0, 38.0);
+            let position = LogicalPosition::new(
+                if portrait { 100.0 } else { width as f32 - 110.0 },
+                if portrait { 50.0 } else { 38.0 },
+            );
             window.dispatch_event(WindowEvent::PointerPressed {
                 position,
                 button: PointerEventButton::Left,
@@ -1351,7 +1476,7 @@ mod tests {
                 );
                 tap(x + 40.0, y + 30.0 + action as f32 * 60.0);
                 assert!(!app.get_confirm_open(), "Scene action opened a confirmation");
-                if index != 7 || action == 1 {
+                if index != 5 || action == 1 {
                     assert_eq!(app.get_scene_menu_index(), -1, "Scene action left menu open");
                 } else {
                     tap(5.0, 5.0);
@@ -1367,16 +1492,16 @@ mod tests {
             menu_action(0, 2);
             assert_eq!(deletes.get(), 0, "Delete menu action is inaccessible");
             assert_eq!(recalls.get(), 1, "Action button also recalled its card");
-            menu_action(6, 1);
-            assert_eq!(stores.get(), 6, "Seventh scene is inaccessible");
+            menu_action(4, 1);
+            assert_eq!(stores.get(), 4, "Fifth scene is inaccessible");
             renames.set(-1);
             deletes.set(-1);
-            menu_action(7, 0);
-            menu_action(7, 2);
+            menu_action(5, 0);
+            menu_action(5, 2);
             assert_eq!(renames.get(), -1, "Empty scene allowed rename");
             assert_eq!(deletes.get(), -1, "Empty scene allowed delete");
-            menu_action(7, 1);
-            assert_eq!(stores.get(), 7, "Eighth scene cannot be saved");
+            menu_action(5, 1);
+            assert_eq!(stores.get(), 5, "Sixth scene cannot be saved");
             if portrait {
                 app.set_scene_menu_index(0);
                 app.set_scene_library_busy(true);
@@ -1421,11 +1546,11 @@ mod tests {
         });
         app.set_preset("1 Clean".into());
         app.set_gig_scenes(slint::ModelRc::new(slint::VecModel::from(
-            (1..=8)
+            (1..=6)
                 .map(|index| format!("Scene {index}").into())
                 .collect::<Vec<_>>(),
         )));
-        app.set_gig_scene_assigned(slint::ModelRc::new(slint::VecModel::from(vec![true; 8])));
+        app.set_gig_scene_assigned(slint::ModelRc::new(slint::VecModel::from(vec![true; 6])));
         app.set_settings_open(true);
         app.set_scene_library_open(true);
         app.set_model_open(true);
@@ -1464,9 +1589,9 @@ mod tests {
             };
             draw();
             let before = scenes.get().0;
-            tap(width as f32 - 60.0, if portrait { 675.0 } else { 360.0 });
-            assert_eq!(scenes.get(), (before + 1, 7), "Last scene inaccessible");
-            tap(80.0, height as f32 - 45.0);
+            tap(width as f32 - 60.0, height as f32 - if portrait { 160.0 } else { 110.0 });
+            assert_eq!(scenes.get(), (before + 1, 5), "Last scene inaccessible");
+            app.invoke_tuner_tapped();
             assert_eq!(app.get_page(), 2);
             assert!(app.get_gig_open());
             draw();
@@ -1475,16 +1600,14 @@ mod tests {
             assert!(app.get_gig_open());
             draw();
             let before = tempo.get();
-            tap(width as f32 - 70.0, height as f32 - 45.0);
+            tap(width as f32 - 70.0, 35.0);
             assert_eq!(tempo.get(), before + 1);
             let before = (scenes.get(), tempo.get());
             app.set_scene_library_busy(true);
             draw();
-            tap(45.0, 40.0);
             tap(100.0, 160.0);
-            tap(width as f32 - 60.0, if portrait { 675.0 } else { 360.0 });
+            tap(width as f32 - 60.0, height as f32 - if portrait { 160.0 } else { 110.0 });
             tap(80.0, height as f32 - 45.0);
-            tap(width as f32 - 70.0, height as f32 - 45.0);
             assert_eq!(
                 (scenes.get(), tempo.get()),
                 before,
@@ -1500,7 +1623,7 @@ mod tests {
                 before.0,
                 "Disconnected recall remained active"
             );
-            tap(width as f32 - 55.0, 40.0);
+            tap(33.0, 35.0);
             assert!(
                 !app.get_gig_open(),
                 "Editor exit was covered by connecting overlay"
@@ -1597,10 +1720,10 @@ mod tests {
                         renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
                     });
                     for slot in [0, 1, 3, 4, 5] {
-                        // Portrait tabs are 69px wide; the selected AMP tab is wider.
-                        let tab_x = [14, 87, 160, 251, 324, 397][slot];
+                        let tab_x = 14 + (slot % 3) * 152;
+                        let tab_y = 700 + (slot / 3) * 48;
                         let (x, y) = if portrait {
-                            (tab_x + 11, 760)
+                            (tab_x + 11, tab_y + 10)
                         } else {
                             (24, 97 + 67 * slot)
                         };
@@ -1611,7 +1734,7 @@ mod tests {
                         );
                         if !active {
                             let (left, right, top, bottom) = if portrait {
-                                (tab_x + 1, tab_x + 68, 734, 786)
+                                (tab_x + 1, tab_x + 140, tab_y + 1, tab_y + 39)
                             } else {
                                 (14, 119, 70 + 67 * slot, 124 + 67 * slot)
                             };
@@ -1731,6 +1854,7 @@ mod tests {
             }
         });
         app.show().unwrap();
+        check_tempo_and_gig_title(&app, &window, &time);
         check_long_names(&app, &window);
         check_backspace_repeat(&app, &window, &time);
         check_preset_menu_hit_target(&app, &window);
@@ -1739,7 +1863,7 @@ mod tests {
         check_fx_category_colors(&app, &window);
         check_fullscreen_popups(&app, &window);
         check_header_tools_menu(&app, &window);
-        check_fx_cell_contrast(&app, &window);
+        check_fx_cell_contrast(&app, &window, &time);
         check_midi_clear_confirmation(&app, &window);
         check_full_midi_list(&app, &window);
         check_scene_screen(&app, &window);
