@@ -120,6 +120,27 @@ existing MIDI assignments and screen layout.
 Scenes additionally use a checked 2 MiB `scenes` partition at 10 MiB.
 Reflash with the updated table when upgrading; existing partitions keep their offsets.
 
+### Flash a release from your browser
+
+No Rust toolchain is needed. Download `bootloader.bin`, `partitions.bin`, and
+`nano-cortex-firmware.bin` from the same
+[release](https://github.com/fabio-stoppa/nano-cortex-controller/releases/latest).
+Open [ESPWebTool](https://esptool.spacehuhn.com/) in a desktop Chrome or Edge
+browser with Web Serial support, connect the board over USB, and close any
+serial monitor before clicking **Connect** and selecting its serial port.
+Add the three binary files with these addresses:
+
+| File | Flash address |
+| --- | --- |
+| `bootloader.bin` | `0x0` |
+| `partitions.bin` | `0x8000` |
+| `nano-cortex-firmware.bin` | `0x10000` |
+
+Click **Program**, then reset the board when flashing finishes. Do not select
+whole-chip erase: these separate images leave the NVS, MIDI, and scene partitions
+untouched. Back up your configuration before upgrading. The application binary
+is not a merged image and must not be written at address `0x0`.
+
 Monitor (keep DTR/RTS off on Waveshare):
 
 ```bash
