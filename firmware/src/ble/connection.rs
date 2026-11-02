@@ -56,24 +56,27 @@ impl TouchEdits {
     }
 
     pub fn push(&mut self, edit: SliderWrite) -> bool {
-        if let Some(slot) = self
+        if let Some(index) = self
             .pending
-            .iter_mut()
-            .find(|slot| slot.is_some_and(|pending| pending.id == edit.id))
+            .iter()
+            .position(|slot| slot.is_some_and(|pending| pending.id == edit.id))
         {
-            *slot = Some(edit);
+            self.pending.copy_within(0..index, 1);
+            self.pending[0] = Some(edit);
             return true;
         }
-        if let Some(slot) = self.pending.iter_mut().find(|slot| slot.is_none()) {
-            *slot = Some(edit);
-            return true;
-        }
-        false
+        let Some(slot) = self.pending.iter_mut().find(|slot| slot.is_none()) else {
+            return false;
+        };
+        *slot = Some(edit);
+        true
     }
 
     pub fn pop(&mut self) -> Option<SliderWrite> {
-        let slot = self.pending.iter_mut().find(|slot| slot.is_some())?;
-        slot.take()
+        let edit = self.pending[0].take()?;
+        self.pending.copy_within(1.., 0);
+        self.pending[TOUCH_CONTROL_COUNT - 1] = None;
+        Some(edit)
     }
 
     pub fn clear(&mut self) {
