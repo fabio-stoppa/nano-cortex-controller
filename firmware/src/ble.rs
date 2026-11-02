@@ -12,7 +12,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetDataLength, LeSetScanParams};
 use bt_hci::controller::ControllerCmdSync;
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use embassy_futures::join::{join, join3};
 use embassy_futures::select::{select, Either};
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
@@ -34,6 +34,8 @@ use embassy_time::{Duration, Instant, Timer};
 use trouble_host::prelude::*;
 
 use crate::panel::Board;
+
+mod advertisement;
 
 const NANO_PREFIX: &[u8] = b"Neural DSP Nano Cortex";
 const FOOT: &[u8] = b"FootCtrl";
@@ -146,6 +148,9 @@ fn remember(addr: Address, name: &[u8], nano: bool) {
         let mut seen = seen.borrow_mut();
         if let Some(d) = seen.iter_mut().find(|d| d.addr == addr) {
             d.seen_at = embassy_time::Instant::now();
+            if !name.is_empty() && d.name.as_bytes() != name {
+                d.name = String::from_utf8_lossy(name).into_owned();
+            }
             return;
         }
         if seen.len() >= SEEN_MAX {
@@ -160,7 +165,11 @@ fn remember(addr: Address, name: &[u8], nano: bool) {
         }
         seen.push(Seen {
             addr,
-            name: String::from_utf8_lossy(name).into_owned(),
+            name: if name.is_empty() {
+                String::from("Nano Cortex")
+            } else {
+                String::from_utf8_lossy(name).into_owned()
+            },
             nano,
             state: 0,
             seen_at: embassy_time::Instant::now(),
@@ -204,6 +213,11 @@ struct Hunt {
     foot: Signal<NoopRawMutex, Address>,
     nano_armed: core::sync::atomic::AtomicBool,
     foot_armed: core::sync::atomic::AtomicBool,
+    reports: Cell<u32>,
+    named_reports: Cell<u32>,
+    malformed_reports: Cell<u32>,
+    scan_attempts: Cell<u32>,
+    samples_left: Cell<u8>,
 }
 
 impl Hunt {
@@ -213,6 +227,11 @@ impl Hunt {
             foot: Signal::new(),
             nano_armed: core::sync::atomic::AtomicBool::new(true),
             foot_armed: core::sync::atomic::AtomicBool::new(true),
+            reports: Cell::new(0),
+            named_reports: Cell::new(0),
+            malformed_reports: Cell::new(0),
+            scan_attempts: Cell::new(0),
+            samples_left: Cell::new(8),
         }
     }
 }
@@ -220,12 +239,36 @@ impl Hunt {
 impl EventHandler for Hunt {
     fn on_adv_reports(&self, mut reports: LeAdvReportsIter<'_>) {
         use core::sync::atomic::Ordering;
-        while let Some(Ok(report)) = reports.next() {
-            let Some(name) = local_name(report.data) else {
-                continue;
+        while let Some(report) = reports.next() {
+            let report = match report {
+                Ok(report) => report,
+                Err(_) => {
+                    self.malformed_reports
+                        .set(self.malformed_reports.get().wrapping_add(1));
+                    continue;
+                }
             };
+            self.reports.set(self.reports.get().wrapping_add(1));
+            let name = local_name(report.data).unwrap_or_default();
+            if !name.is_empty() {
+                self.named_reports.set(self.named_reports.get().wrapping_add(1));
+            }
             let addr = Address::new(report.addr_kind, report.addr);
-            let nano = name.starts_with(NANO_PREFIX);
+            if !name.is_empty() && self.samples_left.get() > 0 {
+                self.samples_left.set(self.samples_left.get() - 1);
+                log::info!("BLE scan heard {} at {addr}", String::from_utf8_lossy(name));
+                log_pkt("BLE discovery data", report.data, None);
+            }
+            // Service UUIDs and the local name may arrive in separate reports.
+            let known_nano = SEEN.lock(|seen| {
+                seen.borrow().iter().any(|device| {
+                    device.addr == addr && device.nano
+                        && (device.state > 0 || Instant::now() - device.seen_at < AVAILABLE_FOR)
+                })
+            });
+            let nano = advertisement::has_nano_service(report.data)
+                || name.starts_with(NANO_PREFIX)
+                || known_nano;
             let foot = !nano && is_foot(name);
             if !nano && !foot {
                 continue;
@@ -352,16 +395,42 @@ where
     hunt.foot_armed.store(!nano, Ordering::Relaxed);
     let signal = if nano { &hunt.nano } else { &hunt.foot };
     signal.reset();
+    let attempt = hunt.scan_attempts.get().wrapping_add(1);
+    hunt.scan_attempts.set(attempt);
+    let report_counts = (
+        hunt.reports.get(),
+        hunt.named_reports.get(),
+        hunt.malformed_reports.get(),
+    );
     let mut scanner = Scanner::new(stack.central());
     let config = listen(&[]);
-    let scan = match scanner.scan(&config).await {
-        Ok(scan) => scan,
-        Err(error) => {
+    let scan = match with_timeout(Duration::from_secs(5), scanner.scan(&config)).await {
+        Ok(Ok(scan)) => scan,
+        Ok(Err(error)) => {
             log::warn!("scan start failed: {error:?}");
             return None;
         }
+        Err(_) => {
+            log::error!("BLE scan start timed out waiting for host/controller; restart and check HCI");
+            return None;
+        }
     };
+    if attempt <= 4 {
+        log::info!(
+            "BLE active scan started for {}",
+            if nano { "Nano" } else { "footswitch" }
+        );
+    }
     let found = with_timeout(Duration::from_secs(3), signal.wait()).await.ok();
+    if found.is_none() && (attempt <= 4 || attempt % 10 == 0) {
+        log::warn!(
+            "BLE scan #{attempt}: no {}; advertisements={}, named={}, malformed={}",
+            if nano { "Nano" } else { "footswitch" },
+            hunt.reports.get().wrapping_sub(report_counts.0),
+            hunt.named_reports.get().wrapping_sub(report_counts.1),
+            hunt.malformed_reports.get().wrapping_sub(report_counts.2),
+        );
+    }
     // Dropping the session asks the runner to disable scanning.
     drop(scan);
     drop(scanner);

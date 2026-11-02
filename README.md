@@ -169,6 +169,10 @@ Nano preset or persisted sound setting.
 
 ### USB configuration drive and internal storage
 
+The desktop preview's **USB** shortcut opens a simulated USB screen.
+**Cancel USB edits** shows the result screen and its recovery controls;
+**Restart controller** returns to the preview. No USB drive or flash writes occur.
+
 MIDI assignments and Scenes data remain saved as checked JSON records in
 internal flash. Configure them using the controller's touch UI or MIDI Learn.
 To back up or load JSON files, connect the board's native USB data port to a
@@ -232,14 +236,25 @@ Imported preferences take effect on **Restart controller**, so the USB screen
 does not rotate mid-import. Existing touch settings and boot behavior are unchanged;
 unchanged preference records are not rewritten.
 
-Settings → General → Clear → **MIDI** asks for confirmation before removing all
-learned assignments. Cancel leaves them unchanged. This does not change presets
-on the Nano.
+**Settings → General → Clear** provides independent, confirmed recovery actions
+for every editable USB file:
 
-The right-aligned button in the same row includes **Scenes** (all scenes across every
-Nano preset), and asks for confirmation before clearing them. Save errors are shown
-below the row; failed scene clears retain the stored data and selections. Pedal assignments,
-calibration, Bluetooth pairings and screen layout are not cleared.
+- **MIDI** replaces saved assignments with a valid empty `midi.json`, even if
+  the old file was invalid and no bindings could be loaded.
+- **Scenes** replaces all controller scenes across all Nano presets with a
+  valid empty `scenes.json`, including when the saved scenes cannot be loaded.
+- **Preferences** resets `preferences.json` values to landscape and Autosave
+  off, immediately updating the controller screen after a verified save.
+
+The same three actions are available on the **USB result/error screen**, so
+invalid data can be reset even without a Nano connection. Confirm the affected
+file, then **Restart controller** and re-enter USB mode. Recovery is never automatic;
+Cancel leaves data unchanged. MIDI/scene clears preserve their live state if saving
+fails. Success confirmations and errors appear in a dismissible result modal,
+not below the Clear row. Preference writes use the NVS record described
+above; a failed write may require retrying the reset.
+Each action leaves the other two configurations alone. Nano presets, Nano settings,
+pedal calibration and Bluetooth pairings are not cleared.
 
 **Settings → General → Autosave** is off by default and persisted with the screen
 layout. When enabled, edits made through touch or MIDI restart a five-second idle
@@ -268,6 +283,21 @@ panic while retaining partial redraws and the existing touch mapping.
 1. Power on the Nano Cortex with Bluetooth enabled
 2. **Disconnect Cortex Cloud** (or close the browser editor) — only one BLE client at a time
 3. Flash and watch serial for `Found Nano Cortex, connecting...`
+
+Renamed Nanos are discovered through their advertised A002/A003 service UUIDs,
+independently of the local name. Factory-name matching remains a fallback.
+Service-only reports use "Nano Cortex" in the picker until a named report arrives;
+advertisements and scan responses are associated by Bluetooth address.
+If a Nano does not advertise either service, its custom name alone cannot identify
+it automatically; restore the factory name or capture its advertising data for diagnosis.
+
+If scanning continues with the Nano's GAIN ring spinning, serial logs distinguish
+scan-start failures/timeouts from scans that receive advertisements but no matching
+device. The first eight named reports are logged as `BLE scan heard ...`; unsuccessful
+scans report advertisement/name/malformed-report counts for the first four scan
+windows and every tenth window afterward. These diagnostics do not change device
+matching or connect to unsupported devices. `Scenes: Invalid scenes.json` is a
+separate saved-configuration error and does not prevent Bluetooth scanning.
 
 ## Notes
 

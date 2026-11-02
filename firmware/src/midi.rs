@@ -352,18 +352,10 @@ pub fn clear(index: usize) {
     });
 }
 
-pub fn clear_all() {
-    TABLE.lock(|t| {
-        let mut t = t.borrow_mut();
-        t.unsaved |= t.keys.iter().any(|key| *key != 0);
-        t.keys.fill(0);
-        t.learning = None;
-        t.last = 0;
-        t.notice = "";
-        t.retry_save_us = 0;
-        t.version += 1;
-    });
-    crate::link::clear_midi();
+pub fn clear_all() -> Result<(), &'static str> {
+    let json = backup::encode(&[0; ACTION_COUNT])?;
+    // Always commit defaults, even if an invalid saved file loaded no bindings.
+    import_json(&json)
 }
 
 pub fn export_json() -> Result<String, &'static str> {

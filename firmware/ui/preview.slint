@@ -37,17 +37,19 @@ export component Preview inherits AppWindow {
     scene-library-open: root.popup == "scenes";
     gig-open: root.popup == "gig";
     usb-storage-requested => {
-        root.popup = "none";
-        root.usb-storage-open = true;
-        root.usb-storage-finished = false;
-        root.usb-storage-message = "Preview only - no USB drive is exposed. Firmware exports midi.json, scenes.json and preferences.json; safely eject to import, then restart.";
+        root.popup = "usb";
     }
     usb-storage-cancel => {
         root.usb-storage-finished = true;
         root.usb-storage-message = "Preview USB edits discarded.";
     }
-    usb-storage-restart => { root.usb-storage-open = false; }
+    usb-storage-restart => { root.popup = "none"; }
     changed popup => {
+        root.usb-storage-open = root.popup == "usb";
+        if root.popup == "usb" {
+            root.usb-storage-finished = false;
+            root.usb-storage-message = "Preview only - no USB drive is exposed. Firmware exports midi.json, scenes.json and preferences.json; safely eject to import, then restart.";
+        }
         root.scene-library-open = root.popup == "scenes";
         root.gig-open = root.popup == "gig";
         root.settings-open = root.popup == "settings" || root.popup == "bluetooth"
@@ -314,13 +316,20 @@ export component Preview inherits AppWindow {
         root.demo-midi-amp[1].assigned = "";
         root.demo-midi-fx[0].assigned = "";
         root.demo-midi-fx[1].assigned = "";
-        root.clear-status = "MIDI bindings cleared (preview only)";
+        root.clear-completed(true, "MIDI bindings cleared (preview only)");
     }
     scene-library-clear-all(kind) => {
         root.demo-scenes = ["", "", "", "", "", "", "", ""];
         root.scene-library-scene = -1;
         root.scene-dirty = false;
-        root.clear-status = "All scenes cleared (preview only)";
+        root.clear-completed(true, "All scenes cleared (preview only)");
+    }
+    preferences-clear-all => {
+        root.layout-mode = 0;
+        root.preview-portrait = false;
+        root.autosave-enabled = false;
+        root.autosave-status = "";
+        root.clear-completed(true, "Preferences reset: landscape, Autosave off (preview only)");
     }
     preset-list-tapped => { root.popup = "preset"; }
     model-preset-action-chosen(index, action) => {
@@ -448,6 +457,7 @@ export component Preview inherits AppWindow {
                 { l: "Cabs", v: "cab" },
                 { l: "Welcome", v: "connecting" },
                 { l: "Settings", v: "settings" },
+                { l: "USB", v: "usb" },
             ]: DevChip {
                 label: p.l;
                 active: root.popup == p.v;

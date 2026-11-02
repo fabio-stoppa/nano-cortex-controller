@@ -2,6 +2,9 @@
 
 extern crate alloc;
 
+#[path = "../../../src/ble/advertisement.rs"]
+mod advertisement;
+
 #[path = "../../../src/usb_storage/disk.rs"]
 mod usb_disk;
 #[path = "../../../src/usb_storage/config.rs"]
@@ -284,6 +287,71 @@ mod tests {
         assert!(scenes::export_json().is_ok());
     }
 
+    #[test]
+    fn explicit_scene_clear_recovers_invalid_saved_json_without_clearing_other_data() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        learn_cc(0, 7);
+        midi::persist();
+        let midi_before = settings::RECORD.lock().unwrap().clone();
+        let preferences_before = *settings::PREFERENCES.lock().unwrap();
+        *settings::SCENE_RECORD.lock().unwrap() = Some("invalid JSON".into());
+        scenes::load();
+        settings::FAIL.store(true, Ordering::Relaxed);
+        assert!(scenes::clear_all_scenes().is_err());
+        assert!(scenes::export_json().is_err());
+        assert_eq!(settings::SCENE_RECORD.lock().unwrap().as_deref(), Some("invalid JSON"));
+        settings::FAIL.store(false, Ordering::Relaxed);
+        scenes::clear_all_scenes().unwrap();
+        scenes::load();
+        let config = scenes::data::Config::decode(&scenes::export_json().unwrap()).unwrap();
+        assert!(config.preset_scenes.is_empty());
+        assert_eq!(*settings::RECORD.lock().unwrap(), midi_before);
+        assert_eq!(*settings::PREFERENCES.lock().unwrap(), preferences_before);
+        assert!(link::pop_cmd().is_none());
+    }
+
+    #[test]
+    fn explicit_midi_reset_replaces_invalid_saved_json_even_with_no_loaded_bindings() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        let scenes_before = settings::SCENE_RECORD.lock().unwrap().clone();
+        let preferences_before = *settings::PREFERENCES.lock().unwrap();
+        *settings::RECORD.lock().unwrap() = Some("invalid JSON".into());
+        midi::load();
+        assert!(!midi::notice().is_empty());
+        settings::FAIL_MIDI.store(true, Ordering::Relaxed);
+        assert!(midi::clear_all().is_err());
+        assert_eq!(settings::RECORD.lock().unwrap().as_deref(), Some("invalid JSON"));
+        settings::FAIL_MIDI.store(false, Ordering::Relaxed);
+        midi::clear_all().unwrap();
+        midi::load();
+        assert!(midi::notice().is_empty());
+        assert!(midi::keys_from_json(&settings::load_midi_json().unwrap().unwrap())
+            .unwrap().iter().all(|key| *key == 0));
+        assert_eq!(*settings::SCENE_RECORD.lock().unwrap(), scenes_before);
+        assert_eq!(*settings::PREFERENCES.lock().unwrap(), preferences_before);
+    }
+
+    #[test]
+    fn failed_midi_reset_retains_live_bindings_and_success_clears_only_midi_commands() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        learn_cc(0, 7);
+        midi::persist();
+        let before = midi::export_json().unwrap();
+        settings::FAIL_MIDI.store(true, Ordering::Relaxed);
+        assert!(midi::clear_all().is_err());
+        assert_eq!(midi::export_json().unwrap(), before);
+        assert_eq!(settings::RECORD.lock().unwrap().as_deref(), Some(before.as_str()));
+        settings::FAIL_MIDI.store(false, Ordering::Relaxed);
+        cc(7, 127);
+        link::push_cmd(link::Cmd::Save);
+        midi::clear_all().unwrap();
+        assert!(matches!(link::pop_cmd(), Some(link::Cmd::Save)));
+        assert!(link::pop_cmd().is_none());
+    }
+
     fn cc(number: u8, value: u8) {
         midi::feed(&[0x80, 0x80, 0xb0, number, value]);
     }
@@ -542,8 +610,9 @@ mod tests {
         assert_eq!(scenes::notice(), "Invalid scenes.json");
         assert_eq!(settings::SCENE_RECORD.lock().unwrap().as_deref(), Some(legacy));
         assert!(scenes::clear_scene(1, 0).is_err(), "Failed reset allowed a destructive save");
-        assert!(scenes::clear_all_scenes().is_err());
-        assert_eq!(settings::SCENE_RECORD.lock().unwrap().as_deref(), Some(legacy));
+        scenes::clear_all_scenes().unwrap();
+        assert!(scenes::data::Config::decode(&scenes::export_json().unwrap())
+            .unwrap().preset_scenes.is_empty());
         *settings::SCENE_RECORD.lock().unwrap() = None;
         scenes::load();
         state::AMP.with(|amp| amp.borrow_mut().valid = true);
@@ -931,7 +1000,7 @@ mod tests {
         cc(7, 127);
         link::push_cmd(link::Cmd::Save);
         midi::toggle_learn(2);
-        midi::clear_all();
+        midi::clear_all().unwrap();
         assert!(midi::rows()
             .iter()
             .all(|row| row.assigned.is_empty() && !row.learning));
@@ -951,7 +1020,7 @@ mod tests {
         learn_cc(0, 7);
         learn_cc(index("Amp gain"), 7);
         let original = midi::export_json().unwrap();
-        midi::clear_all();
+        midi::clear_all().unwrap();
         midi::import_json(&original).unwrap();
         assert_eq!(midi::export_json().unwrap(), original);
         let invalid = [

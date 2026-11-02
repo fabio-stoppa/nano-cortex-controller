@@ -125,6 +125,10 @@ pub fn import_preferences(preferences: &preferences::Preferences) -> Result<(), 
     save_preferences(preferences.orientation.layout(), preferences.autosave)
 }
 
+pub fn reset_preferences() -> Result<(), &'static str> {
+    import_preferences(&preferences::Preferences::new(0, false)?)
+}
+
 pub fn initialize() -> Result<bool, &'static str> {
     let flash = flash().ok_or("Flash unavailable for controller factory reset")?;
     let mut buf = vec![0; PARTITION_TABLE_MAX_LEN];

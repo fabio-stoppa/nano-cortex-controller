@@ -294,17 +294,16 @@ fn ensure() {
     app.on_midi_clear_all({
         let weak = weak.clone();
         move || {
-            crate::midi::clear_all();
-            crate::midi::persist();
+            let result = crate::midi::clear_all();
+            let message = match result {
+                Ok(()) => "MIDI bindings cleared",
+                Err(error) => {
+                    crate::midi::report(error);
+                    error
+                }
+            };
             if let Some(app) = weak.upgrade() {
-                app.set_clear_status_kind(1);
-                app.set_clear_status(
-                    if crate::midi::notice().is_empty() {
-                        "MIDI bindings cleared"
-                    } else {
-                        crate::midi::notice()
-                    }.into(),
-                );
+                app.invoke_clear_completed(result.is_ok(), message.into());
             }
         }
     });
@@ -323,10 +322,30 @@ fn ensure() {
                 }
             };
             if let Some(app) = weak.upgrade() {
-                app.set_clear_status_kind(kind);
-                app.set_clear_status(message.into());
+                app.invoke_clear_completed(result.is_ok(), message.into());
                 scenes_ui::refresh(&app, true);
             }
+        }
+    });
+    app.on_preferences_clear_all({
+        let weak = weak.clone();
+        move || {
+            let result = crate::settings::reset_preferences();
+            let Some(app) = weak.upgrade() else { return; };
+            let message = match result {
+                Ok(()) => {
+                    app.set_layout_mode(0);
+                    app.set_autosave_enabled(false);
+                    app.set_autosave_status("".into());
+                    crate::scenes::set_autosave(false);
+                    "Preferences reset: landscape, Autosave off"
+                }
+                Err(error) => {
+                    log::warn!("Preferences reset failed: {error}");
+                    error
+                }
+            };
+            app.invoke_clear_completed(result.is_ok(), message.into());
         }
     });
     app.on_tools_jack_selected(move |expression| {
@@ -1114,15 +1133,6 @@ pub fn refresh_midi() {
     crate::midi::persist();
     if let Some(ui) = state().as_ref() {
         ui.app.set_midi_notice(crate::midi::notice().into());
-        if ui.app.get_clear_status_kind() == 1 {
-            ui.app.set_clear_status(
-                if crate::midi::notice().is_empty() {
-                    "MIDI bindings cleared"
-                } else {
-                    crate::midi::notice()
-                }.into(),
-            );
-        }
     }
     let version = crate::midi::version();
     let Some(ui) = state().as_mut() else {

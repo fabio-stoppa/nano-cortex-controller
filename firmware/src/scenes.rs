@@ -261,14 +261,13 @@ pub fn clear_scene(preset: usize, index: usize) -> Result<(), &'static str> {
 }
 
 pub fn clear_all_scenes() -> Result<(), &'static str> {
-    edit(|config| {
-        config.preset_scenes.clear();
-        Ok(())
-    })?;
-    with(|state| {
-        state.scene = None;
-        state.scene_dirty = false;
-    });
+    if busy() {
+        return Err("Wait for the current recall to finish");
+    }
+    // Explicit, confirmed clearing must also recover an unreadable configuration.
+    let config = Config::default();
+    crate::settings::save_scenes_json(&config.encode()?)?;
+    install(config);
     Ok(())
 }
 

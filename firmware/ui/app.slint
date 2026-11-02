@@ -2048,7 +2048,6 @@ component ToolsPanel inherits Rectangle {
     callback midi-learn(int);
     callback midi-clear(int);
     callback clear-requested(int);
-    in property <string> clear-status;
     callback usb-storage();
     in property <bool> scene-library-busy;
     in property <bool> save-dirty;
@@ -2215,26 +2214,16 @@ component ToolsPanel inherits Rectangle {
                         }
                         OptionRow {
                             label: "Clear";
-                            for label[i] in ["MIDI", "Scenes"]: VCenter {
-                                width: 96px;
+                            for label[i] in ["MIDI", "Scenes", "Preferences"]: VCenter {
+                                width: i == 2 ? 128px : 80px;
                                 horizontal-stretch: 0;
                                 HeaderButton {
                                     label: label;
                                     min-width: 0px;
-                                    preferred-width: 96px;
-                                    enabled: i == 0 || !root.scene-library-busy;
+                                    preferred-width: i == 2 ? 128px : 80px;
+                                    enabled: i != 1 || !root.scene-library-busy;
                                     tapped => { root.clear-requested(i + 1); }
                                 }
-                            }
-                        }
-                        if root.clear-status != "": Rectangle {
-                            height: 48px;
-                            background: transparent;
-                            Text {
-                                text: root.clear-status;
-                                color: #ececec;
-                                font-size: 16px;
-                                wrap: word-wrap;
                             }
                         }
                     }
@@ -2834,6 +2823,7 @@ component ConfirmDialog inherits DialogCard {
     in property <string> message;
     in property <string> accept-label: "OK";
     in property <color> accept-fill: #1a3af8;
+    in property <bool> show-cancel: true;
     callback accepted();
     Text {
         text: root.title;
@@ -2849,7 +2839,7 @@ component ConfirmDialog inherits DialogCard {
     }
     HorizontalLayout {
         spacing: 10px;
-        DialogButton { label: "Cancel"; fill: #000000; tapped => { root.closed(); } }
+        if root.show-cancel: DialogButton { label: "Cancel"; fill: #000000; tapped => { root.closed(); } }
         DialogButton { label: root.accept-label; fill: root.accept-fill; tapped => { root.accepted(); } }
     }
 }
@@ -3255,9 +3245,17 @@ export component AppWindow inherits Window {
     in-out property <bool> usb-storage-finished: false;
     in-out property <string> usb-storage-message: "";
     callback scene-library-clear-all(int);
+    callback preferences-clear-all();
     callback clear-requested(int);
-    in-out property <int> clear-status-kind: 0;
-    in-out property <string> clear-status: "";
+    property <bool> clear-result-open: false;
+    property <bool> clear-result-success: false;
+    property <string> clear-result-message;
+    callback clear-completed(bool, string);
+    clear-completed(success, message) => {
+        root.clear-result-success = success;
+        root.clear-result-message = message;
+        root.clear-result-open = true;
+    }
     property <int> clear-confirm-kind: 0;
     callback scene-library-opened();
     callback header-scene-action(int);
@@ -3316,9 +3314,11 @@ export component AppWindow inherits Window {
         } else {
             root.midi-clear-confirm = false;
             root.clear-confirm-kind = kind;
-            root.confirm-title = "Clear all scenes?";
-            root.confirm-message = "All controller scenes across all Nano presets will be removed. The current Nano sound is unchanged.";
-            root.confirm-label = "Clear all";
+            root.confirm-title = kind == 3 ? "Reset controller preferences?" : "Clear all scenes?";
+            root.confirm-message = kind == 3
+                ? "Screen orientation will reset to landscape and Autosave will turn off. MIDI, scenes and Nano settings are unchanged."
+                : "All controller scenes across all Nano presets will be removed, including invalid saved scene data. The current Nano sound is unchanged.";
+            root.confirm-label = kind == 3 ? "Reset" : "Clear all";
             root.confirm-danger = true;
             root.confirm-open = true;
         }
@@ -3712,7 +3712,6 @@ export component AppWindow inherits Window {
         midi-clear(index) => { root.midi-clear(index); }
         clear-requested(kind) => { root.clear-requested(kind); }
         usb-storage => { root.usb-storage-requested(); }
-        clear-status: root.clear-status;
         scene-library-busy: root.scene-library-busy;
         tuner => { root.settings-open = false; root.tuner-tapped(); }
         save-dirty: root.save-dirty;
@@ -3801,6 +3800,175 @@ export component AppWindow inherits Window {
         editor => { root.gig-mode-set(false); }
     }
 
+    if root.usb-storage-open: Rectangle {
+        width: root.width;
+        height: root.height;
+        background: Surface.background;
+        TouchArea {}
+        VerticalLayout {
+            padding: root.portrait ? 20px : 24px;
+            spacing: 16px;
+            HorizontalLayout {
+                spacing: 14px;
+                Rectangle {
+                    width: 56px;
+                    height: 56px;
+                    border-radius: Radius.default;
+                    background: #1a3af8;
+                    Image {
+                        x: 10px;
+                        y: 10px;
+                        width: 36px;
+                        height: 36px;
+                        source: @image-url("icons/usb.png");
+                        colorize: #ffffff;
+                        image-fit: contain;
+                    }
+                }
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: center;
+                    Text {
+                        text: "USB configuration";
+                        color: #ffffff;
+                        font-size: root.portrait ? 24px : 28px;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: "Back up. Edit. Safely eject.";
+                        color: #909090;
+                        font-size: 16px;
+                    }
+                }
+            }
+            if !root.usb-storage-finished: Rectangle {
+                height: 126px;
+                background: #262626;
+                border-radius: Radius.default;
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+                    HorizontalLayout {
+                        Text {
+                            text: "NANO CONFIG";
+                            color: #ffffff;
+                            font-size: 17px;
+                            font-weight: 700;
+                            letter-spacing: 1px;
+                        }
+                        Text {
+                            text: "3 editable files";
+                            color: #909090;
+                            font-size: 14px;
+                            horizontal-alignment: right;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        for file in [
+                            { name: "midi.json", detail: "Assignments" },
+                            { name: "scenes.json", detail: "Scene library" },
+                            { name: "preferences.json", detail: "Controller" },
+                        ]: Rectangle {
+                            background: #1e1e1e;
+                            border-radius: 8px;
+                            min-width: 0px;
+                            horizontal-stretch: 1;
+                            VerticalLayout {
+                                padding: 10px;
+                                spacing: 2px;
+                                Text {
+                                    text: file.name;
+                                    color: #ececec;
+                                    font-size: root.portrait ? 14px : 16px;
+                                    font-weight: 700;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: file.detail;
+                                    color: #909090;
+                                    font-size: 13px;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                background: #262626;
+                border-radius: Radius.default;
+                vertical-stretch: 1;
+                VerticalLayout {
+                    padding: root.portrait ? 20px : 16px;
+                    spacing: 8px;
+                    alignment: center;
+                    Text {
+                        text: root.usb-storage-finished ? "Session ended" : "Edit on your computer";
+                        color: #ffffff;
+                        font-size: 20px;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: root.usb-storage-message;
+                        color: #b8b8b8;
+                        font-size: 16px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+            if root.usb-storage-finished: Rectangle {
+                height: 118px;
+                background: #262626;
+                border-radius: Radius.default;
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 10px;
+                    HorizontalLayout {
+                        Text {
+                            text: "File recovery";
+                            color: #ffffff;
+                            font-size: 17px;
+                            font-weight: 700;
+                        }
+                        Text {
+                            text: "Confirm before reset";
+                            color: #909090;
+                            font-size: 13px;
+                            horizontal-alignment: right;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        for label[i] in ["MIDI", "Scenes", "Preferences"]: HeaderButton {
+                            label: label;
+                            min-width: 0px;
+                            horizontal-stretch: 1;
+                            tapped => { root.clear-requested(i + 1); }
+                        }
+                    }
+                }
+            }
+            Text {
+                text: root.usb-storage-finished
+                    ? "Restart to return to Bluetooth control."
+                    : "Bluetooth paused  /  Changes apply only after safe eject";
+                color: #909090;
+                font-size: 14px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+            DialogButton {
+                label: root.usb-storage-finished ? "Restart controller" : "Cancel USB edits";
+                fill: root.usb-storage-finished ? #1a3af8 : #000000;
+                tapped => {
+                    if root.usb-storage-finished { root.usb-storage-restart(); }
+                    else { root.usb-storage-cancel(); }
+                }
+            }
+        }
+    }
+
     if root.confirm-open: ConfirmDialog {
         x: 0px; y: 0px; width: root.width; height: root.height;
         visible: !root.kbd-open;
@@ -3813,6 +3981,9 @@ export component AppWindow inherits Window {
             if root.midi-clear-confirm {
                 root.midi-clear-confirm = false;
                 root.midi-clear-all();
+            } else if root.clear-confirm-kind == 3 {
+                root.preferences-clear-all();
+                root.clear-confirm-kind = 0;
             } else if root.clear-confirm-kind != 0 {
                 root.scene-library-clear-all(root.clear-confirm-kind);
                 root.clear-confirm-kind = 0;
@@ -3824,6 +3995,16 @@ export component AppWindow inherits Window {
             root.confirm-open = false; root.midi-clear-confirm = false;
             root.clear-confirm-kind = 0;
         }
+    }
+
+    if root.clear-result-open: ConfirmDialog {
+        x: 0px; y: 0px; width: root.width; height: root.height;
+        title: root.clear-result-success ? "Configuration saved" : "Could not reset configuration";
+        message: root.clear-result-message;
+        show-cancel: false;
+        accept-fill: root.clear-result-success ? #1a3af8 : #f8281a;
+        accepted => { root.clear-result-open = false; }
+        closed => { root.clear-result-open = false; }
     }
 
     if root.kbd-open: NameKeyboard {
@@ -3848,35 +4029,4 @@ export component AppWindow inherits Window {
         usb-storage => { root.usb-storage-requested(); }
     }
 
-    if root.usb-storage-open: Rectangle {
-        width: root.width;
-        height: root.height;
-        background: Surface.background;
-        TouchArea {}
-        VerticalLayout {
-            padding: Surface.screen-margin;
-            spacing: 16px;
-            Text {
-                text: "USB configuration drive";
-                color: #ffffff;
-                font-size: 26px;
-                font-weight: 700;
-            }
-            Text {
-                text: root.usb-storage-message;
-                color: #ececec;
-                font-size: 20px;
-                wrap: word-wrap;
-            }
-            Rectangle { background: transparent; vertical-stretch: 1; }
-            DialogButton {
-                label: root.usb-storage-finished ? "Restart controller" : "Cancel USB edits";
-                fill: #1a3af8;
-                tapped => {
-                    if root.usb-storage-finished { root.usb-storage-restart(); }
-                    else { root.usb-storage-cancel(); }
-                }
-            }
-        }
-    }
 }
