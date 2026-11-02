@@ -119,6 +119,31 @@ fn disconnect_cancels_pending_work_at_every_stage() {
 }
 
 #[test]
+fn stalled_footswitch_connection_releases_radio_for_nano() {
+    let _lock = CLOCK_LOCK.lock().unwrap();
+    let radio = embassy_sync::mutex::Mutex::<NoopRawMutex, ()>::new(());
+    let nano_acquired = Cell::new(false);
+    let foot = async {
+        let guard = radio.lock().await;
+        let result =
+            connection::with_deadline(connection::CONNECT_TIMEOUT, pending::<Result<(), u8>>())
+                .await;
+        drop(guard);
+        assert_eq!(result, Err(Failure::Timeout));
+    };
+    let nano = async {
+        let _guard = radio.lock().await;
+        nano_acquired.set(true);
+    };
+    let mut links = pin!(embassy_futures::join::join(foot, nano));
+    assert!(poll(links.as_mut()).is_pending());
+    assert!(!nano_acquired.get());
+    MockDriver::get().advance(connection::CONNECT_TIMEOUT);
+    assert!(poll(links.as_mut()).is_ready());
+    assert!(nano_acquired.get());
+}
+
+#[test]
 fn receives_large_transfer_while_writes_wait_for_replies() {
     let _lock = CLOCK_LOCK.lock().unwrap();
     let queue = Channel::<NoopRawMutex, [u8; 512], 16>::new();

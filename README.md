@@ -17,6 +17,8 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - Nano connect attempts have a 12-second deadline, individual setup operations
   8 seconds, C304 writes 3 seconds, and initial loading 45 seconds. A stalled or
   failed write ends the session rather than continuing uncertain queued edits.
+  Footswitch connection/setup operations use the same deadlines, so a stalled
+  footswitch cannot hold the shared scan/connect lock indefinitely.
 - C305 receive processing runs alongside the serialized C304 writer, including
   during setup writes and touch/MIDI bursts. Command batches yield cooperatively;
   scene commands keep their existing ordering and verified readback.

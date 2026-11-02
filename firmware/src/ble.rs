@@ -1194,21 +1194,24 @@ async fn foot_link<C: Controller>(
         connect_params: peer_params(),
         scan_config: listen(&foot_filter),
     };
-    let conn = central.connect(&connect).await;
+    let conn = connection::with_deadline(CONNECT_TIMEOUT, central.connect(&connect)).await;
     drop(guard);
     let conn = match conn {
         Ok(conn) => conn,
-        Err(_) => {
-            log::warn!("footswitch connect failed");
+        Err(error) => {
+            log::warn!("Footswitch connection failed; check power/pairing: {error:?}");
             return;
         }
     };
     mark(addr, 2);
     log::info!("footswitch connected");
-    let client = match Box::pin(GattClient::<C, DefaultPacketPool, 4>::new(stack, &conn)).await {
+    let client = match connection::with_deadline(
+        SETUP_TIMEOUT,
+        Box::pin(GattClient::<C, DefaultPacketPool, 4>::new(stack, &conn)),
+    ).await {
         Ok(client) => client,
-        Err(_) => {
-            log::warn!("footswitch gatt client failed");
+        Err(error) => {
+            log::warn!("Footswitch GATT initialization failed; reconnecting: {error:?}");
             return;
         }
     };
@@ -1216,15 +1219,17 @@ async fn foot_link<C: Controller>(
 
     let _ = select(
         async {
-            if client.task().await.is_err() {
-                log::warn!("footswitch gatt task ended");
+            if let Err(error) = client.task().await {
+                log::warn!("Footswitch receive stopped; check power/range: {error:?}");
             }
         },
         async {
-            let svcs = match client.services_by_uuid(&Uuid::new_long(MIDI_SVC)).await {
+            let svcs = match connection::with_deadline(
+                SETUP_TIMEOUT, client.services_by_uuid(&Uuid::new_long(MIDI_SVC)),
+            ).await {
                 Ok(svcs) => svcs,
-                Err(_) => {
-                    log::warn!("midi service missing");
+                Err(error) => {
+                    log::warn!("Footswitch MIDI service discovery failed: {error:?}");
                     return;
                 }
             };
@@ -1232,20 +1237,23 @@ async fn foot_link<C: Controller>(
                 log::warn!("midi service missing");
                 return;
             };
-            let io = match client
-                .characteristic_by_uuid::<[u8]>(svc, &Uuid::new_long(MIDI_IO))
-                .await
+            let io = match connection::with_deadline(
+                SETUP_TIMEOUT,
+                client.characteristic_by_uuid::<[u8]>(svc, &Uuid::new_long(MIDI_IO)),
+            ).await
             {
                 Ok(io) => io,
-                Err(_) => {
-                    log::warn!("midi io missing");
+                Err(error) => {
+                    log::warn!("Footswitch MIDI characteristic discovery failed: {error:?}");
                     return;
                 }
             };
-            let mut listener = match client.subscribe(&io, false).await {
+            let mut listener = match connection::with_deadline(
+                SETUP_TIMEOUT, client.subscribe(&io, false),
+            ).await {
                 Ok(listener) => listener,
-                Err(_) => {
-                    log::warn!("midi subscribe failed");
+                Err(error) => {
+                    log::warn!("Footswitch MIDI subscription failed; check pairing: {error:?}");
                     return;
                 }
             };
