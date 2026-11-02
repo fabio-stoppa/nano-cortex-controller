@@ -28,14 +28,28 @@ fn flash() -> Option<&'static mut FlashStorage<'static>> {
     slot.as_mut().filter(|f| f.capacity() != 0)
 }
 
-fn record(mode: u8, autosave: bool) -> [u8; 8] {
-    let mut r = [0u8; 8];
+fn record(mode: u8, autosave: bool, selected_nano: Option<[u8; 7]>) -> [u8; 16] {
+    let mut r = [0u8; 16];
     r[..4].copy_from_slice(&MAGIC.to_le_bytes());
     r[4] = mode;
     r[5] = !mode;
     r[6] = u8::from(autosave);
     r[7] = !r[6];
+    selected_device::write(&mut r, selected_nano);
     r
+}
+
+fn selected_nano_from_record(record: &[u8; 16]) -> Option<[u8; 7]> {
+    let magic = u32::from_le_bytes(record[..4].try_into().ok()?);
+    if magic != MAGIC
+        || record[5] != !record[4]
+        || record[4] > 3
+        || record[6] > 1
+        || record[7] != !record[6]
+    {
+        return None;
+    }
+    selected_device::read(record)
 }
 
 fn with_region<T>(
@@ -60,7 +74,7 @@ fn with_region<T>(
 /// Saved layout mode, if a valid record exists.
 pub fn load_layout() -> Option<i32> {
     with_region(|region| {
-        let mut r = [0u8; 8];
+        let mut r = [0u8; 16];
         region.read(0, &mut r).ok()?;
         let magic = u32::from_le_bytes(r[..4].try_into().ok()?);
         (magic == MAGIC && r[5] == !r[4] && r[4] <= 3).then_some(r[4] as i32)
@@ -79,7 +93,7 @@ pub fn save_layout(mode: i32) {
 
 pub fn load_autosave() -> bool {
     with_region(|region| {
-        let mut r = [0u8; 8];
+        let mut r = [0u8; 16];
         region.read(0, &mut r).map_err(|error| log::warn!("read autosave {error:?}")).ok()?;
         Some(u32::from_le_bytes(r[..4].try_into().ok()?) == MAGIC
             && r[5] == !r[4] && r[4] <= 3 && r[6] == 1 && r[7] == !r[6])
@@ -91,10 +105,26 @@ pub fn save_autosave(enabled: bool) -> Result<(), &'static str> {
 }
 
 fn save_preferences(mode: u8, autosave: bool) -> Result<(), &'static str> {
+    let selected_nano = with_region(|region| {
+        let mut current = [0u8; 16];
+        region.read(0, &mut current)
+            .map_err(|e| log::warn!("read selected Nano {e:?}"))
+            .ok()?;
+        Some(selected_nano_from_record(&current))
+    })
+    .flatten();
+    save_preferences_with_selection(mode, autosave, selected_nano)
+}
+
+fn save_preferences_with_selection(
+    mode: u8,
+    autosave: bool,
+    selected_nano: Option<[u8; 7]>,
+) -> Result<(), &'static str> {
     let _pause = crate::bounce::FlashPause::begin()?;
-    let expected = record(mode, autosave);
+    let expected = record(mode, autosave, selected_nano);
     let saved = with_region(|region| {
-        let mut current = [0u8; 8];
+        let mut current = [0u8; 16];
         region.read(0, &mut current)
             .map_err(|e| log::warn!("read preferences {e:?}"))
             .ok()?;
@@ -109,16 +139,34 @@ fn save_preferences(mode: u8, autosave: bool) -> Result<(), &'static str> {
             .write(0, &expected)
             .map_err(|e| log::warn!("write {e:?}"))
             .ok()?;
-        let mut readback = [0u8; 8];
+        let mut readback = [0u8; 16];
         region.read(0, &mut readback).map_err(|e| log::warn!("readback {e:?}")).ok()?;
         (readback == expected).then_some(())
     });
     saved.ok_or("Could not save controller preferences")
 }
 
+pub fn load_selected_nano() -> Option<[u8; 7]> {
+    with_region(|region| {
+        let mut record = [0u8; 16];
+        region.read(0, &mut record).ok()?;
+        Some(selected_nano_from_record(&record))
+    })
+    .flatten()
+}
+
+pub fn save_selected_nano(address: Option<[u8; 7]>) -> Result<(), &'static str> {
+    save_preferences_with_selection(
+        load_layout().unwrap_or(0) as u8,
+        load_autosave(),
+        address,
+    )
+}
+
 mod midi_record;
 mod json_record;
 mod reset;
+pub mod selected_device;
 pub mod preferences;
 
 pub fn import_preferences(preferences: &preferences::Preferences) -> Result<(), &'static str> {

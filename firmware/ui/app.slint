@@ -550,6 +550,7 @@ export struct BtDevice {
     kind: string,
     // 0 nearby, 1 connecting, 2 connected
     state: int,
+    selected: bool,
 }
 
 // Rune-style Bluetooth mark; the icon color shows connected / connecting / off.
@@ -652,7 +653,13 @@ component BluetoothList inherits VerticalLayout {
     in property <[BtDevice]> devices;
     callback picked(int);
     callback forget(int);
+    callback choose-another();
     spacing: 8px;
+    HeaderButton {
+        width: parent.width;
+        label: "Choose another Nano";
+        tapped => { root.choose-another(); }
+    }
     if root.devices.length == 0: Text {
         // No word-wrap: wrapped height would loop with the Settings scroll width.
         text: "Searching for Nano Cortex or FootCtrl / Chocolate...";
@@ -666,7 +673,9 @@ component BluetoothList inherits VerticalLayout {
         OptionRow {
             width: parent.width;
             label: device.name;
-            value: device.state == 2 ? "Connected" : (device.state == 1 ? "Connecting" : device.kind);
+            value: device.state == 2 ? "Connected"
+                : device.state == 1 ? "Connecting"
+                : device.selected ? "Selected Nano" : device.kind;
             highlight: device.state == 2;
             // Matches the 8px above and below the 52px button.
             pad-right: 8px;
@@ -2041,6 +2050,7 @@ component ToolsPanel inherits Rectangle {
     in property <[BtDevice]> bt-devices;
     callback bt-picked(int);
     callback bt-forget(int);
+    callback bt-choose-another();
     in property <int> layout-mode;
     callback layout-tapped(int);
     in property <[MidiRow]> midi-rows;
@@ -2134,6 +2144,7 @@ component ToolsPanel inherits Rectangle {
                         devices: root.bt-devices;
                         picked(index) => { root.bt-picked(index); }
                         forget(index) => { root.bt-forget(index); }
+                        choose-another => { root.bt-choose-another(); }
                     }
                     if root.section == 0 && root.tab == 0: VerticalLayout {
                         spacing: 8px;
@@ -3238,6 +3249,7 @@ export component AppWindow inherits Window {
     callback library-tapped();
     callback bt-picked(int);
     callback bt-forget(int);
+    callback bt-choose-another();
     callback model-list-tapped();
     callback capture-list-tapped();
     callback cab-list-tapped();
@@ -3762,6 +3774,7 @@ export component AppWindow inherits Window {
         bt-devices: root.bt-devices;
         bt-picked(index) => { root.bt-picked(index); }
         bt-forget(index) => { root.bt-forget(index); }
+        bt-choose-another => { root.bt-choose-another(); }
         x: 0px; y: 0px; width: root.width; height: root.height;
         closed => { root.settings-open = false; }
         layout-mode: root.layout-mode;

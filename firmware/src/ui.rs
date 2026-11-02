@@ -599,6 +599,7 @@ fn ensure() {
             crate::ble::forget(index as usize);
         }
     });
+    app.on_bt_choose_another(move || crate::ble::choose_another_nano());
     app.on_retry_now(move || crate::ble::retry_now());
     app.on_library_tapped(move || crate::link::push_cmd(Cmd::Library));
     app.on_param_changed(move |cell, amount| send_fx_param(cell, amount));
@@ -1170,7 +1171,12 @@ pub fn refresh_bluetooth(devices: &[crate::ble::Seen]) {
     }
     let mut hash = 17u32;
     for d in devices {
-        for b in d.name.bytes().chain([d.state, d.nano as u8]) {
+        for b in d
+            .name
+            .bytes()
+            .chain(d.addr.to_bytes())
+            .chain([d.state, d.nano as u8, d.selected as u8])
+        {
             hash = hash.wrapping_mul(31).wrapping_add(u32::from(b));
         }
     }
@@ -1183,13 +1189,14 @@ pub fn refresh_bluetooth(devices: &[crate::ble::Seen]) {
     let rows: alloc::vec::Vec<BtDevice> = devices
         .iter()
         .map(|d| BtDevice {
-            name: d.name.as_str().into(),
+            name: format!("{} ({})", d.name, d.addr).into(),
             kind: if d.nano {
                 "Amp".into()
             } else {
                 "Footswitch".into()
             },
             state: d.state as i32,
+            selected: d.selected,
         })
         .collect();
     ui.app

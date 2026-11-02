@@ -18,6 +18,8 @@ mod usb_disk;
 mod usb_config;
 #[path = "../../../src/settings/preferences.rs"]
 pub mod preferences;
+#[path = "../../../src/settings/selected_device.rs"]
+mod selected_device;
 
 #[path = "../../../src/fx/catalog.rs"]
 pub mod catalog;

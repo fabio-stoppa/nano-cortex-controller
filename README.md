@@ -45,6 +45,9 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - Reconnects rerun idempotent initial state/catalog/library reads. Failed C304
   writes and queued Save/Copy/Move/Delete actions are discarded, not replayed;
   inspect the Nano before manually retrying an operation with uncertain outcome.
+- The Bluetooth picker remembers the selected Nano across reboot and displays
+  device addresses to distinguish nearby units. Choose another Nano clears the
+  preference and lets the picker discover alternatives.
 - ATT authentication/encryption failures are called out with stale-pairing
   cleanup steps. This firmware does not enable TrouBLE security or persist bonds,
   so it cannot automatically remove/recreate a bond; recovery is explicitly

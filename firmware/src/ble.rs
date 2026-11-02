@@ -12,6 +12,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetDataLength, LeSetScanParams};
 use bt_hci::controller::ControllerCmdSync;
+use bt_hci::param::{AddrKind, BdAddr};
 use core::cell::{Cell, RefCell};
 use embassy_futures::join::{join, join3};
 use embassy_futures::select::{select, Either};
@@ -33,6 +34,16 @@ pub fn submit_slider(edit: SliderWrite) {
     } else {
         log::warn!("Touch edit queue full; control {} update refused", edit.id);
     }
+}
+
+pub fn choose_another_nano() {
+    PICK_NANO.lock(|pick| *pick.borrow_mut() = None);
+    if let Err(error) = crate::settings::save_selected_nano(None) {
+        log::error!("Could not clear selected Nano: {error}");
+        crate::scenes::report("Could not clear the remembered Nano; check controller storage");
+    }
+    PAUSED_NANO.store(true, Ordering::Relaxed);
+    NANO_RESTART.signal(());
 }
 
 pub fn retry_now() {
@@ -137,6 +148,7 @@ pub struct Seen {
     pub addr: Address,
     pub name: String,
     pub nano: bool,
+    pub selected: bool,
     /// 0 = nearby, 1 = connecting, 2 = connected.
     pub state: u8,
     seen_at: embassy_time::Instant,
@@ -178,11 +190,17 @@ static FOOT_RESTART: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 /// Devices that are linked, being linked, or were heard recently.
 pub fn devices() -> Vec<Seen> {
     let now = embassy_time::Instant::now();
+    let selected_nano = PICK_NANO.lock(|pick| *pick.borrow());
     SEEN.lock(|seen| {
         seen.borrow()
             .iter()
             .filter(|d| d.state > 0 || now - d.seen_at < AVAILABLE_FOR)
             .cloned()
+            .map(|mut device| {
+                device.selected =
+                    device.nano && selected_nano.is_some_and(|selected| selected == device.addr);
+                device
+            })
             .collect()
     })
 }
@@ -197,6 +215,12 @@ pub fn pick(index: usize) {
     }
     let slot = if device.nano { &PICK_NANO } else { &PICK_FOOT };
     slot.lock(|pick| *pick.borrow_mut() = Some(device.addr));
+    if device.nano {
+        if let Err(error) = crate::settings::save_selected_nano(Some(device.addr.to_bytes())) {
+            log::error!("Could not remember selected Nano: {error}");
+            crate::scenes::report("Nano selected for this session, but could not save the selection");
+        }
+    }
     paused(device.nano).store(false, Ordering::Relaxed);
     // The two links are independent, so only the chosen one restarts.
     if device.nano {
@@ -260,6 +284,7 @@ fn remember(addr: Address, name: &[u8], nano: bool) {
                 String::from_utf8_lossy(name).into_owned()
             },
             nano,
+            selected: false,
             state: 0,
             seen_at: embassy_time::Instant::now(),
         });
@@ -288,13 +313,38 @@ fn wanted(slot: &Shared<Option<Address>>, addr: Address) -> bool {
     if paused(nano).load(Ordering::Relaxed) {
         return false;
     }
-    slot.lock(|pick| pick.borrow().map_or(true, |p| p == addr))
+    slot.lock(|pick| {
+        pick.borrow().map_or(true, |preferred| {
+            preferred == addr
+                || nano
+                    && !SEEN.lock(|seen| {
+                        let now = Instant::now();
+                        seen.borrow().iter().any(|device| {
+                            device.nano
+                                && device.addr == preferred
+                                && now - device.seen_at < AVAILABLE_FOR
+                        })
+                    })
+        })
+    })
 }
 
 fn is_foot(name: &[u8]) -> bool {
     eq_ignore_ascii_case(name, FOOT_PLUS)
         || eq_ignore_ascii_case(name, FOOT)
         || name.len() >= 9 && eq_ignore_ascii_case(&name[..9], b"chocolate")
+}
+
+fn address_from_storage(bytes: [u8; 7]) -> Option<Address> {
+    if bytes[0] > 3 {
+        return None;
+    }
+    let mut address: [u8; 6] = bytes[1..].try_into().ok()?;
+    address.reverse();
+    Some(Address::new(
+        AddrKind::new(bytes[0]),
+        BdAddr::new(address),
+    ))
 }
 
 struct Hunt {
@@ -398,6 +448,10 @@ where
         .build();
     let mut runner = stack.runner();
     let hunt = Hunt::new();
+    if let Some(address) = crate::settings::load_selected_nano().and_then(address_from_storage) {
+        PICK_NANO.lock(|pick| *pick.borrow_mut() = Some(address));
+        log::info!("restored selected Nano {address}");
+    }
     crate::ui::set_bluetooth_busy();
 
     let _ = join3(
