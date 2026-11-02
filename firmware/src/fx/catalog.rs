@@ -5,16 +5,10 @@
 
 use super::types::{NanoFxModelDef, ParamNames};
 
-static PARAMS_0: ParamNames<3> = ParamNames([
-    c"Gain".as_ptr(),
-    c"Tone".as_ptr(),
-    c"Volume".as_ptr(),
-]);
+static PARAMS_0: ParamNames<3> =
+    ParamNames([c"Gain".as_ptr(), c"Tone".as_ptr(), c"Volume".as_ptr()]);
 
-static PARAMS_1: ParamNames<2> = ParamNames([
-    c"Gain".as_ptr(),
-    c"Level".as_ptr(),
-]);
+static PARAMS_1: ParamNames<2> = ParamNames([c"Gain".as_ptr(), c"Level".as_ptr()]);
 
 static PARAMS_2: ParamNames<4> = ParamNames([
     c"Gain".as_ptr(),
@@ -44,11 +38,8 @@ static PARAMS_5: ParamNames<4> = ParamNames([
     c"Pickup Level".as_ptr(),
 ]);
 
-static PARAMS_6: ParamNames<3> = ParamNames([
-    c"Overdrive".as_ptr(),
-    c"Tone".as_ptr(),
-    c"Level".as_ptr(),
-]);
+static PARAMS_6: ParamNames<3> =
+    ParamNames([c"Overdrive".as_ptr(), c"Tone".as_ptr(), c"Level".as_ptr()]);
 
 static PARAMS_7: ParamNames<6> = ParamNames([
     c"Drive".as_ptr(),
@@ -59,10 +50,7 @@ static PARAMS_7: ParamNames<6> = ParamNames([
     c"Blend".as_ptr(),
 ]);
 
-static PARAMS_8: ParamNames<2> = ParamNames([
-    c"Gain".as_ptr(),
-    c"Volume".as_ptr(),
-]);
+static PARAMS_8: ParamNames<2> = ParamNames([c"Gain".as_ptr(), c"Volume".as_ptr()]);
 
 static PARAMS_9: ParamNames<4> = ParamNames([
     c"Drive".as_ptr(),
@@ -77,9 +65,7 @@ static PARAMS_10: ParamNames<3> = ParamNames([
     c"Volume".as_ptr(),
 ]);
 
-static PARAMS_11: ParamNames<1> = ParamNames([
-    c"Noise Reduction".as_ptr(),
-]);
+static PARAMS_11: ParamNames<1> = ParamNames([c"Noise Reduction".as_ptr()]);
 
 static PARAMS_12: ParamNames<12> = ParamNames([
     c"65Hz".as_ptr(),
@@ -131,26 +117,15 @@ static PARAMS_15: ParamNames<5> = ParamNames([
     c"Range".as_ptr(),
 ]);
 
-static PARAMS_16: ParamNames<2> = ParamNames([
-    c"Level".as_ptr(),
-    c"Curve (Linear/Log)".as_ptr(),
-]);
+static PARAMS_16: ParamNames<2> = ParamNames([c"Level".as_ptr(), c"Curve (Linear/Log)".as_ptr()]);
 
-static PARAMS_17: ParamNames<1> = ParamNames([
-    c"Wah".as_ptr(),
-]);
+static PARAMS_17: ParamNames<1> = ParamNames([c"Wah".as_ptr()]);
 
-static PARAMS_18: ParamNames<1> = ParamNames([
-    c"Wah".as_ptr(),
-]);
+static PARAMS_18: ParamNames<1> = ParamNames([c"Wah".as_ptr()]);
 
-static PARAMS_19: ParamNames<1> = ParamNames([
-    c"Wah".as_ptr(),
-]);
+static PARAMS_19: ParamNames<1> = ParamNames([c"Wah".as_ptr()]);
 
-static PARAMS_20: ParamNames<1> = ParamNames([
-    c"Wah".as_ptr(),
-]);
+static PARAMS_20: ParamNames<1> = ParamNames([c"Wah".as_ptr()]);
 
 static PARAMS_21: ParamNames<9> = ParamNames([
     c"Sens".as_ptr(),

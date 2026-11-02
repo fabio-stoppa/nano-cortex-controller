@@ -6,7 +6,10 @@ use log::{debug, info};
 use nano_wire::varint::read_varint;
 
 use super::ctx::*;
-use super::route::{apply_gain_2d_route, apply_tuner_mode_c305, gain_prefix_before_2d, is_direct_2d_off, is_gain_2d_route};
+use super::route::{
+    apply_gain_2d_route, apply_tuner_mode_c305, gain_prefix_before_2d, is_direct_2d_off,
+    is_gain_2d_route,
+};
 use crate::tuner::types::*;
 
 pub(super) fn find_tuner_sub(data: &[u8]) -> Option<u8> {

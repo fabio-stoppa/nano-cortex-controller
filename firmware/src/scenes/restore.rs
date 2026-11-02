@@ -273,7 +273,8 @@ impl Plan {
                     return Progress::Waiting
                 }
                 Some(Step::Write(Cmd::FxModelId { block, id }))
-                    if view.effects.valid && view.effects.blocks[usize::from(*block)].valid
+                    if view.effects.valid
+                        && view.effects.blocks[usize::from(*block)].valid
                         && view.effects.blocks[usize::from(*block)].params_loaded
                         && view.effects.blocks[usize::from(*block)].model_id() == id.as_slice() =>
                 {
@@ -281,7 +282,8 @@ impl Plan {
                     continue;
                 }
                 Some(Step::Write(Cmd::Block { slot, on }))
-                    if view.effects.valid && view.effects.blocks[usize::from(*slot)].valid
+                    if view.effects.valid
+                        && view.effects.blocks[usize::from(*slot)].valid
                         && view.effects.blocks[usize::from(*slot)].on == *on =>
                 {
                     self.steps.pop_front();

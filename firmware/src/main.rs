@@ -63,7 +63,9 @@ async fn main(_spawner: Spawner) {
     esp_hal::delay::Delay::new().delay_millis(100);
     log::info!("bounce refills={}", bounce::eof_count());
     match settings::initialize() {
-        Ok(true) => log::warn!("Controller factory reset complete: all saved controller data erased"),
+        Ok(true) => {
+            log::warn!("Controller factory reset complete: all saved controller data erased")
+        }
         Ok(false) => {}
         Err(error) => {
             log::error!("Controller factory reset failed: {error}; reboot to retry");

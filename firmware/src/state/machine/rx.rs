@@ -134,7 +134,9 @@ fn update_preset_label_locked(state: &[u8]) {
         format!("Preset {slot}")
     };
     super::editor::note_loaded_preset(&label, slot, foot);
-    if let Some(dirty) = nano_wire::editor::current_preset_dirty(state, !state_dump_truncated(state)) {
+    if let Some(dirty) =
+        nano_wire::editor::current_preset_dirty(state, !state_dump_truncated(state))
+    {
         super::editor::note_preset_dirty(dirty);
     }
     crate::screen::nano_ui_set_preset_name(&label);
@@ -429,7 +431,9 @@ pub(super) fn parse_state_buffer() {
     if let Some(amp) = parsed_amp {
         s.amp = NanoAmpC::from(&amp);
         // Verification must not use optimistic knob values or capture-volume fallbacks.
-        if !truncated { s.verified_amp = NanoAmpC::from(&amp); }
+        if !truncated {
+            s.verified_amp = NanoAmpC::from(&amp);
+        }
         /*
          * Field 44 often sits in the missing mid-dump gap. Keep a previously
          * known capture volume (notify / write / earlier full dump); only seed
@@ -526,7 +530,9 @@ pub(super) fn parse_state_buffer() {
 
     update_preset_label_locked(buf);
     super::editor::sync_cab_settings(!state_dump_truncated(buf));
-    if amp_complete && !truncated { crate::state::snapshot_completed(); }
+    if amp_complete && !truncated {
+        crate::state::snapshot_completed();
+    }
 
     if let Some(bpm) = parsers::parse_bpm(buf) {
         info!(target: TAG, "BPM {bpm} (field 56) [{label}]");

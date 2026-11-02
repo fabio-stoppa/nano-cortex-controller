@@ -221,7 +221,9 @@ pub fn pick(index: usize) {
     if device.nano {
         if let Err(error) = crate::settings::save_selected_nano(Some(device.addr.to_bytes())) {
             log::error!("Could not remember selected Nano: {error}");
-            crate::scenes::report("Nano selected for this session, but could not save the selection");
+            crate::scenes::report(
+                "Nano selected for this session, but could not save the selection",
+            );
         }
     }
     paused(device.nano).store(false, Ordering::Relaxed);
@@ -344,10 +346,7 @@ fn address_from_storage(bytes: [u8; 7]) -> Option<Address> {
     }
     let mut address: [u8; 6] = bytes[1..].try_into().ok()?;
     address.reverse();
-    Some(Address::new(
-        AddrKind::new(bytes[0]),
-        BdAddr::new(address),
-    ))
+    Some(Address::new(AddrKind::new(bytes[0]), BdAddr::new(address)))
 }
 
 struct Hunt {
@@ -854,7 +853,14 @@ async fn nano_link<C: Controller, P: PacketPool>(
 
     connection::run_io(
         receive_notifications(&mut listener),
-        nano_commands(client, &c304, c304_no_rsp, setup_started, interval_us, att_mtu),
+        nano_commands(
+            client,
+            &c304,
+            c304_no_rsp,
+            setup_started,
+            interval_us,
+            att_mtu,
+        ),
     )
     .await;
 }

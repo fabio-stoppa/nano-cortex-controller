@@ -31,31 +31,131 @@ unsafe impl Sync for NanoAmpCapture {}
 pub const NANO_AMP_CATALOG_COUNT: usize = 25;
 
 pub static NANO_AMP_CATALOG: [NanoAmpCapture; NANO_AMP_CATALOG_COUNT] = [
-    NanoAmpCapture { slot: 1, name: c"CA John's Ch1".as_ptr(), bank: NANO_AMP_BANK_CLEAN },
-    NanoAmpCapture { slot: 2, name: c"Comet 60".as_ptr(), bank: NANO_AMP_BANK_CLEAN },
-    NanoAmpCapture { slot: 3, name: c"Bogna X100B Ch1".as_ptr(), bank: NANO_AMP_BANK_CLEAN },
-    NanoAmpCapture { slot: 4, name: c"Watt Custom Clean".as_ptr(), bank: NANO_AMP_BANK_CLEAN },
-    NanoAmpCapture { slot: 5, name: c"US HRDLX ChA".as_ptr(), bank: NANO_AMP_BANK_CLEAN },
-    NanoAmpCapture { slot: 6, name: c"Comet 60".as_ptr(), bank: NANO_AMP_BANK_2 },
-    NanoAmpCapture { slot: 7, name: c"NoMatch Chief".as_ptr(), bank: NANO_AMP_BANK_2 },
-    NanoAmpCapture { slot: 8, name: c"US Prince 65".as_ptr(), bank: NANO_AMP_BANK_2 },
-    NanoAmpCapture { slot: 9, name: c"Watt Custom VH".as_ptr(), bank: NANO_AMP_BANK_2 },
-    NanoAmpCapture { slot: 10, name: c"D-Cell H4 Ch2".as_ptr(), bank: NANO_AMP_BANK_2 },
-    NanoAmpCapture { slot: 11, name: c"Bogna Fish+290".as_ptr(), bank: NANO_AMP_BANK_3 },
-    NanoAmpCapture { slot: 12, name: c"Brit 2555 Rhy".as_ptr(), bank: NANO_AMP_BANK_3 },
-    NanoAmpCapture { slot: 13, name: c"Custom 3SE+290".as_ptr(), bank: NANO_AMP_BANK_3 },
-    NanoAmpCapture { slot: 14, name: c"D-Cell H4 Ch3".as_ptr(), bank: NANO_AMP_BANK_3 },
-    NanoAmpCapture { slot: 15, name: c"ENG Energy".as_ptr(), bank: NANO_AMP_BANK_3 },
-    NanoAmpCapture { slot: 16, name: c"Bogna X100B Ch3".as_ptr(), bank: NANO_AMP_BANK_HIGH_GAIN },
-    NanoAmpCapture { slot: 17, name: c"CA Studio+290".as_ptr(), bank: NANO_AMP_BANK_HIGH_GAIN },
-    NanoAmpCapture { slot: 18, name: c"CA John's Ch3".as_ptr(), bank: NANO_AMP_BANK_HIGH_GAIN },
-    NanoAmpCapture { slot: 19, name: c"PV 505Sig".as_ptr(), bank: NANO_AMP_BANK_HIGH_GAIN },
-    NanoAmpCapture { slot: 20, name: c"Brit 2555 Lead".as_ptr(), bank: NANO_AMP_BANK_HIGH_GAIN },
-    NanoAmpCapture { slot: 21, name: c"Aggi 751".as_ptr(), bank: NANO_AMP_BANK_BASS },
-    NanoAmpCapture { slot: 22, name: c"Amped SV Classic".as_ptr(), bank: NANO_AMP_BANK_BASS },
-    NanoAmpCapture { slot: 23, name: c"Rodent+SV".as_ptr(), bank: NANO_AMP_BANK_BASS },
-    NanoAmpCapture { slot: 24, name: c"CA MixBass".as_ptr(), bank: NANO_AMP_BANK_BASS },
-    NanoAmpCapture { slot: 25, name: c"Anima Fuzz".as_ptr(), bank: NANO_AMP_BANK_BASS },
+    NanoAmpCapture {
+        slot: 1,
+        name: c"CA John's Ch1".as_ptr(),
+        bank: NANO_AMP_BANK_CLEAN,
+    },
+    NanoAmpCapture {
+        slot: 2,
+        name: c"Comet 60".as_ptr(),
+        bank: NANO_AMP_BANK_CLEAN,
+    },
+    NanoAmpCapture {
+        slot: 3,
+        name: c"Bogna X100B Ch1".as_ptr(),
+        bank: NANO_AMP_BANK_CLEAN,
+    },
+    NanoAmpCapture {
+        slot: 4,
+        name: c"Watt Custom Clean".as_ptr(),
+        bank: NANO_AMP_BANK_CLEAN,
+    },
+    NanoAmpCapture {
+        slot: 5,
+        name: c"US HRDLX ChA".as_ptr(),
+        bank: NANO_AMP_BANK_CLEAN,
+    },
+    NanoAmpCapture {
+        slot: 6,
+        name: c"Comet 60".as_ptr(),
+        bank: NANO_AMP_BANK_2,
+    },
+    NanoAmpCapture {
+        slot: 7,
+        name: c"NoMatch Chief".as_ptr(),
+        bank: NANO_AMP_BANK_2,
+    },
+    NanoAmpCapture {
+        slot: 8,
+        name: c"US Prince 65".as_ptr(),
+        bank: NANO_AMP_BANK_2,
+    },
+    NanoAmpCapture {
+        slot: 9,
+        name: c"Watt Custom VH".as_ptr(),
+        bank: NANO_AMP_BANK_2,
+    },
+    NanoAmpCapture {
+        slot: 10,
+        name: c"D-Cell H4 Ch2".as_ptr(),
+        bank: NANO_AMP_BANK_2,
+    },
+    NanoAmpCapture {
+        slot: 11,
+        name: c"Bogna Fish+290".as_ptr(),
+        bank: NANO_AMP_BANK_3,
+    },
+    NanoAmpCapture {
+        slot: 12,
+        name: c"Brit 2555 Rhy".as_ptr(),
+        bank: NANO_AMP_BANK_3,
+    },
+    NanoAmpCapture {
+        slot: 13,
+        name: c"Custom 3SE+290".as_ptr(),
+        bank: NANO_AMP_BANK_3,
+    },
+    NanoAmpCapture {
+        slot: 14,
+        name: c"D-Cell H4 Ch3".as_ptr(),
+        bank: NANO_AMP_BANK_3,
+    },
+    NanoAmpCapture {
+        slot: 15,
+        name: c"ENG Energy".as_ptr(),
+        bank: NANO_AMP_BANK_3,
+    },
+    NanoAmpCapture {
+        slot: 16,
+        name: c"Bogna X100B Ch3".as_ptr(),
+        bank: NANO_AMP_BANK_HIGH_GAIN,
+    },
+    NanoAmpCapture {
+        slot: 17,
+        name: c"CA Studio+290".as_ptr(),
+        bank: NANO_AMP_BANK_HIGH_GAIN,
+    },
+    NanoAmpCapture {
+        slot: 18,
+        name: c"CA John's Ch3".as_ptr(),
+        bank: NANO_AMP_BANK_HIGH_GAIN,
+    },
+    NanoAmpCapture {
+        slot: 19,
+        name: c"PV 505Sig".as_ptr(),
+        bank: NANO_AMP_BANK_HIGH_GAIN,
+    },
+    NanoAmpCapture {
+        slot: 20,
+        name: c"Brit 2555 Lead".as_ptr(),
+        bank: NANO_AMP_BANK_HIGH_GAIN,
+    },
+    NanoAmpCapture {
+        slot: 21,
+        name: c"Aggi 751".as_ptr(),
+        bank: NANO_AMP_BANK_BASS,
+    },
+    NanoAmpCapture {
+        slot: 22,
+        name: c"Amped SV Classic".as_ptr(),
+        bank: NANO_AMP_BANK_BASS,
+    },
+    NanoAmpCapture {
+        slot: 23,
+        name: c"Rodent+SV".as_ptr(),
+        bank: NANO_AMP_BANK_BASS,
+    },
+    NanoAmpCapture {
+        slot: 24,
+        name: c"CA MixBass".as_ptr(),
+        bank: NANO_AMP_BANK_BASS,
+    },
+    NanoAmpCapture {
+        slot: 25,
+        name: c"Anima Fuzz".as_ptr(),
+        bank: NANO_AMP_BANK_BASS,
+    },
 ];
 
 pub fn catalog() -> &'static [NanoAmpCapture] {
@@ -94,7 +194,11 @@ pub fn nano_amp_format_bank_line(slot: u8) -> String {
     }
 
     let bank = nano_amp_bank_from_slot(slot);
-    format!("{} - Slot {}", nano_amp_bank_label(bank), (slot - 1) % 5 + 1)
+    format!(
+        "{} - Slot {}",
+        nano_amp_bank_label(bank),
+        (slot - 1) % 5 + 1
+    )
 }
 
 pub fn nano_amp_bank_label(bank: u32) -> &'static str {
@@ -120,7 +224,9 @@ fn is_generic_capture_name(name: &str) -> bool {
     if digits.len() == p.len() {
         return false;
     }
-    digits.trim_start_matches(|c: char| c.is_ascii_whitespace()).is_empty()
+    digits
+        .trim_start_matches(|c: char| c.is_ascii_whitespace())
+        .is_empty()
 }
 
 /// Read a NUL-terminated fixed buffer coming from a C struct.
@@ -153,7 +259,9 @@ pub fn capture_name(slot: u8) -> Option<&'static str> {
     if capture.name.is_null() {
         return None;
     }
-    unsafe { core::ffi::CStr::from_ptr(capture.name) }.to_str().ok()
+    unsafe { core::ffi::CStr::from_ptr(capture.name) }
+        .to_str()
+        .ok()
 }
 
 /// Touch every exported symbol so rustc does not dead-strip them from the firmware binary.

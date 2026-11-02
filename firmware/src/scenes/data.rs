@@ -249,10 +249,9 @@ mod tests {
 
     #[test]
     fn removed_model_presets_are_rejected() {
-        assert!(Config::decode(
-            r#"{"format":"nano-scenes","version":3,"model_presets":[]}"#
-        )
-        .is_err());
+        assert!(
+            Config::decode(r#"{"format":"nano-scenes","version":3,"model_presets":[]}"#).is_err()
+        );
     }
 
     #[test]

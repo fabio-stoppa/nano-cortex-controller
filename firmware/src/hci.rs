@@ -206,11 +206,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bt_hci::AsHciBytes;
     use bt_hci::cmd::{
         controller_baseband::Reset, le::LeReadLocalSupportedFeatures,
         link_control::ReadRemoteVersionInformation, Cmd,
     };
+    use bt_hci::AsHciBytes;
     use core::future::{poll_fn, Future};
     use core::pin::Pin;
     use core::task::{Context, Poll, Waker};

@@ -66,7 +66,10 @@ impl SeqLock {
     #[allow(dead_code)]
     pub fn end_write(&self) {
         let prev = self.seq.fetch_add(1, Ordering::Release);
-        debug_assert!(prev & 1 == 1, "seqlock: end_write without matching begin_write");
+        debug_assert!(
+            prev & 1 == 1,
+            "seqlock: end_write without matching begin_write"
+        );
     }
 
     #[inline]

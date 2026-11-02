@@ -416,7 +416,10 @@ fn infer_post2_delay(param_count: u8) -> Option<&'static NanoFxModelDef> {
     }
 }
 
-pub(super) fn infer_model_by_params(block: u32, param_count: u8) -> Option<&'static NanoFxModelDef> {
+pub(super) fn infer_model_by_params(
+    block: u32,
+    param_count: u8,
+) -> Option<&'static NanoFxModelDef> {
     if block == NANO_FX_PRE1 && param_count == 5 {
         return find_model_by_name("Transpose");
     }

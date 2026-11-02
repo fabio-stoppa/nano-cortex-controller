@@ -11,9 +11,9 @@ use super::parse::{
     try_apply_catalog_model, upgrade_block_model,
 };
 use super::refresh::{
-    block_model_write_recent, block_needs_refresh, clear_model_write_trust,
-    ensure_refresh_timers, maybe_complete_refresh_from_live, prioritize_param_refresh,
-    schedule_amount_ui, trusted_model_for,
+    block_model_write_recent, block_needs_refresh, clear_model_write_trust, ensure_refresh_timers,
+    maybe_complete_refresh_from_live, prioritize_param_refresh, schedule_amount_ui,
+    trusted_model_for,
 };
 use super::state::{
     fx, fx_publish, now_us, push_fx_ui, FX_AMOUNT_REFRESH_GAP_US, FX_ENABLE_ASSERT_US,
@@ -320,13 +320,10 @@ pub(super) fn maybe_release_param_ui_hold() {
     let block = &s.fx.blocks[sel.min(NANO_FX_BLOCK_COUNT - 1)];
     // Bypass must not count as "ready" — off blocks still need a param poll so
     // the UI can show values when focused after a preset change.
-    let selected_ready = block.params_loaded
-        || block.model.is_null()
-        || !block.valid
-        || {
-            let n = (block.param_count as usize).min(NANO_FX_MAX_PARAMS);
-            n > 0 && block.params[..n].iter().any(|p| p.valid)
-        };
+    let selected_ready = block.params_loaded || block.model.is_null() || !block.valid || {
+        let n = (block.param_count as usize).min(NANO_FX_MAX_PARAMS);
+        n > 0 && block.params[..n].iter().any(|p| p.valid)
+    };
     let queue_idle = !s.refresh_active && s.refresh_q_head >= s.refresh_q_len;
     if selected_ready || queue_idle {
         s.suppress_fx_param_ui = false;
@@ -508,16 +505,14 @@ fn feed_c305(data: &[u8]) -> bool {
         } else {
             u32::MAX
         };
-        let queued = (s.refresh_q_head..s.refresh_q_len)
-            .find_map(|i| {
-                let b = s.refresh_queue[i];
-                if (b as usize) < NANO_FX_BLOCK_COUNT && block_needs_refresh(&s.fx.blocks[b as usize])
-                {
-                    Some(b)
-                } else {
-                    None
-                }
-            });
+        let queued = (s.refresh_q_head..s.refresh_q_len).find_map(|i| {
+            let b = s.refresh_queue[i];
+            if (b as usize) < NANO_FX_BLOCK_COUNT && block_needs_refresh(&s.fx.blocks[b as usize]) {
+                Some(b)
+            } else {
+                None
+            }
+        });
         let candidate = if (focus as usize) < NANO_FX_BLOCK_COUNT
             && block_needs_refresh(&s.fx.blocks[focus as usize])
         {
@@ -627,8 +622,9 @@ fn feed_c305(data: &[u8]) -> bool {
     s.refresh_stale_until_us = 0;
 
     let expected = block.param_count as usize;
-    block.params_loaded =
-        expected > 0 && n >= expected.min(NANO_FX_MAX_PARAMS) && block.params[..n].iter().all(|p| p.valid);
+    block.params_loaded = expected > 0
+        && n >= expected.min(NANO_FX_MAX_PARAMS)
+        && block.params[..n].iter().all(|p| p.valid);
     info!(
         target: TAG,
         "{label} params loaded ({float_count} values, applied {n})"

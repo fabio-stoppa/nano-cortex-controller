@@ -3,7 +3,6 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-
 use crate::syncutil::{SeqLock, Shared};
 use crate::tuner::types::*;
 

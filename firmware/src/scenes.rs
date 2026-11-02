@@ -200,7 +200,9 @@ pub fn scenes(preset: usize) -> Vec<Option<String>> {
 
 pub fn capture_scene(preset: u8, index: usize, name: &str) -> Result<(), &'static str> {
     let error = data::name_error(name);
-    if !error.is_empty() { return Err(error); }
+    if !error.is_empty() {
+        return Err(error);
+    }
     if busy() || !crate::link::connected() || crate::tuner::nano_tuner_is_active() {
         return Err("Connect the Nano and exit tuner before saving a scene");
     }
@@ -273,9 +275,13 @@ pub fn clear_all_scenes() -> Result<(), &'static str> {
 
 pub fn rename_scene(preset: usize, index: usize, name: &str) -> Result<(), &'static str> {
     let error = data::name_error(name);
-    if !error.is_empty() { return Err(error); }
+    if !error.is_empty() {
+        return Err(error);
+    }
     edit(|config| {
-        let scene = config.preset_scenes.iter_mut()
+        let scene = config
+            .preset_scenes
+            .iter_mut()
             .find(|collection| usize::from(collection.preset) == preset)
             .and_then(|collection| collection.scenes.get_mut(index))
             .and_then(Option::as_mut)
@@ -353,7 +359,10 @@ pub fn poll() -> Option<crate::link::Cmd> {
             None
         }
         Progress::Write(command) => {
-            if !matches!(&command, crate::link::Cmd::SceneRefresh | crate::link::Cmd::SceneFxRefresh) {
+            if !matches!(
+                &command,
+                crate::link::Cmd::SceneRefresh | crate::link::Cmd::SceneFxRefresh
+            ) {
                 crate::state::nano_state_note_sound_edit();
             }
             with(|state| state.pending = Some(pending));
@@ -375,7 +384,10 @@ pub fn disconnected() {
 pub fn sound_edited() {
     crate::state::nano_state_note_sound_edit();
     with(|state| {
-        state.autosave_edit = Some((crate::state::nano_state_preset_slot(), crate::clock::now_us()));
+        state.autosave_edit = Some((
+            crate::state::nano_state_preset_slot(),
+            crate::clock::now_us(),
+        ));
         if state.scene.is_some() && !state.scene_dirty {
             state.scene_dirty = true;
             state.version = state.version.wrapping_add(1);
@@ -393,7 +405,9 @@ pub fn set_autosave(enabled: bool) {
 /// Called after queued edits have been sent and the Nano state is idle.
 pub fn autosave_due() -> bool {
     with(|state| {
-        let Some((preset, edited)) = state.autosave_edit else { return false; };
+        let Some((preset, edited)) = state.autosave_edit else {
+            return false;
+        };
         if preset != crate::state::nano_state_preset_slot() || !crate::link::connected() {
             state.autosave_edit = None;
             return false;
@@ -401,7 +415,8 @@ pub fn autosave_due() -> bool {
         if !state.autosave || crate::clock::now_us() - edited < 5_000_000 {
             return false;
         }
-        if state.pending.is_some() || crate::state::nano_rx_mode_get() != 0
+        if state.pending.is_some()
+            || crate::state::nano_rx_mode_get() != 0
             || crate::tuner::nano_tuner_is_active()
         {
             return false;
@@ -415,7 +430,10 @@ pub fn autosave_selected() -> Result<(), &'static str> {
     let preset = crate::state::nano_state_preset_slot();
     if scene_dirty() {
         if let Some(index) = scene() {
-            let name = scenes(usize::from(preset)).get(index).cloned().flatten()
+            let name = scenes(usize::from(preset))
+                .get(index)
+                .cloned()
+                .flatten()
                 .ok_or("Autosave scene no longer exists")?;
             capture_scene(preset, index, &name)?;
         }

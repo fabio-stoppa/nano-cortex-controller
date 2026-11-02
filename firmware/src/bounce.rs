@@ -291,15 +291,22 @@ impl FlashPause {
         if FRAMEBUFFER.load(Ordering::Acquire).is_null() {
             return Ok(Self { active: false });
         }
-        FLASH_PAUSE.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        FLASH_PAUSE
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| "Display flash pause is already active")?;
         let started = esp_hal::time::Instant::now();
         while FLASH_PAUSE.load(Ordering::Acquire) != 2 {
-            if esp_hal::time::Instant::now().duration_since_epoch().as_micros()
-                - started.duration_since_epoch().as_micros() > 100_000
+            if esp_hal::time::Instant::now()
+                .duration_since_epoch()
+                .as_micros()
+                - started.duration_since_epoch().as_micros()
+                > 100_000
             {
                 // If the ISR won the race, resume it through the guard.
-                if FLASH_PAUSE.compare_exchange(1, 0, Ordering::AcqRel, Ordering::Acquire).is_err() {
+                if FLASH_PAUSE
+                    .compare_exchange(1, 0, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
                     while FLASH_PAUSE.load(Ordering::Acquire) != 2 {
                         core::hint::spin_loop();
                     }
@@ -315,7 +322,9 @@ impl FlashPause {
 
 impl Drop for FlashPause {
     fn drop(&mut self) {
-        if !self.active { return; }
+        if !self.active {
+            return;
+        }
         let framebuffer = FRAMEBUFFER.load(Ordering::Acquire);
         unsafe {
             let bufs = ptr::addr_of_mut!(BOUNCE).cast::<u8>();
@@ -327,10 +336,12 @@ impl Drop for FlashPause {
         rewind_to_left_edge();
         PHASE_FIXED.store(0, Ordering::Relaxed);
         FLASH_PAUSE.store(0, Ordering::Release);
-        esp_hal::peripherals::LCD_CAM::regs().lcd_user().modify(|_, w| {
-            w.lcd_update().set_bit();
-            w.lcd_start().set_bit()
-        });
+        esp_hal::peripherals::LCD_CAM::regs()
+            .lcd_user()
+            .modify(|_, w| {
+                w.lcd_update().set_bit();
+                w.lcd_start().set_bit()
+            });
     }
 }
 
@@ -476,9 +487,14 @@ fn vsync_isr() {
     lcd.lc_dma_int_clr()
         .write(|w| w.lcd_vsync_int_clr().set_bit());
 
-    if FLASH_PAUSE.compare_exchange(1, 3, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+    if FLASH_PAUSE
+        .compare_exchange(1, 3, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
         lcd.lcd_user().modify(|_, w| w.lcd_start().clear_bit());
-        esp_hal::peripherals::DMA::regs().ch(0).out_link()
+        esp_hal::peripherals::DMA::regs()
+            .ch(0)
+            .out_link()
             .modify(|_, w| w.outlink_stop().set_bit());
         FLASH_PAUSE.store(2, Ordering::Release);
         return;
@@ -538,14 +554,11 @@ fn rewind_to_left_edge() {
     ch.out_conf0().modify(|_, w| w.out_eof_mode().set_bit());
 
     let lcd = esp_hal::peripherals::LCD_CAM::regs();
-    lcd.lcd_misc()
-        .modify(|_, w| w.lcd_afifo_reset().set_bit());
+    lcd.lcd_misc().modify(|_, w| w.lcd_afifo_reset().set_bit());
     lcd.lcd_misc()
         .modify(|_, w| w.lcd_afifo_reset().clear_bit());
 
-    ch.out_int()
-        .clr()
-        .write(|w| w.out_eof().clear_bit_by_one());
+    ch.out_int().clr().write(|w| w.out_eof().clear_bit_by_one());
     let head = (ptr::addr_of!(DESCRIPTORS) as u32) & 0x000f_ffff;
     ch.out_link()
         .modify(|_, w| unsafe { w.outlink_addr().bits(head) });

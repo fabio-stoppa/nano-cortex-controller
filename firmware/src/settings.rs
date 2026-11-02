@@ -94,10 +94,19 @@ pub fn save_layout(mode: i32) {
 pub fn load_autosave() -> bool {
     with_region(|region| {
         let mut r = [0u8; 16];
-        region.read(0, &mut r).map_err(|error| log::warn!("read autosave {error:?}")).ok()?;
-        Some(u32::from_le_bytes(r[..4].try_into().ok()?) == MAGIC
-            && r[5] == !r[4] && r[4] <= 3 && r[6] == 1 && r[7] == !r[6])
-    }).unwrap_or(false)
+        region
+            .read(0, &mut r)
+            .map_err(|error| log::warn!("read autosave {error:?}"))
+            .ok()?;
+        Some(
+            u32::from_le_bytes(r[..4].try_into().ok()?) == MAGIC
+                && r[5] == !r[4]
+                && r[4] <= 3
+                && r[6] == 1
+                && r[7] == !r[6],
+        )
+    })
+    .unwrap_or(false)
 }
 
 pub fn save_autosave(enabled: bool) -> Result<(), &'static str> {
@@ -107,7 +116,8 @@ pub fn save_autosave(enabled: bool) -> Result<(), &'static str> {
 fn save_preferences(mode: u8, autosave: bool) -> Result<(), &'static str> {
     let selected_nano = with_region(|region| {
         let mut current = [0u8; 16];
-        region.read(0, &mut current)
+        region
+            .read(0, &mut current)
             .map_err(|e| log::warn!("read selected Nano {e:?}"))
             .ok()?;
         Some(selected_nano_from_record(&current))
@@ -125,7 +135,8 @@ fn save_preferences_with_selection(
     let expected = record(mode, autosave, selected_nano);
     let saved = with_region(|region| {
         let mut current = [0u8; 16];
-        region.read(0, &mut current)
+        region
+            .read(0, &mut current)
             .map_err(|e| log::warn!("read preferences {e:?}"))
             .ok()?;
         if current == expected {
@@ -140,7 +151,10 @@ fn save_preferences_with_selection(
             .map_err(|e| log::warn!("write {e:?}"))
             .ok()?;
         let mut readback = [0u8; 16];
-        region.read(0, &mut readback).map_err(|e| log::warn!("readback {e:?}")).ok()?;
+        region
+            .read(0, &mut readback)
+            .map_err(|e| log::warn!("readback {e:?}"))
+            .ok()?;
         (readback == expected).then_some(())
     });
     saved.ok_or("Could not save controller preferences")
@@ -156,18 +170,14 @@ pub fn load_selected_nano() -> Option<[u8; 7]> {
 }
 
 pub fn save_selected_nano(address: Option<[u8; 7]>) -> Result<(), &'static str> {
-    save_preferences_with_selection(
-        load_layout().unwrap_or(0) as u8,
-        load_autosave(),
-        address,
-    )
+    save_preferences_with_selection(load_layout().unwrap_or(0) as u8, load_autosave(), address)
 }
 
-mod midi_record;
 mod json_record;
+mod midi_record;
+pub mod preferences;
 mod reset;
 pub mod selected_device;
-pub mod preferences;
 
 pub fn import_preferences(preferences: &preferences::Preferences) -> Result<(), &'static str> {
     save_preferences(preferences.orientation.layout(), preferences.autosave)
@@ -183,7 +193,9 @@ pub fn initialize() -> Result<bool, &'static str> {
     let table = read_partition_table(&mut *flash, &mut buf)
         .map_err(|_| "Cannot read partition table for controller factory reset")?;
     let find = |label: &str, minimum: u32| {
-        let entry = table.iter().find(|entry| entry.label_as_str() == label)
+        let entry = table
+            .iter()
+            .find(|entry| entry.label_as_str() == label)
             .ok_or("Controller factory reset partition missing; flash using flash.sh")?;
         if entry.partition_type() != PartitionType::Data(DataPartitionSubType::Nvs)
             || entry.len() < minimum
@@ -204,11 +216,14 @@ pub fn initialize() -> Result<bool, &'static str> {
         (scenes.offset(), scenes_size),
     ];
     for (index, &(offset, size)) in ranges.iter().enumerate() {
-        let end = offset.checked_add(size).ok_or("Controller reset partition range overflow")?;
-        if offset % SECTOR != 0 || end > flash.capacity() as u32
-            || ranges[..index].iter().any(|&(old_offset, old_size)| {
-                offset < old_offset + old_size && old_offset < end
-            })
+        let end = offset
+            .checked_add(size)
+            .ok_or("Controller reset partition range overflow")?;
+        if offset % SECTOR != 0
+            || end > flash.capacity() as u32
+            || ranges[..index]
+                .iter()
+                .any(|&(old_offset, old_size)| offset < old_offset + old_size && old_offset < end)
         {
             return Err("Controller reset partition ranges invalid or overlapping");
         }
@@ -219,29 +234,49 @@ pub fn initialize() -> Result<bool, &'static str> {
     }
     impl json_record::Storage for Regions<'_, '_, '_> {
         fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), &'static str> {
-            self.entry.as_flash_region(&mut **self.flash.borrow_mut()).read(offset, bytes)
+            self.entry
+                .as_flash_region(&mut **self.flash.borrow_mut())
+                .read(offset, bytes)
                 .map_err(|_| "Controller reset flash read failed")
         }
         fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), &'static str> {
-            self.entry.as_flash_region(&mut **self.flash.borrow_mut()).write(offset, bytes)
+            self.entry
+                .as_flash_region(&mut **self.flash.borrow_mut())
+                .write(offset, bytes)
                 .map_err(|_| "Controller reset flash write failed")
         }
         fn erase(&mut self, start: u32, end: u32) -> Result<(), &'static str> {
-            self.entry.as_flash_region(&mut **self.flash.borrow_mut()).erase(start, end)
+            self.entry
+                .as_flash_region(&mut **self.flash.borrow_mut())
+                .erase(start, end)
                 .map_err(|_| "Controller reset flash erase failed")
         }
     }
     let flash = core::cell::RefCell::new(flash);
     reset::initialize(
-        &mut Regions { flash: &flash, entry: nvs }, nvs_size,
-        &mut Regions { flash: &flash, entry: midi }, midi_size,
-        &mut Regions { flash: &flash, entry: scenes }, scenes_size,
+        &mut Regions {
+            flash: &flash,
+            entry: nvs,
+        },
+        nvs_size,
+        &mut Regions {
+            flash: &flash,
+            entry: midi,
+        },
+        midi_size,
+        &mut Regions {
+            flash: &flash,
+            entry: scenes,
+        },
+        scenes_size,
     )
 }
 
 pub fn save_midi(keys: &[u16]) -> bool {
     let result = crate::midi::json_for_keys(keys).and_then(|json| save_midi_json(&json));
-    if let Err(err) = result { log::warn!("Could not save MIDI bindings: {err}"); }
+    if let Err(err) = result {
+        log::warn!("Could not save MIDI bindings: {err}");
+    }
     result.is_ok()
 }
 
@@ -268,11 +303,18 @@ impl json_record::Storage for JsonStorage<'_, '_> {
     }
 }
 
-fn with_json<T>(label: &str, capacity: u32, f: impl FnOnce(&mut JsonStorage<'_, '_>) -> Result<T, &'static str>) -> Result<T, &'static str> {
+fn with_json<T>(
+    label: &str,
+    capacity: u32,
+    f: impl FnOnce(&mut JsonStorage<'_, '_>) -> Result<T, &'static str>,
+) -> Result<T, &'static str> {
     let flash = flash().ok_or("Flash unavailable")?;
     let mut buf = vec![0; PARTITION_TABLE_MAX_LEN];
-    let table = read_partition_table(&mut *flash, &mut buf).map_err(|_| "Cannot read partition table")?;
-    let entry = table.iter().find(|entry| entry.label_as_str() == label)
+    let table =
+        read_partition_table(&mut *flash, &mut buf).map_err(|_| "Cannot read partition table")?;
+    let entry = table
+        .iter()
+        .find(|entry| entry.label_as_str() == label)
         .ok_or("Configuration partition missing; flash using flash.sh")?;
     if entry.len() < capacity {
         return Err("Configuration partition too small");
@@ -283,12 +325,16 @@ fn with_json<T>(label: &str, capacity: u32, f: impl FnOnce(&mut JsonStorage<'_, 
 }
 
 pub fn load_midi_json() -> Result<Option<String>, &'static str> {
-    with_json("midi", json_record::CAPACITY, |storage| json_record::load(storage))
+    with_json("midi", json_record::CAPACITY, |storage| {
+        json_record::load(storage)
+    })
 }
 
 pub fn save_midi_json(json: &str) -> Result<(), &'static str> {
     let _pause = crate::bounce::FlashPause::begin()?;
-    with_json("midi", json_record::CAPACITY, |storage| json_record::save(storage, json))
+    with_json("midi", json_record::CAPACITY, |storage| {
+        json_record::save(storage, json)
+    })
 }
 
 const SCENES_SLOT: u32 = 1024 * 1024;

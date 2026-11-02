@@ -136,10 +136,7 @@ mod tests {
             operations,
             (nvs.operations, midi.operations, scenes.operations)
         );
-        assert_eq!(
-            (nvs.bytes[0], midi.bytes[0], scenes.bytes[0]),
-            (42, 43, 44)
-        );
+        assert_eq!((nvs.bytes[0], midi.bytes[0], scenes.bytes[0]), (42, 43, 44));
     }
 
     #[test]
@@ -157,15 +154,10 @@ mod tests {
                     1 => midi.fail = Some(failure),
                     _ => scenes.fail = Some(failure),
                 }
-                assert!(initialize(
-                    &mut nvs,
-                    3 * SECTOR,
-                    &mut midi,
-                    SECTOR,
-                    &mut scenes,
-                    SECTOR
-                )
-                .is_err());
+                assert!(
+                    initialize(&mut nvs, 3 * SECTOR, &mut midi, SECTOR, &mut scenes, SECTOR)
+                        .is_err()
+                );
                 assert_ne!(
                     &nvs.bytes[2 * SECTOR as usize..2 * SECTOR as usize + 16],
                     RESET_MARKER
@@ -173,15 +165,10 @@ mod tests {
                 nvs.fail = None;
                 midi.fail = None;
                 scenes.fail = None;
-                assert!(initialize(
-                    &mut nvs,
-                    3 * SECTOR,
-                    &mut midi,
-                    SECTOR,
-                    &mut scenes,
-                    SECTOR
-                )
-                .unwrap());
+                assert!(
+                    initialize(&mut nvs, 3 * SECTOR, &mut midi, SECTOR, &mut scenes, SECTOR)
+                        .unwrap()
+                );
                 assert!(midi
                     .bytes
                     .iter()
@@ -196,15 +183,7 @@ mod tests {
         let mut nvs = Flash::dirty(3 * SECTOR);
         let mut midi = Flash::dirty(SECTOR);
         let mut scenes = Flash::dirty(SECTOR);
-        assert!(initialize(
-            &mut nvs,
-            2 * SECTOR,
-            &mut midi,
-            SECTOR,
-            &mut scenes,
-            SECTOR
-        )
-        .is_err());
+        assert!(initialize(&mut nvs, 2 * SECTOR, &mut midi, SECTOR, &mut scenes, SECTOR).is_err());
         assert_eq!(
             (nvs.operations, midi.operations, scenes.operations),
             (0, 0, 0)

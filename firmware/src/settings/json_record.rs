@@ -43,19 +43,25 @@ fn slot(
     if &header[..8] != MAGIC
         || checksum(&header[..28]) != u32::from_le_bytes(header[28..32].try_into().unwrap())
     {
-        return Err(SlotError::Invalid("Invalid configuration JSON record header"));
+        return Err(SlotError::Invalid(
+            "Invalid configuration JSON record header",
+        ));
     }
     let generation = u64::from_le_bytes(header[8..16].try_into().unwrap());
     let length = u32::from_le_bytes(header[16..20].try_into().unwrap()) as usize;
     if length == 0 || length > maximum || length + HEADER > size as usize {
-        return Err(SlotError::Invalid("Invalid configuration JSON record length"));
+        return Err(SlotError::Invalid(
+            "Invalid configuration JSON record length",
+        ));
     }
     let mut data = vec![0; length];
     storage
         .read(index * size + HEADER as u32, &mut data)
         .map_err(SlotError::Read)?;
     if checksum(&data) != u32::from_le_bytes(header[20..24].try_into().unwrap()) {
-        return Err(SlotError::Invalid("Configuration JSON record checksum failed"));
+        return Err(SlotError::Invalid(
+            "Configuration JSON record checksum failed",
+        ));
     }
     let text = String::from_utf8(data)
         .map_err(|_| SlotError::Invalid("Configuration JSON record is not UTF-8"))?;
@@ -333,12 +339,18 @@ mod tests {
         original.bytes.resize(size as usize * 2, 0xff);
         let json = " ".repeat(maximum);
         save_sized(&mut original, &json, size, maximum).unwrap();
-        assert_eq!(load_sized(&mut original, size, maximum).unwrap().unwrap(), json);
+        assert_eq!(
+            load_sized(&mut original, size, maximum).unwrap().unwrap(),
+            json
+        );
         for budget in 0..HEADER + 2 {
             let mut failed = original.clone();
             failed.budget = Some(budget);
             assert!(save_sized(&mut failed, "{}", size, maximum).is_err());
-            assert_eq!(load_sized(&mut failed, size, maximum).unwrap().unwrap(), json);
+            assert_eq!(
+                load_sized(&mut failed, size, maximum).unwrap().unwrap(),
+                json
+            );
         }
     }
 }

@@ -114,7 +114,10 @@ pub fn nano_state_preset_name_taken(slot: u8, name: &str) -> bool {
             .take(usize::from(catalog.count))
             .enumerate()
             .any(|(i, other)| {
-                let end = other.iter().position(|&byte| byte == 0).unwrap_or(other.len());
+                let end = other
+                    .iter()
+                    .position(|&byte| byte == 0)
+                    .unwrap_or(other.len());
                 i + 1 != usize::from(slot) && other[..end].eq_ignore_ascii_case(name.as_bytes())
             })
 }

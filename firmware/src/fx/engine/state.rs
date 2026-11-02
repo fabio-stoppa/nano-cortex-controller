@@ -1,10 +1,9 @@
 //! Shared FX state, per-block slot config and small helpers.
 
-use core::ffi::c_char;
-use core::ptr;
 use alloc::ffi::CString;
 use alloc::string::String;
-
+use core::ffi::c_char;
+use core::ptr;
 
 use crate::fx::types::*;
 use crate::syncutil::{SeqLock, Shared};
@@ -36,11 +35,36 @@ pub(super) struct SlotCfg {
 }
 
 pub(super) const SLOT_CFG: [SlotCfg; NANO_FX_BLOCK_COUNT] = [
-    SlotCfg { model_slot: 0x00, refresh_slot: 0x00, enable_slot: 0x04, model_field: 48 },
-    SlotCfg { model_slot: 0x01, refresh_slot: 0x01, enable_slot: 0x05, model_field: 49 },
-    SlotCfg { model_slot: 0x02, refresh_slot: 0x02, enable_slot: 0x06, model_field: 50 },
-    SlotCfg { model_slot: 0x03, refresh_slot: 0x03, enable_slot: 0x07, model_field: 51 },
-    SlotCfg { model_slot: 0x04, refresh_slot: 0x04, enable_slot: 0x08, model_field: 52 },
+    SlotCfg {
+        model_slot: 0x00,
+        refresh_slot: 0x00,
+        enable_slot: 0x04,
+        model_field: 48,
+    },
+    SlotCfg {
+        model_slot: 0x01,
+        refresh_slot: 0x01,
+        enable_slot: 0x05,
+        model_field: 49,
+    },
+    SlotCfg {
+        model_slot: 0x02,
+        refresh_slot: 0x02,
+        enable_slot: 0x06,
+        model_field: 50,
+    },
+    SlotCfg {
+        model_slot: 0x03,
+        refresh_slot: 0x03,
+        enable_slot: 0x07,
+        model_field: 51,
+    },
+    SlotCfg {
+        model_slot: 0x04,
+        refresh_slot: 0x04,
+        enable_slot: 0x08,
+        model_field: 52,
+    },
 ];
 
 /// Device firmware also exposes 1-byte model IDs in these varint fields.

@@ -45,7 +45,9 @@ pub fn active_action(index: usize) -> bool {
 }
 
 pub fn visible_action(row: usize) -> Option<usize> {
-    (0..ACTION_COUNT).filter(|index| active_action(*index)).nth(row)
+    (0..ACTION_COUNT)
+        .filter(|index| active_action(*index))
+        .nth(row)
 }
 
 /// Category IDs match the MIDI tabs.
@@ -188,7 +190,11 @@ pub fn action_name(index: usize) -> String {
             ][index - MUTE_START],
         )
     } else if index < BANK_START + 2 {
-        String::from(if index == BANK_START { "Next bank" } else { "Previous bank" })
+        String::from(if index == BANK_START {
+            "Next bank"
+        } else {
+            "Previous bank"
+        })
     } else if index < BANK_START + 6 {
         format!("Recall bank slot {}", index - BANK_START - 1)
     } else if index < SCENE_START {
@@ -196,7 +202,11 @@ pub fn action_name(index: usize) -> String {
     } else if index < GIG_START {
         format!("Recall scene {}", index - SCENE_START + 1)
     } else if index < EXTRA_SCENE_START {
-        String::from(if index == GIG_START { "Enter gig view" } else { "Exit gig view" })
+        String::from(if index == GIG_START {
+            "Enter gig view"
+        } else {
+            "Exit gig view"
+        })
     } else {
         format!("Recall scene {}", index - EXTRA_SCENE_START + 5)
     }
@@ -234,16 +244,14 @@ static TABLE: Mutex<CriticalSectionRawMutex, RefCell<Table>> = Mutex::new(RefCel
 
 pub fn load() {
     match crate::settings::load_midi_json() {
-        Ok(Some(json)) => {
-            match keys_from_json(&json) {
-                Ok(keys) => TABLE.lock(|t| {
-                    let mut t = t.borrow_mut();
-                    t.keys = keys;
-                    t.version += 1;
-                }),
-                Err(err) => report(err),
-            }
-        }
+        Ok(Some(json)) => match keys_from_json(&json) {
+            Ok(keys) => TABLE.lock(|t| {
+                let mut t = t.borrow_mut();
+                t.keys = keys;
+                t.version += 1;
+            }),
+            Err(err) => report(err),
+        },
         Ok(None) => {}
         Err(err) => report(err),
     }
@@ -510,7 +518,8 @@ fn dispatch(status: u8, data: [u8; 2]) {
     });
     if let Some(keys) = keys {
         let actions = keys.iter().enumerate().filter_map(|(index, assigned)| {
-            (*assigned == key && active_action(index)
+            (*assigned == key
+                && active_action(index)
                 && (!continuous_action(index) || msg.kind == Kind::Cc)
                 && (continuous_action(index) || msg.kind != Kind::Cc || msg.value > 0))
                 .then_some(index)

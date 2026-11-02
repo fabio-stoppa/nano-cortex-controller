@@ -105,7 +105,9 @@ pub(super) fn register(app: &AppWindow) {
     app.on_header_scene_action({
         let weak = app.as_weak();
         move |action| {
-            let Some(app) = weak.upgrade() else { return; };
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
             if !crate::link::connected() || crate::scenes::busy() {
                 crate::scenes::report("Scene action unavailable while disconnected or busy");
                 return;

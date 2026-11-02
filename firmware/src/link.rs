@@ -63,12 +63,22 @@ pub fn queue_peaks() -> (u32, u32) {
 
 pub enum Cmd {
     Gig(bool),
-    SceneRecallAt { preset: u8, scene: u8 },
+    SceneRecallAt {
+        preset: u8,
+        scene: u8,
+    },
     SceneRecall(u8),
-    SceneCapture { preset: u8, scene: u8, name: alloc::string::String },
+    SceneCapture {
+        preset: u8,
+        scene: u8,
+        name: alloc::string::String,
+    },
     SceneRefresh,
     SceneFxRefresh,
-    FxModelId { block: u8, id: Vec<u8> },
+    FxModelId {
+        block: u8,
+        id: Vec<u8>,
+    },
     Gate(bool),
     GateAmount(u8),
     Tuner(bool),
@@ -188,7 +198,9 @@ fn write_inner(label: Option<&CStr>, data: &[u8]) -> bool {
         queue.push_back(QueuedWrite {
             data: data.to_vec(),
             live,
-            label: label.and_then(|label| label.to_str().ok()).map(String::from),
+            label: label
+                .and_then(|label| label.to_str().ok())
+                .map(String::from),
         });
         record_peak(&WRITE_QUEUE_PEAK, queue.len());
         true

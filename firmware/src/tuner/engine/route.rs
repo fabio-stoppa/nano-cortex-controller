@@ -113,7 +113,11 @@ pub(super) fn route_toggle(current: u32) -> u32 {
     }
 }
 
-pub(super) fn resolve_gain_2d_route(has_38_01: bool, was_active: bool, same_shape_after_on: bool) -> u32 {
+pub(super) fn resolve_gain_2d_route(
+    has_38_01: bool,
+    was_active: bool,
+    same_shape_after_on: bool,
+) -> u32 {
     let s = tn();
     if !was_active || s.tuner.route == NANO_TUNER_ROUTE_UNKNOWN {
         return route_from_trailer(has_38_01);

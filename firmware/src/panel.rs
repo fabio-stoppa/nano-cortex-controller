@@ -7,7 +7,6 @@ use core::mem::forget;
 use esp_hal::delay::Delay;
 use esp_hal::gpio::{Level, Output, OutputConfig};
 use esp_hal::i2c::master::{Config as I2cConfig, I2c};
-use esp_hal::timer::timg::TimerGroup;
 use esp_hal::lcd_cam::{
     lcd::{
         dpi::{Config as DpiConfig, Dpi, Format, FrameTiming},
@@ -18,6 +17,7 @@ use esp_hal::lcd_cam::{
 use esp_hal::peripherals::Peripherals;
 use esp_hal::psram::{FlashFreq, Psram, PsramConfig, PsramMode, SpiRamFreq};
 use esp_hal::time::Rate;
+use esp_hal::timer::timg::TimerGroup;
 use esp_hal::Blocking;
 use gt911::Gt911Blocking;
 
@@ -161,10 +161,12 @@ pub fn init(p: Peripherals) -> Result<(Board<'static>, Rest), &'static str> {
 
     // The RGB driver keeps the data pins driven for the whole frame. Without
     // that, the panel samples the line late and the picture sits to the right.
-    esp_hal::peripherals::LCD_CAM::regs().lcd_user().modify(|_, w| {
-        w.lcd_always_out_en().set_bit();
-        w.lcd_update().set_bit()
-    });
+    esp_hal::peripherals::LCD_CAM::regs()
+        .lcd_user()
+        .modify(|_, w| {
+            w.lcd_always_out_en().set_bit();
+            w.lcd_update().set_bit()
+        });
 
     let bounce = unsafe { bounce::BounceRing::new(framebuffer.as_ptr()) };
     unsafe { bounce::enable_eof_interrupt() };

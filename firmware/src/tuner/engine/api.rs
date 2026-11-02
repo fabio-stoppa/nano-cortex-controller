@@ -8,9 +8,14 @@ use nano_wire::builders;
 use nano_wire::parsers;
 
 use super::ctx::*;
-use super::mode::{find_tuner_sub, log_unhandled_tuner, sniff_tuner_c305, try_parse_2d_events, try_parse_on, try_parse_route_trailer};
+use super::mode::{
+    find_tuner_sub, log_unhandled_tuner, sniff_tuner_c305, try_parse_2d_events, try_parse_on,
+    try_parse_route_trailer,
+};
 use super::pitch::{expire_stale_pitch, try_parse_pitch};
-use super::route::{apply_tuner_mode_c305, clear_gain_2d_route_state, note_c305_authority, route_name};
+use super::route::{
+    apply_tuner_mode_c305, clear_gain_2d_route_state, note_c305_authority, route_name,
+};
 use super::tick::{ensure_tick_timer, push_ui};
 use crate::tuner::types::*;
 

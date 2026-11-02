@@ -36,7 +36,11 @@ pub(super) fn log_pitch_update(tag: u8, cents_f: f32, kind: &str) {
     s.last_logged_note = s.tuner.note;
     s.last_logged_cents = s.tuner.cents;
 
-    let proto_ch = if (0x20..0x7F).contains(&tag) { tag as char } else { '?' };
+    let proto_ch = if (0x20..0x7F).contains(&tag) {
+        tag as char
+    } else {
+        '?'
+    };
     let note = if s.tuner.note >= 0 && s.tuner.note <= 11 {
         NOTE_NAMES[s.tuner.note as usize]
     } else {
@@ -123,7 +127,13 @@ pub(super) fn clear_pitch_reading() {
     tuner_publish();
 }
 
-pub(super) fn apply_pitch_reading(tag: u8, cents_f: f32, form_2201: bool, sharp: bool, anchor: i8) -> bool {
+pub(super) fn apply_pitch_reading(
+    tag: u8,
+    cents_f: f32,
+    form_2201: bool,
+    sharp: bool,
+    anchor: i8,
+) -> bool {
     let kind: i8 = if form_2201 {
         1
     } else if sharp {
@@ -208,7 +218,11 @@ pub(super) fn try_parse_pitch_at(data: &[u8], form: u8) -> bool {
         let tag = data[i + 5];
         let Some((cents_off, mut sharp)) = find_pitch_cents(data, i) else {
             log_pitch_reject(
-                if form == 0x01 { "22/01 no 2D" } else { "22/02 no 2D" },
+                if form == 0x01 {
+                    "22/01 no 2D"
+                } else {
+                    "22/02 no 2D"
+                },
                 tag,
                 0.0,
                 data,

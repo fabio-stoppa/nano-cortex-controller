@@ -10,8 +10,8 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::String;
-use core::sync::atomic::{AtomicU8, Ordering};
 use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use core::cell::RefCell;
 use slint::platform::software_renderer::{
@@ -145,7 +145,9 @@ fn ensure() {
     app.on_autosave_toggled({
         let weak = app.as_weak();
         move |enabled| {
-            let Some(app) = weak.upgrade() else { return; };
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
             match crate::settings::save_autosave(enabled) {
                 Ok(()) => {
                     app.set_autosave_enabled(enabled);
@@ -331,7 +333,9 @@ fn ensure() {
         let weak = weak.clone();
         move || {
             let result = crate::settings::reset_preferences();
-            let Some(app) = weak.upgrade() else { return; };
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
             let message = match result {
                 Ok(()) => {
                     app.set_layout_mode(0);
@@ -542,19 +546,25 @@ fn ensure() {
             let mut text = String::from(app.get_kbd_text().as_str());
             if key.as_str() == "\u{8}" {
                 text.pop();
-            } else if key.len() == 1 && text.len() < if app.get_scene_library_name_action() != 0 {
-                crate::scenes::data::NAME_LIMIT
-            } else {
-                nano_wire::editor::PRESET_NAME_LIMIT
-            } {
+            } else if key.len() == 1
+                && text.len()
+                    < if app.get_scene_library_name_action() != 0 {
+                        crate::scenes::data::NAME_LIMIT
+                    } else {
+                        nano_wire::editor::PRESET_NAME_LIMIT
+                    }
+            {
                 text.push_str(key.as_str());
             }
             app.set_kbd_text(text.as_str().into());
-            app.set_kbd_error(if app.get_scene_library_name_action() != 0 {
-                crate::scenes::data::name_error(&text)
-            } else {
-                preset_name_error(&text)
-            }.into());
+            app.set_kbd_error(
+                if app.get_scene_library_name_action() != 0 {
+                    crate::scenes::data::name_error(&text)
+                } else {
+                    preset_name_error(&text)
+                }
+                .into(),
+            );
         }
     });
     app.on_kbd_accepted({
@@ -577,14 +587,12 @@ fn ensure() {
         }
     });
     app.on_confirm_accepted({
-        move || {
-            match CONFIRM.load(Ordering::Relaxed) {
-                CONFIRM_DELETE => {
-                    crate::link::push_cmd(Cmd::PresetDelete(ACTION_SLOT.load(Ordering::Relaxed)));
-                }
-                kind @ (LIST_MOVE | LIST_COPY) => run_transfer(kind),
-                _ => {}
+        move || match CONFIRM.load(Ordering::Relaxed) {
+            CONFIRM_DELETE => {
+                crate::link::push_cmd(Cmd::PresetDelete(ACTION_SLOT.load(Ordering::Relaxed)));
             }
+            kind @ (LIST_MOVE | LIST_COPY) => run_transfer(kind),
+            _ => {}
         }
     });
     app.on_save_tapped(move || crate::link::push_cmd(Cmd::Save));
@@ -877,7 +885,11 @@ fn preset_action(app: &AppWindow, action: i32) {
         3 => {
             CONFIRM.store(CONFIRM_DELETE, Ordering::Relaxed);
             app.set_confirm_title(alloc::format!("Delete preset {slot}?").as_str().into());
-            app.set_confirm_message(alloc::format!("\"{name}\" will be removed from the pedal.").as_str().into());
+            app.set_confirm_message(
+                alloc::format!("\"{name}\" will be removed from the pedal.")
+                    .as_str()
+                    .into(),
+            );
             app.set_confirm_label("Delete".into());
             app.set_confirm_danger(true);
             app.set_confirm_open(true);
@@ -902,7 +914,11 @@ fn open_target_list(app: &AppWindow, kind: u8) {
         let label = if name.is_empty() { "(empty)" } else { name };
         rows.item(label, position as i32 + 1);
     }
-    let title = if kind == LIST_MOVE { "Move to..." } else { "Copy to..." };
+    let title = if kind == LIST_MOVE {
+        "Move to..."
+    } else {
+        "Copy to..."
+    };
     rows.show(app, i32::from(kind), title, -1);
 }
 
@@ -1090,10 +1106,15 @@ pub fn export_preferences_json() -> Result<alloc::string::String, &'static str> 
 
 /// Repaints the MIDI page when its bindings change and saves new ones.
 pub fn refresh_midi() {
-    if state().as_ref().is_some_and(|ui| ui.app.get_usb_storage_open()) {
+    if state()
+        .as_ref()
+        .is_some_and(|ui| ui.app.get_usb_storage_open())
+    {
         return;
     }
-    if let Some(ui) = state().as_ref() { scenes_ui::refresh(&ui.app, false); }
+    if let Some(ui) = state().as_ref() {
+        scenes_ui::refresh(&ui.app, false);
+    }
     if let Some(ui) = state().as_ref() {
         if ui.app.get_autosave_enabled() {
             ui.app.set_autosave_status(crate::scenes::notice().into());
@@ -1171,11 +1192,11 @@ pub fn refresh_bluetooth(devices: &[crate::ble::Seen]) {
     }
     let mut hash = 17u32;
     for d in devices {
-        for b in d
-            .name
-            .bytes()
-            .chain(d.addr.to_bytes())
-            .chain([d.state, d.nano as u8, d.selected as u8])
+        for b in
+            d.name
+                .bytes()
+                .chain(d.addr.to_bytes())
+                .chain([d.state, d.nano as u8, d.selected as u8])
         {
             hash = hash.wrapping_mul(31).wrapping_add(u32::from(b));
         }
@@ -1293,7 +1314,8 @@ pub fn show_preset(name: &str) {
     ensure();
     let ui = state().as_mut().unwrap();
     ui.app.set_preset(name.into());
-    ui.app.set_save_dirty(crate::state::nano_state_preset_dirty());
+    ui.app
+        .set_save_dirty(crate::state::nano_state_preset_dirty());
     if ui.app.get_model_open() && ui.app.get_list_kind() == 3 {
         ui.app
             .set_model_list_current(i32::from(crate::state::nano_state_preset_slot()));
@@ -1465,40 +1487,22 @@ pub fn show_cab_settings(slot: u8, settings: &nano_wire::types::CabSettings) {
         .map(|norm| cab_float_display(CabFloat::LowPass, norm))
         .unwrap_or_else(|| String::from("-- Hz"));
     let active = (1..=5).contains(&slot);
-    ui.app.set_cab_output_text(
-        if active {
-            output.as_str()
-        } else {
-            "-- dB"
-        }
-        .into(),
-    );
+    ui.app
+        .set_cab_output_text(if active { output.as_str() } else { "-- dB" }.into());
     ui.app.set_cab_output_amount(if active {
         settings.output.unwrap_or(0.0).clamp(0.0, 1.0)
     } else {
         0.0
     });
-    ui.app.set_cab_high_pass_text(
-        if active {
-            high_pass.as_str()
-        } else {
-            "-- Hz"
-        }
-        .into(),
-    );
+    ui.app
+        .set_cab_high_pass_text(if active { high_pass.as_str() } else { "-- Hz" }.into());
     ui.app.set_cab_high_pass_amount(if active {
         settings.high_pass.unwrap_or(0.0).clamp(0.0, 1.0)
     } else {
         0.0
     });
-    ui.app.set_cab_low_pass_text(
-        if active {
-            low_pass.as_str()
-        } else {
-            "-- Hz"
-        }
-        .into(),
-    );
+    ui.app
+        .set_cab_low_pass_text(if active { low_pass.as_str() } else { "-- Hz" }.into());
     ui.app.set_cab_low_pass_amount(if active {
         settings.low_pass.unwrap_or(0.0).clamp(0.0, 1.0)
     } else {
@@ -1658,11 +1662,8 @@ fn publish_expression(ui: &mut State) {
                     .map(|range| {
                         let min = (u16::from(range.min) * 100 + 127) / 255;
                         let max = (u16::from(range.max) * 100 + 127) / 255;
-                        alloc::format!(
-                            "{min}-{max}%{}",
-                            if range.inverted { " Rev" } else { "" }
-                        )
-                        .into()
+                        alloc::format!("{min}-{max}%{}", if range.inverted { " Rev" } else { "" })
+                            .into()
                     })
                     .unwrap_or_else(|| "Not assigned".into()),
                 inverted: current.is_some_and(|range| range.inverted),
@@ -1700,13 +1701,9 @@ fn publish_expression(ui: &mut State) {
                     inverted,
                     latch,
                 ),
-                Some(ExpBypass::Stop { delay_ms }) => (
-                    true,
-                    alloc::format!("Stop · {delay_ms}ms"),
-                    2,
-                    false,
-                    false,
-                ),
+                Some(ExpBypass::Stop { delay_ms }) => {
+                    (true, alloc::format!("Stop · {delay_ms}ms"), 2, false, false)
+                }
                 None => (false, String::from("Not assigned"), 0, false, false),
             };
             ExpressionBypassRow {
@@ -1723,7 +1720,8 @@ fn publish_expression(ui: &mut State) {
     ui.app.set_tools_expression_summary(
         expression_summary(ui.expression_slot, &ui.expression).into(),
     );
-    ui.app.set_tools_expression_ranges(slint::ModelRc::new(slint::VecModel::from(ranges)));
+    ui.app
+        .set_tools_expression_ranges(slint::ModelRc::new(slint::VecModel::from(ranges)));
     ui.app
         .set_tools_expression_bypasses(slint::ModelRc::new(slint::VecModel::from(bypasses)));
 }
@@ -1757,7 +1755,10 @@ fn edit_expression_range(target: i32, action: i32, delta: i32) {
     }
     let ranges = &mut ui.expression.ranges;
     if action == 0 {
-        if let Some(index) = ranges.iter().position(|(candidate, _)| *candidate == target) {
+        if let Some(index) = ranges
+            .iter()
+            .position(|(candidate, _)| *candidate == target)
+        {
             ranges.remove(index);
         } else {
             ranges.push((
@@ -1769,7 +1770,10 @@ fn edit_expression_range(target: i32, action: i32, delta: i32) {
                 },
             ));
         }
-    } else if let Some((_, range)) = ranges.iter_mut().find(|(candidate, _)| *candidate == target) {
+    } else if let Some((_, range)) = ranges
+        .iter_mut()
+        .find(|(candidate, _)| *candidate == target)
+    {
         match action {
             1 => range.min = (i32::from(range.min) + delta * 13).clamp(0, 255) as u8,
             2 => range.max = (i32::from(range.max) + delta * 13).clamp(0, 255) as u8,
@@ -1806,7 +1810,9 @@ fn edit_expression_bypass(target: i32, action: i32) {
         return;
     }
     let bypasses = &mut ui.expression.bypasses;
-    let found = bypasses.iter().position(|(candidate, _)| *candidate == target);
+    let found = bypasses
+        .iter()
+        .position(|(candidate, _)| *candidate == target);
     if action == 0 {
         if let Some(index) = found {
             bypasses.remove(index);

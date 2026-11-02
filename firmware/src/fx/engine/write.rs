@@ -31,10 +31,9 @@ pub(super) fn write_gate_enabled(enabled: bool) -> bool {
     }
     info!(target: TAG, "Gate {}", if enabled { "ON" } else { "OFF" });
     push_fx_ui();
-    if crate::link::write_labeled(
-        if enabled { c"Gate ON" } else { c"Gate OFF" },
-        &buf[..n],
-    ) == false {
+    if crate::link::write_labeled(if enabled { c"Gate ON" } else { c"Gate OFF" }, &buf[..n])
+        == false
+    {
         return false;
     }
     s.gate_assert_us = now_us();
