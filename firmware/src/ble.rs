@@ -14,7 +14,7 @@ use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetDataLength, LeSetScanPa
 use bt_hci::controller::ControllerCmdSync;
 use core::cell::{Cell, RefCell};
 use embassy_futures::join::{join, join3};
-use embassy_futures::select::{select, Either};
+use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::signal::Signal;
@@ -613,6 +613,30 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
         }
     };
 
+    select(
+        receive_notifications(&mut listener),
+        nano_commands(client, &c304, c304_no_rsp),
+    ).await;
+}
+
+async fn receive_notifications(listener: &mut NotificationListener<'_, 512>) {
+    let mut seen = 0u32;
+    loop {
+        let note = listener.next().await;
+        seen = seen.wrapping_add(1);
+        if seen <= 4 || seen % 32 == 0 {
+            log_pkt("C305 RX", note.as_ref(), Some(seen));
+        }
+        crate::state::feed_c305_bytes(note.as_ref());
+        embassy_futures::yield_now().await;
+    }
+}
+
+async fn nano_commands<C: Controller, P: PacketPool>(
+    client: &GattClient<'_, C, P, 8>,
+    c304: &Characteristic<[u8]>,
+    c304_no_rsp: bool,
+) {
     stage(connection::Stage::Loading);
     crate::link::set_up(true);
     crate::screen::nano_ui_set_ble_connected(true);
@@ -639,27 +663,14 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
     crate::state::nano_state_begin_sync();
     if flush_writes(client, c304.handle, c304_no_rsp).await.is_err() { return; }
 
-    let mut seen = 0u32;
     loop {
         if !ready && Instant::now() - loading_started >= LOAD_TIMEOUT {
             crate::scenes::report("Loading failed: initial state, presets, or library timed out");
             log::error!("Nano initial loading timed out");
             return;
         }
-        match with_timeout(
-            Duration::from_millis(10),
-            select(listener.next(), SLIDER.wait()),
-        )
-        .await
-        {
-            Ok(Either::First(note)) => {
-                seen = seen.wrapping_add(1);
-                if seen <= 4 || seen % 32 == 0 {
-                    log_pkt("C305 RX", note.as_ref(), Some(seen));
-                }
-                crate::state::feed_c305_bytes(note.as_ref());
-            }
-            Ok(Either::Second(write)) => {
+        match with_timeout(Duration::from_millis(10), SLIDER.wait()).await {
+            Ok(write) => {
                 if !ready {
                     log::warn!("Slider edit refused while Nano is loading");
                     continue;
@@ -684,10 +695,12 @@ async fn nano_link<C: Controller, P: PacketPool>(client: &GattClient<'_, C, P, 8
             }
             Err(_) => {}
         }
-        while ready && !crate::scenes::busy() {
+        for _ in 0..8 {
+            if !ready || crate::scenes::busy() { break; }
             let Some(cmd) = crate::link::pop_cmd() else { break; };
             apply_cmd(cmd);
             if flush_writes(client, c304.handle, c304_no_rsp).await.is_err() { return; }
+            embassy_futures::yield_now().await;
         }
         if let Some(cmd) = crate::scenes::poll() {
             apply_cmd(cmd);
@@ -1078,6 +1091,7 @@ async fn flush_writes<C: Controller, P: PacketPool>(
             Ok(()) => {
                 log::info!("C304 write {} bytes", packet.len());
                 log_pkt("C304 TX", &packet, None);
+                embassy_futures::yield_now().await;
             }
             Err(error) => {
                 log::warn!("C304 write failed: {error:?}");
