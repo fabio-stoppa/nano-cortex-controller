@@ -6,6 +6,8 @@ extern crate alloc;
 mod advertisement;
 #[path = "../../../src/ble/connection.rs"]
 mod connection;
+#[path = "../../../src/ble/pairing.rs"]
+mod pairing;
 
 #[cfg(test)]
 mod connection_tests;

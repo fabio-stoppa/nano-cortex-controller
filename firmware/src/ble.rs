@@ -59,6 +59,7 @@ use crate::panel::Board;
 
 mod advertisement;
 pub mod connection;
+mod pairing;
 use connection::{Failure, Operation, CONNECT_TIMEOUT, LOAD_TIMEOUT, SETUP_TIMEOUT, WRITE_TIMEOUT};
 
 fn stage(stage: connection::Stage) {
@@ -97,11 +98,13 @@ async fn bounded<T, E: core::fmt::Debug>(
 }
 
 fn report_failure(operation: Operation, error: &impl core::fmt::Debug) {
-    let message = alloc::format!(
-        "{} failed: {error:?}. {}",
-        operation.label(),
+    let details = alloc::format!("{error:?}");
+    let recovery = if pairing::needs_pairing_recovery(&details) {
+        "Pairing/authentication was rejected. This build has no bond store to clear: remove stale Nano/controller pairing records and disconnect Cortex Cloud, then retry."
+    } else {
         operation.recovery()
-    );
+    };
+    let message = alloc::format!("{} failed: {details}. {recovery}", operation.label());
     log::error!("{message}");
     crate::ui::set_connection_error(&message);
     crate::screen::nano_ui_set_protocol_status(&message);
