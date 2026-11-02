@@ -20,7 +20,12 @@ use nano_wire::types::JackMode;
 
 static UP: AtomicBool = AtomicBool::new(false);
 
-static OUT: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<Vec<u8>>>> =
+struct QueuedWrite {
+    data: Vec<u8>,
+    live: bool,
+}
+
+static OUT: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<QueuedWrite>>> =
     Mutex::new(RefCell::new(VecDeque::new()));
 
 static CMDS: Mutex<CriticalSectionRawMutex, RefCell<VecDeque<Cmd>>> =
@@ -146,7 +151,11 @@ pub fn write(data: &[u8]) -> bool {
             log::warn!("C304 queue full; write refused");
             return false;
         }
-        queue.push_back(data.to_vec());
+        let live = nano_wire::editor::is_live_value_write(data);
+        queue.push_back(QueuedWrite {
+            data: data.to_vec(),
+            live,
+        });
         true
     })
 }
@@ -156,7 +165,19 @@ pub fn write_labeled(_label: &CStr, data: &[u8]) -> bool {
 }
 
 pub fn pop_write() -> Option<Vec<u8>> {
-    OUT.lock(|queue| queue.borrow_mut().pop_front())
+    pop_write_with_scene_busy(crate::scenes::busy())
+}
+
+pub fn pop_write_with_scene_busy(scene_busy: bool) -> Option<Vec<u8>> {
+    OUT.lock(|queue| {
+        let mut queue = queue.borrow_mut();
+        let selected = if scene_busy {
+            0
+        } else {
+            queue.iter().position(|write| write.live).unwrap_or(0)
+        };
+        queue.remove(selected).map(|write| write.data)
+    })
 }
 
 pub fn push_cmd(cmd: Cmd) {

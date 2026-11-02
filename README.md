@@ -33,6 +33,9 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
   preserving second-client discovery with lower radio duty.
 - Touch slider updates coalesce independently by control in a bounded queue;
   sweeping one slider cannot evict the latest value of another control.
+- The C304 writer serves queued live-value controls before background requests,
+  keeps FIFO ordering within each class, and switches to strict FIFO during scene
+  recall so its staged write order is preserved.
 - Raw BLE packet dumps and per-write/slider logs are debug-only. Info logging
   retains setup stages and ten-second/per-disconnect RX, TX, and write-failure
   totals; failures remain errors. TX counts transport sends, not verified edits.

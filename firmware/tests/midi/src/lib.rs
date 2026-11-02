@@ -867,6 +867,30 @@ mod tests {
     }
 
     #[test]
+    fn live_writes_precede_background_reads_but_scene_writes_stay_fifo() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        let background = [0x01, 0x02];
+        let mut live = [0u8; 16];
+        let live_len = nano_wire::amp_knob_payload(nano_wire::Knob::Gain, 99, &mut live);
+        assert!(link::write(&background));
+        assert!(link::write(&live[..live_len]));
+        assert_eq!(link::pop_write(), Some(live[..live_len].to_vec()));
+        assert_eq!(link::pop_write(), Some(background.to_vec()));
+
+        assert!(link::write(&background));
+        assert!(link::write(&live[..live_len]));
+        assert_eq!(
+            link::pop_write_with_scene_busy(true),
+            Some(background.to_vec())
+        );
+        assert_eq!(
+            link::pop_write_with_scene_busy(true),
+            Some(live[..live_len].to_vec())
+        );
+    }
+
+    #[test]
     fn bindings_persist_shared_keys_and_retry_failed_saves() {
         let _guard = LOCK.lock().unwrap();
         reset();
