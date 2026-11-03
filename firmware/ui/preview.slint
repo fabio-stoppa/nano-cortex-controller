@@ -1,6 +1,7 @@
 // Desktop-only wrapper around AppWindow: sample data, screen navigation and popup toggles.
 // Not part of the firmware build. Run with ./firmware/preview.sh
-import { AppWindow, ModelItem, BtDevice, MidiRow } from "app.slint";
+import { AppWindow } from "app.slint";
+import { ModelItem, BtDevice, MidiRow } from "common.slint";
 
 component DevChip inherits Rectangle {
     in property <string> label;
@@ -260,6 +261,9 @@ export component Preview inherits AppWindow {
     model-list-section: 0;
     model-list: root.popup == "preset" || root.popup == "preset-menu" ? root.preset-items
         : root.popup == "model" && root.page == 1 ? root.fx-model-items : root.model-items;
+    model-list-tabs: root.popup == "preset" || root.popup == "preset-menu" ? [root.preset-items[0]]
+        : root.popup == "model" && root.page == 1 ? [root.fx-model-items[0]]
+        : [root.model-items[0], root.model-items[5], root.model-items[10]];
 
     chain-tapped(index) => {
         root.popup = "none";

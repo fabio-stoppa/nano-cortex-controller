@@ -61,6 +61,9 @@ mod tests {
                 deleted,
             ]));
             app.set_model_list(rows.clone().into());
+            app.set_model_list_tabs(slint::ModelRc::new(slint::VecModel::from(vec![
+                header.clone(),
+            ])));
             app.set_list_kind(kind);
             app.set_model_open(true);
             app.set_model_list_section(2);
@@ -186,14 +189,18 @@ mod tests {
         window.set_size(PhysicalSize::new(800, 480));
         app.set_list_kind(3);
         for title in ["1-12", ""] {
+            let header = ModelItem {
+                name: title.into(),
+                header: true,
+                index: -1,
+                height: 76.0,
+                ..Default::default()
+            };
+            app.set_model_list_tabs(slint::ModelRc::new(slint::VecModel::from(vec![
+                header.clone(),
+            ])));
             app.set_model_list(slint::ModelRc::new(slint::VecModel::from(vec![
-                ModelItem {
-                    name: title.into(),
-                    header: true,
-                    index: -1,
-                    height: 76.0,
-                    ..Default::default()
-                },
+                header,
                 ModelItem {
                     name: "Clean 2 Simple".into(),
                     index: 1,
@@ -237,12 +244,12 @@ mod tests {
                 button: PointerEventButton::Left,
             });
             assert_eq!(picked.get(), 1, "preset body no longer selects");
-            assert!(app.get_model_open(), "preset pick closed the popup");
-            assert_eq!(app.get_model_list_current(), 1);
+            assert!(!app.get_model_open(), "preset pick kept the popup open");
             picked.set(0);
         }
         app.set_list_kind(1);
         app.set_model_list_current(-1);
+        app.set_model_open(true);
         window.request_redraw();
         let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
         render(window, &mut pixels, RenderingRotation::NoRotation, true);
@@ -264,14 +271,18 @@ mod tests {
 
     fn check_two_line_popup_names(app: &AppWindow, window: &MinimalSoftwareWindow) {
         app.set_model_list_current(-1);
+        let header = ModelItem {
+            name: "1-12".into(),
+            header: true,
+            index: -1,
+            height: 76.0,
+            ..Default::default()
+        };
+        app.set_model_list_tabs(slint::ModelRc::new(slint::VecModel::from(vec![
+            header.clone(),
+        ])));
         app.set_model_list(slint::ModelRc::new(slint::VecModel::from(vec![
-            ModelItem {
-                name: "1-12".into(),
-                header: true,
-                index: -1,
-                height: 76.0,
-                ..Default::default()
-            },
+            header,
             ModelItem {
                 name: "Clean capture with a long descriptive name and extra words to wrap".into(),
                 index: 1,
