@@ -177,15 +177,15 @@ export component GigButton inherits Rectangle {
         x: 14px;
         y: 38px;
         width: max(0px, root.width - 28px);
-        height: min(76px, max(0px, root.height - 44px));
+        height: max(0px, root.height - 44px);
         text: root.label;
         color: root.enabled ? #ffffff : #777777;
-        font-size: min(30px, max(12px, self.height / 2.5));
+        font-size: min(30px, max(12px, self.height / 3));
         font-weight: 700;
         horizontal-alignment: left;
         vertical-alignment: top;
         wrap: char-wrap;
-        overflow: elide;
+        overflow: clip;
     }
     TouchArea { enabled: root.enabled; clicked => { root.tapped(); } }
 }
