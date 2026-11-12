@@ -47,8 +47,8 @@ trouble-host = { version = "0.7", default-features = false, features = [
     "log",
     "default-packet-pool-mtu-512",
     "default-packet-pool-size-16",
-    # 16 slots × 512 bytes per GattClient; clients are heap-backed to keep this
-    # queue from consuming the main task's stack.
+    # 16 slots × 512 bytes per GattClient; new_gatt_client boxes the client
+    # before timeout/session futures can copy this queue onto the main stack.
     "gatt-client-notification-queue-size-16",
     "gatt-client-notification-max-subscribers-4",
 ] }

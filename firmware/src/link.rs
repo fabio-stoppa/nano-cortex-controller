@@ -78,6 +78,10 @@ pub enum Cmd {
     },
     SceneRefresh,
     SceneFxRefresh,
+    SceneCab {
+        slot: u8,
+        name: String,
+    },
     FxModelId {
         block: u8,
         id: Vec<u8>,

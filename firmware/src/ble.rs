@@ -734,7 +734,7 @@ where
     let client = match bounded(
         Operation::Gatt,
         SETUP_TIMEOUT,
-        Box::pin(GattClient::<C, DefaultPacketPool, 8>::new(stack, &conn)),
+        Box::pin(new_gatt_client::<C, 8>(stack, &conn)),
     )
     .await
     {
@@ -744,7 +744,6 @@ where
             return;
         }
     };
-    let client = Box::new(client);
     log::info!("nano ATT MTU {}", conn.att_mtu());
     let att_mtu = conn.att_mtu();
 
@@ -766,6 +765,15 @@ where
 {
     let (addr, guard) = find(stack, hunt, radio, false).await;
     foot_link(stack, addr, guard).await;
+}
+
+// Box the notification queue before returning through timeout/session futures.
+// Boxing only at the call site leaves several full client copies on the stack.
+async fn new_gatt_client<'a, C: Controller, const SERVICES: usize>(
+    stack: &Stack<'_, C, DefaultPacketPool>,
+    conn: &Connection<'a, DefaultPacketPool>,
+) -> Result<Box<GattClient<'a, C, DefaultPacketPool, SERVICES>>, BleHostError<C::Error>> {
+    GattClient::new(stack, conn).await.map(Box::new)
 }
 
 async fn nano_link<C: Controller, P: PacketPool>(
@@ -1154,6 +1162,27 @@ fn apply_cmd(cmd: crate::link::Cmd) {
                 }
             }
         }
+        crate::link::Cmd::SceneCab { slot, name } => {
+            let selection = crate::scenes::data::CabSelection { slot, name };
+            let library = crate::state::nano_state_library_snapshot();
+            let cab = match selection.library_item(&library) {
+                Ok(cab) => cab,
+                Err(error) => {
+                    crate::scenes::cancel(error);
+                    return;
+                }
+            };
+            let kind = if cab.user {
+                nano_wire::editor::LibraryKind::User
+            } else {
+                nano_wire::editor::LibraryKind::Factory
+            };
+            if !crate::state::nano_state_load_library_cab(slot, kind, cab.index, &cab.name) {
+                crate::scenes::cancel("CAB/IR selection failed; sound may be partially updated");
+            } else {
+                crate::state::nano_state_request_preset_refresh("Scene CAB/IR select");
+            }
+        }
         crate::link::Cmd::FxModelId { block, id } => {
             let sent = crate::fx::models::find_model(&id)
                 .is_some_and(|model| crate::fx::nano_fx_write_block_model(u32::from(block), model));
@@ -1274,6 +1303,7 @@ fn apply_cmd(cmd: crate::link::Cmd) {
         crate::link::Cmd::CaptureAt(slot) => {
             if !crate::state::nano_state_write_capture_slot(slot) {
                 log::warn!("Capture selection failed");
+                crate::scenes::cancel("Capture selection failed; sound may be partially updated");
             }
         }
         crate::link::Cmd::CabAt(position) => {
@@ -1509,6 +1539,7 @@ async fn foot_link<C: Controller>(
         connect_params: peer_params(),
         scan_config: listen(&foot_filter),
     };
+    log::info!("connecting to footswitch");
     let conn = connection::with_deadline(CONNECT_TIMEOUT, central.connect(&connect)).await;
     drop(guard);
     let conn = match conn {
@@ -1522,7 +1553,7 @@ async fn foot_link<C: Controller>(
     log::info!("footswitch connected");
     let client = match connection::with_deadline(
         SETUP_TIMEOUT,
-        Box::pin(GattClient::<C, DefaultPacketPool, 4>::new(stack, &conn)),
+        Box::pin(new_gatt_client::<C, 4>(stack, &conn)),
     )
     .await
     {
@@ -1532,7 +1563,6 @@ async fn foot_link<C: Controller>(
             return;
         }
     };
-    let client = Box::new(client);
 
     let _ = select(
         async {

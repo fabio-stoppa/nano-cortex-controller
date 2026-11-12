@@ -238,12 +238,17 @@ Six MIDI Learn actions recall scenes of the current Nano preset.
 New scene names are limited to **16 ASCII characters** (letters,
 numbers, spaces, `-`, `_`, no outer spaces), unique within their collection.
 
-Scenes restore amp controls, capture volume when available, active cab EQ/level,
-gate, and all five FX models, parameters and bypass states. Library selections,
-expression assignments, tempo and global USB/mute settings are not scene data.
+Scenes restore the capture slot, CAB/IR selection, amp controls, capture volume
+when available, active cab EQ/level, gate, and all five FX models, parameters and
+bypass states. Capture and CAB/IR selections load before their saved controls.
+The saved CAB/IR name must identify a unique entry in the connected Nano library.
+Expression assignments, tempo and global USB/mute settings are not scene data.
 **Settings → General → Keep master/EQ** (saved with the scenes) makes recall leave
 the amp Level, Bass, Mid and Treble knobs untouched; Gain, capture volume and cab
 settings still follow the scene.
+Older scenes remain loadable but must be re-saved to include capture/CAB selections;
+missing selection fields leave the current selections unchanged.
+Bypassed sources have no saved slot selection and retain this same behavior.
 Recall is transient: it never saves over the Nano preset. The controller waits
 for model/parameter loading and fresh readback before reporting **Recall verified**.
 Recall sends only changed values for already-loaded models; changing a model

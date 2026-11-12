@@ -1,4 +1,4 @@
-use super::data::{Effect, Snapshot};
+use super::data::{CabSelection, Effect, Snapshot};
 use crate::fx::types::{NanoFxBlock, NanoFxState};
 use crate::link::{Cmd, ParamWrite};
 use alloc::{collections::VecDeque, vec::Vec};
@@ -113,6 +113,24 @@ impl Snapshot {
                 view.amp.mid,
                 view.amp.treble,
             ],
+            capture_slot: view
+                .amp
+                .have_capture_slot
+                .then_some(view.amp.capture_slot)
+                .filter(|&slot| slot != 0),
+            cab_selection: view
+                .amp
+                .active_cab_slot()
+                .map(|slot| {
+                    if !view.amp.have_cab_name {
+                        return Err("Wait for the CAB/IR name before saving");
+                    }
+                    Ok(CabSelection {
+                        slot,
+                        name: view.amp.to_amp().cab_name,
+                    })
+                })
+                .transpose()?,
             capture_volume: view
                 .amp
                 .have_capture_volume
@@ -138,6 +156,13 @@ impl Snapshot {
         let actual = [amp.gain, amp.level, amp.bass, amp.mid, amp.treble];
         view.idle
             && amp.valid
+            && self
+                .capture_slot
+                .is_none_or(|slot| amp.have_capture_slot && amp.capture_slot == slot)
+            && self
+                .cab_selection
+                .as_ref()
+                .is_none_or(|cab| cab.matches(amp))
             && self
                 .amp
                 .iter()
@@ -173,7 +198,18 @@ impl Snapshot {
 
 enum Step {
     Write(Cmd),
-    ModelReady { block: usize, effect: Effect },
+    CaptureReady {
+        slot: u8,
+        generation: u32,
+    },
+    CabReady {
+        selection: CabSelection,
+        generation: u32,
+    },
+    ModelReady {
+        block: usize,
+        effect: Effect,
+    },
 }
 
 pub enum Progress {
@@ -246,6 +282,34 @@ impl Plan {
     ) -> Result<Self, &'static str> {
         snapshot.validate()?;
         let mut steps = VecDeque::new();
+        let capture_changed = snapshot.capture_slot.is_some_and(|slot| {
+            !current.idle
+                || !current.amp.valid
+                || !current.amp.have_capture_slot
+                || current.amp.capture_slot != slot
+                || !current.verified_amp.valid
+                || !current.verified_amp.have_capture_slot
+                || current.verified_amp.capture_slot != slot
+        });
+        if capture_changed {
+            if let Some(slot) = snapshot.capture_slot {
+                steps.push_back(Step::Write(Cmd::CaptureAt(slot)));
+            }
+        }
+        let cab_changed = snapshot.cab_selection.as_ref().is_some_and(|cab| {
+            capture_changed
+                || !current.idle
+                || !cab.matches(&current.amp)
+                || !cab.matches(&current.verified_amp)
+        });
+        if cab_changed {
+            if let Some(cab) = &snapshot.cab_selection {
+                steps.push_back(Step::Write(Cmd::SceneCab {
+                    slot: cab.slot,
+                    name: cab.name.clone(),
+                }));
+            }
+        }
         for (block, effect) in snapshot.effects.iter().enumerate() {
             enqueue_effect(
                 &mut steps,
@@ -268,6 +332,7 @@ impl Plan {
                 continue;
             }
             if current.idle
+                && !capture_changed
                 && amp.valid
                 && current.amp.valid
                 && actual[knob] == raw
@@ -282,6 +347,7 @@ impl Plan {
         }
         if let Some(raw) = snapshot.capture_volume.filter(|&raw| {
             !current.idle
+                || capture_changed
                 || !amp.valid
                 || !amp.have_capture_volume
                 || amp.capture_volume != raw
@@ -304,7 +370,7 @@ impl Plan {
                 current.cab.high_pass,
                 current.cab.low_pass,
             ]) {
-                if current.idle && actual == Some(normalized) {
+                if current.idle && !capture_changed && !cab_changed && actual == Some(normalized) {
                     continue;
                 }
                 steps.push_back(Step::Write(Cmd::CabParam { which, normalized }));
@@ -349,6 +415,20 @@ impl Plan {
         }
         loop {
             match self.steps.front() {
+                Some(Step::CaptureReady { slot, generation })
+                    if *generation == view.generation
+                        || !view.verified_amp.valid
+                        || !view.verified_amp.have_capture_slot
+                        || view.verified_amp.capture_slot != *slot =>
+                {
+                    return Progress::Waiting
+                }
+                Some(Step::CabReady {
+                    selection,
+                    generation,
+                }) if *generation == view.generation || !selection.matches(&view.verified_amp) => {
+                    return Progress::Waiting
+                }
                 Some(Step::ModelReady { block, effect })
                     if !effect.model_ready(&view.effects.blocks[*block]) =>
                 {
@@ -372,8 +452,26 @@ impl Plan {
                     continue;
                 }
                 Some(_) => match self.steps.pop_front() {
-                    Some(Step::Write(command)) => return Progress::Write(command),
-                    Some(Step::ModelReady { .. }) => continue,
+                    Some(Step::Write(command)) => {
+                        match &command {
+                            Cmd::CaptureAt(slot) => self.steps.push_front(Step::CaptureReady {
+                                slot: *slot,
+                                generation: view.generation,
+                            }),
+                            Cmd::SceneCab { slot, name } => self.steps.push_front(Step::CabReady {
+                                selection: CabSelection {
+                                    slot: *slot,
+                                    name: name.clone(),
+                                },
+                                generation: view.generation,
+                            }),
+                            _ => {}
+                        }
+                        return Progress::Write(command);
+                    }
+                    Some(
+                        Step::ModelReady { .. } | Step::CaptureReady { .. } | Step::CabReady { .. },
+                    ) => continue,
                     None => unreachable!(),
                 },
                 None => break,
@@ -459,6 +557,18 @@ mod tests {
         }
     }
 
+    fn loaded_cab(view: &mut View, slot: u8, name: &str) {
+        view.amp.have_cab_slot = true;
+        view.amp.cab_slot = slot;
+        view.amp.have_cab_name = true;
+        view.amp.cab_name.fill(0);
+        view.amp.cab_name[..name.len()].copy_from_slice(name.as_bytes());
+        view.verified_amp = view.amp;
+        view.cab.output = Some(0.5);
+        view.cab.high_pass = Some(0.0);
+        view.cab.low_pass = Some(1.0);
+    }
+
     fn writes_before_readback(plan: &mut Plan, view: &View) -> Vec<Cmd> {
         let mut writes = Vec::new();
         loop {
@@ -489,11 +599,7 @@ mod tests {
     #[test]
     fn verification_needs_fresh_cab_but_not_another_preset_dump() {
         let mut view = fixture();
-        view.amp.have_cab_slot = true;
-        view.amp.cab_slot = 1;
-        view.cab.output = Some(0.5);
-        view.cab.high_pass = Some(0.0);
-        view.cab.low_pass = Some(1.0);
+        loaded_cab(&mut view, 1, "Saved IR");
         let snapshot = Snapshot::capture(&view).unwrap();
         let mut plan = Plan::scene(snapshot, &view, 0, false).unwrap();
         assert!(writes_before_readback(&mut plan, &view).is_empty());
@@ -555,11 +661,7 @@ mod tests {
     #[test]
     fn scalar_delta_keeps_every_changed_control_and_uses_verified_amp() {
         let mut view = fixture();
-        view.amp.have_cab_slot = true;
-        view.amp.cab_slot = 1;
-        view.cab.output = Some(0.5);
-        view.cab.high_pass = Some(0.0);
-        view.cab.low_pass = Some(1.0);
+        loaded_cab(&mut view, 1, "Saved IR");
         view.effects.gate.reduction_valid = true;
         let mut snapshot = Snapshot::capture(&view).unwrap();
         snapshot.amp[0] = view.verified_amp.gain.wrapping_add(1);
@@ -597,6 +699,132 @@ mod tests {
             writes.as_slice(),
             [Cmd::AmpKnob { knob: 0, .. }, Cmd::CaptureVolume(_)]
         ));
+    }
+
+    #[test]
+    fn selections_restore_before_controls_and_require_fresh_verified_state() {
+        let mut view = fixture();
+        view.amp.have_capture_slot = true;
+        view.amp.capture_slot = 25;
+        loaded_cab(&mut view, 5, "Saved IR");
+        let snapshot = Snapshot::capture(&view).unwrap();
+        assert_eq!(snapshot.capture_slot, Some(25));
+        assert_eq!(snapshot.cab_selection.as_ref().unwrap().slot, 5);
+        assert_eq!(snapshot.cab_selection.as_ref().unwrap().name, "Saved IR");
+        view.amp.capture_slot = 1;
+        loaded_cab(&mut view, 1, "Other IR");
+        assert!(!snapshot.matches(&view, false));
+        let mut plan = Plan::scene(snapshot.clone(), &view, 0, false).unwrap();
+        assert!(matches!(
+            plan.poll(&view, 1),
+            Progress::Write(Cmd::CaptureAt(25))
+        ));
+        view.amp.capture_slot = 25;
+        assert!(matches!(plan.poll(&view, 2), Progress::Waiting));
+        view.generation += 1;
+        assert!(matches!(plan.poll(&view, 3), Progress::Waiting));
+        view.verified_amp = view.amp;
+        assert!(matches!(
+            plan.poll(&view, 4),
+            Progress::Write(Cmd::SceneCab { slot: 5, name }) if name == "Saved IR"
+        ));
+        loaded_cab(&mut view, 5, "Saved IR");
+        assert!(matches!(plan.poll(&view, 5), Progress::Waiting));
+        view.generation += 1;
+        let writes = writes_before_readback(&mut plan, &view);
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|cmd| matches!(cmd, Cmd::AmpKnob { .. }))
+                .count(),
+            5
+        );
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|cmd| matches!(cmd, Cmd::CaptureVolume(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|cmd| matches!(cmd, Cmd::CabParam { .. }))
+                .count(),
+            3
+        );
+        assert!(matches!(plan.poll(&view, 6), Progress::Waiting));
+        view.generation += 1;
+        assert!(matches!(
+            plan.poll(&view, 7),
+            Progress::Write(Cmd::SceneFxRefresh)
+        ));
+        view.cab_generation += 1;
+        view.verified_amp.capture_slot = 1;
+        assert!(matches!(plan.poll(&view, 8), Progress::Waiting));
+        view.verified_amp = view.amp;
+        view.verified_amp.cab_name[0] = b'X';
+        assert!(matches!(plan.poll(&view, 9), Progress::Waiting));
+        view.verified_amp = view.amp;
+        assert!(matches!(plan.poll(&view, 10), Progress::Complete));
+    }
+
+    #[test]
+    fn cab_change_in_same_slot_is_restored_and_unchanged_selection_is_skipped() {
+        let mut view = fixture();
+        loaded_cab(&mut view, 2, "Saved IR");
+        let snapshot = Snapshot::capture(&view).unwrap();
+        let mut plan = Plan::scene(snapshot.clone(), &view, 0, false).unwrap();
+        assert!(writes_before_readback(&mut plan, &view).is_empty());
+        loaded_cab(&mut view, 2, "Other IR");
+        let mut plan = Plan::scene(snapshot, &view, 0, false).unwrap();
+        assert!(matches!(
+            plan.poll(&view, 1),
+            Progress::Write(Cmd::SceneCab { slot: 2, .. })
+        ));
+        view.generation += 1;
+        assert!(matches!(plan.poll(&view, 2), Progress::Waiting));
+        loaded_cab(&mut view, 2, "Saved IR");
+        let writes = writes_before_readback(&mut plan, &view);
+        assert_eq!(writes.len(), 3);
+        assert!(writes.iter().all(|cmd| matches!(cmd, Cmd::CabParam { .. })));
+    }
+
+    #[test]
+    fn capture_selection_uses_both_live_and_verified_state() {
+        let mut view = fixture();
+        view.amp.have_capture_slot = true;
+        view.amp.capture_slot = 3;
+        view.verified_amp = view.amp;
+        let snapshot = Snapshot::capture(&view).unwrap();
+        let mut plan = Plan::scene(snapshot.clone(), &view, 0, false).unwrap();
+        assert!(writes_before_readback(&mut plan, &view).is_empty());
+        view.amp.capture_slot = 4;
+        let mut plan = Plan::scene(snapshot.clone(), &view, 0, false).unwrap();
+        assert!(matches!(
+            plan.poll(&view, 1),
+            Progress::Write(Cmd::CaptureAt(3))
+        ));
+        view.verified_amp.capture_slot = 4;
+        view.amp.capture_slot = 3;
+        let mut plan = Plan::scene(snapshot, &view, 0, false).unwrap();
+        assert!(matches!(
+            plan.poll(&view, 1),
+            Progress::Write(Cmd::CaptureAt(3))
+        ));
+        assert!(matches!(plan.poll(&view, 30_000_000), Progress::Failed(_)));
+    }
+
+    #[test]
+    fn bypassed_sources_remain_saveable_without_a_slot_selection() {
+        let mut view = fixture();
+        view.amp.have_capture_slot = true;
+        view.amp.have_cab_slot = true;
+        let snapshot = Snapshot::capture(&view).unwrap();
+        assert!(snapshot.capture_slot.is_none());
+        assert!(snapshot.cab_selection.is_none());
+        view.amp.capture_slot = 26;
+        assert!(Snapshot::capture(&view).is_err());
     }
 
     #[test]

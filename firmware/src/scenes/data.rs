@@ -61,11 +61,50 @@ pub struct Effect {
 #[serde(deny_unknown_fields)]
 pub struct Snapshot {
     pub amp: [u8; 5],
+    #[serde(default)]
+    pub capture_slot: Option<u8>,
+    #[serde(default)]
+    pub cab_selection: Option<CabSelection>,
     pub capture_volume: Option<u8>,
     pub cab: Option<[f32; 3]>,
     pub gate_on: bool,
     pub gate_amount: Option<u8>,
     pub effects: [Effect; 5],
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CabSelection {
+    pub slot: u8,
+    pub name: String,
+}
+
+impl CabSelection {
+    pub fn matches(&self, amp: &nano_wire::types::NanoAmpC) -> bool {
+        let end = amp
+            .cab_name
+            .iter()
+            .position(|&byte| byte == 0)
+            .unwrap_or(amp.cab_name.len());
+        amp.valid
+            && amp.active_cab_slot() == Some(self.slot)
+            && amp.have_cab_name
+            && &amp.cab_name[..end] == self.name.as_bytes()
+    }
+
+    pub fn library_item<'a>(
+        &self,
+        library: &'a nano_wire::types::LibraryCatalog,
+    ) -> Result<&'a nano_wire::types::LibraryItem, &'static str> {
+        let mut matches = library.cabs.iter().filter(|cab| cab.name == self.name);
+        let cab = matches
+            .next()
+            .ok_or("Saved scene CAB/IR is not in the Nano library")?;
+        if matches.next().is_some() {
+            return Err("Saved scene CAB/IR name is ambiguous in the Nano library");
+        }
+        Ok(cab)
+    }
 }
 
 impl Effect {
@@ -91,6 +130,20 @@ impl Effect {
 
 impl Snapshot {
     pub fn validate(&self) -> Result<(), &'static str> {
+        if self
+            .capture_slot
+            .is_some_and(|slot| !(1..=25).contains(&slot))
+        {
+            return Err("Scene capture slot must be within 1-25");
+        }
+        if self.cab_selection.as_ref().is_some_and(|cab| {
+            !(1..=5).contains(&cab.slot)
+                || cab.name.is_empty()
+                || cab.name.len() >= nano_wire::types::AMP_CAB_NAME_MAX
+                || cab.name.contains('\0')
+        }) {
+            return Err("Scene CAB/IR selection is invalid");
+        }
         if self.gate_amount.is_some_and(|amount| amount > 100)
             || self.cab.is_some_and(|values| {
                 values
@@ -230,6 +283,11 @@ mod tests {
     fn snapshot() -> Snapshot {
         Snapshot {
             amp: [255; 5],
+            capture_slot: Some(25),
+            cab_selection: Some(CabSelection {
+                slot: 5,
+                name: "Saved IR".into(),
+            }),
             capture_volume: Some(255),
             cab: Some([0.12345679; 3]),
             gate_on: true,
@@ -322,8 +380,70 @@ mod tests {
         assert!(json.len() <= MAX_JSON);
         let loaded = Config::decode(&json).unwrap();
         assert_eq!(loaded.preset_scenes.len(), 64);
+        let saved = &loaded.preset_scenes[0].scenes[0].as_ref().unwrap().snapshot;
+        assert_eq!(saved.capture_slot, Some(25));
+        assert_eq!(saved.cab_selection.as_ref().unwrap().slot, 5);
+        assert_eq!(saved.cab_selection.as_ref().unwrap().name, "Saved IR");
         config.preset_scenes.push(config.preset_scenes[0].clone());
         assert!(config.encode().is_err());
+    }
+
+    #[test]
+    fn legacy_snapshots_without_selections_remain_loadable() {
+        let mut json = serde_json::to_value(snapshot()).unwrap();
+        let fields = json.as_object_mut().unwrap();
+        fields.remove("capture_slot");
+        fields.remove("cab_selection");
+        let saved: Snapshot = serde_json::from_value(json).unwrap();
+        saved.validate().unwrap();
+        assert!(saved.capture_slot.is_none());
+        assert!(saved.cab_selection.is_none());
+    }
+
+    #[test]
+    fn invalid_selections_are_rejected() {
+        let mut saved = snapshot();
+        for slot in [0, 26, 255] {
+            saved.capture_slot = Some(slot);
+            assert!(saved.validate().is_err());
+        }
+        saved.capture_slot = Some(1);
+        for slot in [0, 6, 255] {
+            saved.cab_selection.as_mut().unwrap().slot = slot;
+            assert!(saved.validate().is_err());
+        }
+        saved.cab_selection.as_mut().unwrap().slot = 1;
+        saved.cab_selection.as_mut().unwrap().name.clear();
+        assert!(saved.validate().is_err());
+    }
+
+    #[test]
+    fn cab_lookup_uses_library_identity_not_list_position_and_refuses_ambiguity() {
+        use nano_wire::types::{LibraryCatalog, LibraryCategory, LibraryItem};
+        let selection = snapshot().cab_selection.unwrap();
+        let mut library = LibraryCatalog::default();
+        assert!(selection.library_item(&library).is_err());
+        library.cabs.push(LibraryItem {
+            index: 42,
+            name: selection.name.clone(),
+            user: true,
+            category: LibraryCategory::Cab,
+        });
+        let cab = selection.library_item(&library).unwrap();
+        assert_eq!(cab.index, 42);
+        assert!(cab.user);
+        library.cabs.insert(
+            0,
+            LibraryItem {
+                index: 9,
+                name: "Other IR".into(),
+                user: false,
+                category: LibraryCategory::Cab,
+            },
+        );
+        assert_eq!(selection.library_item(&library).unwrap().index, 42);
+        library.cabs.push(library.cabs[1].clone());
+        assert!(selection.library_item(&library).is_err());
     }
 
     #[test]
