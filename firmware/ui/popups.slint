@@ -313,7 +313,8 @@ export component GigPanel inherits Rectangle {
             }
         }
         Text {
-            height: 20px;
+            visible: root.eq-trim-notice != "";
+            height: root.eq-trim-notice != "" ? 20px : 0px;
             text: root.eq-trim-notice;
             color: #e0e0e0;
             font-size: 16px;

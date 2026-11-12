@@ -267,6 +267,9 @@ at range limits so offsets cannot accumulate. Stored trims apply when recalling 
 scene; simply loading a Nano preset does not alter its sound. This replaces
 **Keep master/EQ**; old backups still load, but that legacy flag no longer overrides
 scene EQ. Master Level remains independent regardless of the old flag.
+In Edit mode the scene selector reads **No scene** when unselected and highlights
+the selected scene name in blue; `*` marks unsaved scene edits. Gig view shows
+only errors beneath the trims, not routine recall/save confirmations.
 Older scenes remain loadable but must be re-saved to include capture/CAB selections;
 missing selection fields leave the current selections unchanged.
 Bypassed sources have no saved slot selection and retain this same behavior.

@@ -26,6 +26,7 @@ pub(super) fn refresh(app: &AppWindow, force: bool) {
     }
     SHOWN.store(version, Ordering::Relaxed);
     app.set_scene_library_notice(crate::scenes::notice().into());
+    app.set_scene_error(crate::scenes::error_notice().into());
     app.set_autosave_status(crate::scenes::error_notice().into());
     app.set_scene_library_busy(crate::scenes::busy());
     app.set_scene_dirty(crate::scenes::scene_dirty());
@@ -71,7 +72,7 @@ pub(super) fn refresh(app: &AppWindow, force: bool) {
                     ""
                 }
             ),
-            None => String::from("Scene"),
+            None => String::from("No scene"),
         }
         .into(),
     );

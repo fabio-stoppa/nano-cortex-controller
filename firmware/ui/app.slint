@@ -280,10 +280,11 @@ export component AppWindow inherits Window {
     changed scene-library-busy => { root.header-scene-menu-open = false; }
     in-out property <bool> scene-library-open: false;
     in-out property <string> scene-library-notice: "";
+    in-out property <string> scene-error: "";
     in-out property <int> scene-library-name-action: 0;
     in-out property <int> scene-library-edit-scene: -1;
     in-out property <int> scene-library-scene: -1;
-    in-out property <string> scene-label: "Scene";
+    in-out property <string> scene-label: "No scene";
     in-out property <int> scene-preset: 1;
     in-out property <string> scene-title: "";
     in-out property <int> scene-menu-index: -1;
@@ -403,6 +404,7 @@ export component AppWindow inherits Window {
                     }
                 }
                 scene-label: root.scene-label;
+                scene-selected: root.gig-scene >= 0;
                 scene-enabled: !root.connecting && !root.scene-library-busy;
             }
             if root.page != 2: Rectangle { height: 8px; }
@@ -865,7 +867,7 @@ export component AppWindow inherits Window {
         eq-trim-values: root.eq-trim-values;
         eq-trim-amounts: root.eq-trim-amounts;
         eq-trim-enabled: root.eq-trim-enabled;
-        eq-trim-notice: root.scene-library-notice;
+        eq-trim-notice: root.scene-error;
         eq-trim-adjusted(index, delta) => { root.eq-trim-adjusted(index, delta); }
         preset: root.preset;
         bpm-text: root.bpm-text;

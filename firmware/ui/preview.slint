@@ -72,8 +72,8 @@ export component Preview inherits AppWindow {
         root.demo-scenes[5] == "" ? "(empty)" : root.demo-scenes[5],
     ];
     scene-library-scene: 0;
-    scene-label: root.scene-library-scene >= 0 ? root.demo-scenes[root.scene-library-scene] + (root.scene-dirty ? " *" : "") : "Scene";
-    scene-library-notice: "Preview only - saved changes last until the preview closes.";
+    scene-label: root.scene-library-scene >= 0 ? root.demo-scenes[root.scene-library-scene] + (root.scene-dirty ? " *" : "") : "No scene";
+    scene-library-notice: "";
     gig-scenes: root.scene-library-scenes;
     gig-scene-assigned: root.scene-assigned;
     gig-scene: root.scene-library-scene;
