@@ -184,7 +184,7 @@ export component GigButton inherits Rectangle {
         font-weight: 700;
         horizontal-alignment: left;
         vertical-alignment: top;
-        wrap: word-wrap;
+        wrap: char-wrap;
         overflow: elide;
     }
     TouchArea { enabled: root.enabled; clicked => { root.tapped(); } }
