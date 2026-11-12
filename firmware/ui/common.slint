@@ -13,6 +13,12 @@ export global Surface {
     out property <length> screen-margin: 12px;
 }
 
+export global MenuMetrics {
+    out property <length> width: 288px;
+    out property <length> row-height: 80px;
+    out property <length> text-size: 24px;
+}
+
 export global FxPalette {
     // Category IDs match NANO_FX_CAT_*; RGB extrema match blue and amp red.
     public pure function category-color(category: int) -> color {
@@ -945,8 +951,8 @@ export component ModelPicker inherits Rectangle {
                                     TouchArea {
                                         clicked => {
                                             root.menu-index = item.index;
-                                            root.menu-x = max(8px, min(root.width - 228px, Surface.screen-margin + item.col * (card.cell + root.gap) + card.cell - 42px));
-                                            root.menu-y = max(8px, min(root.height - 248px, 90px + item.y * 1px - tab-list.viewport-y));
+                                            root.menu-x = max(8px, min(root.width - MenuMetrics.width - 8px, Surface.screen-margin + item.col * (card.cell + root.gap) + card.cell - 42px));
+                                            root.menu-y = max(8px, min(root.height - 4 * MenuMetrics.row-height - 8px, 90px + item.y * 1px - tab-list.viewport-y));
                                         }
                                     }
                                 }
@@ -1029,8 +1035,8 @@ export component ModelPicker inherits Rectangle {
                             TouchArea {
                                 clicked => {
                                     root.menu-index = item.index;
-                                    root.menu-x = max(8px, min(root.width - 228px, Surface.screen-margin + item.col * (cell + root.gap) + cell - 42px));
-                                    root.menu-y = max(8px, min(root.height - 248px, 90px + item.y * 1px - plain-list.viewport-y));
+                                    root.menu-x = max(8px, min(root.width - MenuMetrics.width - 8px, Surface.screen-margin + item.col * (cell + root.gap) + cell - 42px));
+                                    root.menu-y = max(8px, min(root.height - 4 * MenuMetrics.row-height - 8px, 90px + item.y * 1px - plain-list.viewport-y));
                                 }
                             }
                         }
@@ -1054,21 +1060,21 @@ export component ModelPicker inherits Rectangle {
             x: root.menu-x;
             y: root.menu-y;
             z: 1000;
-            width: 220px;
-            height: 240px;
+            width: MenuMetrics.width;
+            height: 4 * MenuMetrics.row-height;
             background: #303030;
             border-radius: Radius.default;
             for action in 4: Rectangle {
                 x: 4px;
-                y: action * 59px;
+                y: action * MenuMetrics.row-height;
                 width: parent.width - 8px;
-                height: 58px;
+                height: MenuMetrics.row-height;
                 background: #00000000;
                 Text {
-                    x: 12px;
+                    x: 20px;
                     text: action == 0 ? "Rename" : action == 1 ? "Move to..." : action == 2 ? "Copy to..." : "Delete";
                     color: #f0f0f0;
-                    font-size: 18px;
+                    font-size: MenuMetrics.text-size;
                     font-weight: 700;
                     vertical-alignment: center;
                 }

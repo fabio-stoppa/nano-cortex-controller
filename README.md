@@ -85,6 +85,8 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
 - In portrait the FX chain sits at the bottom of the screen, below the page content.
 - Tap an FX chain tab to select it, hold it to toggle bypass, or double-tap it to open model selection. The Amp tab remains selection-only.
 - Preset three-dot menus have a 64px-wide, full-row-height touch target separate from preset selection.
+- Header, preset, and scene dropdown menus are 288px wide, with 80px-tall touch
+  rows and 24px labels. Context menus stay inside the screen in both orientations.
 - Selecting a preset keeps the preset list open and moves its highlight, so presets can be auditioned back to back.
 - All full-screen pages, including Welcome, share 12px edge padding. The tuner keeps the editor header above its tuning display and controls, including when opened from Gig mode. The Amp page's capture and cab cards have no outline, center their icon, slot and name, and wrap names to two lines before truncating with "…".
 - Preset popup names wrap to three lines on taller cards, and capture and cab names wrap to two; the rename keyboard has a blinking cursor, keys light up while pressed, holding backspace repeats (400ms delay, then every 60ms), and long names keep their end visible.

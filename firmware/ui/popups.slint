@@ -1,5 +1,5 @@
 import {
-    Radius, Surface, ChainRail, HeaderButton, ScrollFade, VCenter,
+    Radius, Surface, MenuMetrics, ChainRail, HeaderButton, ScrollFade, VCenter,
     PopupHeader, TempoReadout,
 } from "common.slint";
 
@@ -318,19 +318,19 @@ export component SceneContextMenu inherits Rectangle {
     in property <bool> assigned;
     in property <bool> actions-enabled: true;
     callback chosen(int);
-    width: 220px;
-    height: 180px;
+    width: MenuMetrics.width;
+    height: 3 * MenuMetrics.row-height;
     background: #303030;
     border-radius: Radius.default;
     for action in 3: Rectangle {
-        x: 4px; y: action * 60px;
-        width: parent.width - 8px; height: 60px;
+        x: 4px; y: action * MenuMetrics.row-height;
+        width: parent.width - 8px; height: MenuMetrics.row-height;
         property <bool> action-enabled: root.actions-enabled && (action == 1 || root.assigned);
         Text {
-            x: 12px;
+            x: 20px;
             text: action == 0 ? "Rename" : action == 1 ? "Save" : "Delete";
             color: parent.action-enabled ? #f0f0f0 : #666666;
-            font-size: 18px; font-weight: 700;
+            font-size: MenuMetrics.text-size; font-weight: 700;
             vertical-alignment: center;
         }
         if action == 2: Rectangle {
@@ -447,9 +447,9 @@ export component ScenePanel inherits Rectangle {
                                 root.menu-index = index;
                                 root.menu-x = clamp(Surface.screen-margin + mod(index, root.columns) * (scene-list.width + 8px) / root.columns
                                     + (scene-list.width - (root.columns - 1) * 8px) / root.columns - 42px,
-                                    8px, root.width - 228px);
+                                    8px, root.width - MenuMetrics.width - 8px);
                                 root.menu-y = clamp(90px + floor(index / root.columns) * 102px + scene-list.viewport-y,
-                                    8px, root.height - 188px);
+                                    8px, root.height - 3 * MenuMetrics.row-height - 8px);
                         }
                     }
                 }

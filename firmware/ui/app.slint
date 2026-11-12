@@ -2,7 +2,7 @@
 // the firmware rotates that taller layout into the same framebuffer.
 
 import {
-    Radius, Surface, ChainRail, HeaderButton, MidiRow, ExpressionRangeRow,
+    Radius, Surface, MenuMetrics, ChainRail, HeaderButton, MidiRow, ExpressionRangeRow,
     ExpressionBypassRow, BtDevice, ModelItem, ModelPicker, HeaderBar,
 } from "common.slint";
 import { AmpPanel, FxPanel, TunerPanel, ToolsPanel } from "panels.slint";
@@ -661,15 +661,15 @@ export component AppWindow inherits Window {
         Rectangle {
             x: parent.width - self.width - Surface.screen-margin;
             y: Surface.screen-margin + 52px;
-            width: 220px;
-            height: 240px;
+            width: MenuMetrics.width;
+            height: 4 * MenuMetrics.row-height;
             background: #303030;
             border-radius: Radius.default;
             for name[i] in ["Gig mode", "MIDI", "Pedals", "Settings"]: Rectangle {
                 x: 4px;
-                y: i * 59px;
+                y: i * MenuMetrics.row-height;
                 width: parent.width - 8px;
-                height: 58px;
+                height: MenuMetrics.row-height;
                 background: transparent;
                 if i == 1: Rectangle {
                     x: 8px;
@@ -679,10 +679,10 @@ export component AppWindow inherits Window {
                     background: #ffffff30;
                 }
                 Text {
-                    x: 12px;
+                    x: 20px;
                     text: name;
                     color: #f0f0f0;
-                    font-size: 18px;
+                    font-size: MenuMetrics.text-size;
                     font-weight: 700;
                     vertical-alignment: center;
                 }
