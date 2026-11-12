@@ -228,7 +228,6 @@ export component GigPanel inherits Rectangle {
     in property <[string]> eq-trim-values;
     in property <[float]> eq-trim-amounts;
     in property <bool> eq-trim-enabled;
-    in property <string> eq-trim-notice;
     callback eq-trim-adjusted(int, int);
     in property <string> preset;
     in property <string> bpm-text;
@@ -311,14 +310,6 @@ export component GigPanel inherits Rectangle {
                     tapped => { root.eq-trim-adjusted(3, 0); }
                 }
             }
-        }
-        Text {
-            visible: root.eq-trim-notice != "";
-            height: root.eq-trim-notice != "" ? 20px : 0px;
-            text: root.eq-trim-notice;
-            color: #e0e0e0;
-            font-size: 16px;
-            overflow: elide;
         }
         ChainRail {
             height: root.portrait ? 88px : 60px;

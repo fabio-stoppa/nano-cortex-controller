@@ -48,7 +48,16 @@ export component AppWindow inherits Window {
     in-out property <[string]> eq-trim-values: ["+0.0", "+0.0", "+0.0"];
     in-out property <[float]> eq-trim-amounts: [0.5, 0.5, 0.5];
     in-out property <bool> eq-trim-enabled: false;
-    in-out property <string> autosave-status: "";
+    property <string> error-toast: "";
+    callback show-error(string);
+    show-error(message) => {
+        root.error-toast = message;
+        error-timeout.restart();
+    }
+    error-timeout := Timer {
+        interval: 6000ms;
+        triggered => { root.error-toast = ""; self.stop(); }
+    }
     callback autosave-toggled(bool);
     callback eq-trim-adjusted(int, int);
     in-out property <bool> ble-on: false;
@@ -280,7 +289,6 @@ export component AppWindow inherits Window {
     changed scene-library-busy => { root.header-scene-menu-open = false; }
     in-out property <bool> scene-library-open: false;
     in-out property <string> scene-library-notice: "";
-    in-out property <string> scene-error: "";
     in-out property <int> scene-library-name-action: 0;
     in-out property <int> scene-library-edit-scene: -1;
     in-out property <int> scene-library-scene: -1;
@@ -713,7 +721,6 @@ export component AppWindow inherits Window {
     if root.settings-open: ToolsPanel {
         autosave-enabled: root.autosave-enabled;
         remember-last-mode: root.remember-last-mode;
-        autosave-status: root.autosave-status;
         autosave-toggled(enabled) => { root.autosave-toggled(enabled); }
         remember-last-mode-toggled(enabled) => { root.remember-last-mode-toggled(enabled); }
         visible: !root.kbd-open;
@@ -867,7 +874,6 @@ export component AppWindow inherits Window {
         eq-trim-values: root.eq-trim-values;
         eq-trim-amounts: root.eq-trim-amounts;
         eq-trim-enabled: root.eq-trim-enabled;
-        eq-trim-notice: root.scene-error;
         eq-trim-adjusted(index, delta) => { root.eq-trim-adjusted(index, delta); }
         preset: root.preset;
         bpm-text: root.bpm-text;
@@ -1130,4 +1136,26 @@ export component AppWindow inherits Window {
         retry-now => { root.retry-now(); }
     }
 
+    if root.error-toast != "": Rectangle {
+        x: Surface.screen-margin;
+        y: root.height - self.height - Surface.screen-margin;
+        width: root.width - 2 * Surface.screen-margin;
+        height: max(72px, error-text.preferred-height + 32px);
+        background: #482020;
+        border-color: #f8281a;
+        border-width: 2px;
+        border-radius: Radius.default;
+        error-text := Text {
+            x: 16px;
+            y: 16px;
+            width: parent.width - 32px;
+            text: root.error-toast;
+            color: #ffffff;
+            font-size: 20px;
+            wrap: word-wrap;
+        }
+        TouchArea {
+            clicked => { root.error-toast = ""; error-timeout.stop(); }
+        }
+    }
 }

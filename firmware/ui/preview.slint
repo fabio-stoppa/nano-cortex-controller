@@ -305,11 +305,9 @@ export component Preview inherits AppWindow {
     tools-opened => { root.popup = root.tools-section == 2 ? "midi" : root.tools-section == 1 ? "pedals" : "settings"; }
     eq-trim-enabled: true;
     eq-trim-adjusted(index, delta) => {
-        root.autosave-status = "";
     }
     autosave-toggled(enabled) => {
         root.autosave-enabled = enabled;
-        root.autosave-status = "";
     }
     midi-clear-all => {
         root.demo-midi-controls[0].assigned = "";
@@ -334,7 +332,6 @@ export component Preview inherits AppWindow {
         root.layout-mode = 0;
         root.preview-portrait = false;
         root.autosave-enabled = false;
-        root.autosave-status = "";
         root.clear-completed(true, "Preferences reset: landscape, Autosave off (preview only)");
     }
     preset-list-tapped => { root.popup = "preset"; }

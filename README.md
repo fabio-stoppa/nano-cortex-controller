@@ -268,8 +268,10 @@ scene; simply loading a Nano preset does not alter its sound. This replaces
 **Keep master/EQ**; old backups still load, but that legacy flag no longer overrides
 scene EQ. Master Level remains independent regardless of the old flag.
 In Edit mode the scene selector reads **No scene** when unselected and highlights
-the selected scene name in blue; `*` marks unsaved scene edits. Gig view shows
-only errors beneath the trims, not routine recall/save confirmations.
+the selected scene name in blue; `*` marks unsaved scene edits. Scene, EQ trim and
+General settings errors appear as a bottom toast overlay, dismissed after six
+seconds or by tapping it, rather than taking up space in Settings or Gig view.
+Routine recall/save confirmations are not displayed there.
 Older scenes remain loadable but must be re-saved to include capture/CAB selections;
 missing selection fields leave the current selections unchanged.
 Bypassed sources have no saved slot selection and retain this same behavior.

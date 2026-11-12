@@ -28,6 +28,7 @@ struct State {
     version: u32,
     notice: &'static str,
     notice_is_error: bool,
+    error_pending: bool,
     scene: Option<usize>,
     scene_dirty: bool,
     preset: u8,
@@ -47,6 +48,7 @@ static STATE: Store = Store(RefCell::new(State {
     version: 1,
     notice: "",
     notice_is_error: false,
+    error_pending: false,
     scene: None,
     scene_dirty: false,
     preset: 0,
@@ -98,6 +100,7 @@ pub fn report(notice: &'static str) {
     with(|state| {
         state.notice = notice;
         state.notice_is_error = true;
+        state.error_pending = true;
         state.version = state.version.wrapping_add(1);
     });
 }
@@ -242,9 +245,11 @@ pub fn set_eq_trim(trim: [i16; 3]) -> Result<(), &'static str> {
 pub fn notice() -> &'static str {
     with(|state| state.notice)
 }
-pub fn error_notice() -> &'static str {
+pub fn take_error_notice() -> &'static str {
     with(|state| {
-        if state.notice_is_error {
+        let pending = state.error_pending;
+        state.error_pending = false;
+        if pending && state.notice_is_error {
             state.notice
         } else {
             ""

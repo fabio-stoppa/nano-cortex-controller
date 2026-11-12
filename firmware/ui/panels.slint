@@ -773,7 +773,6 @@ export component SwitchToggle inherits Rectangle {
 export component ToolsPanel inherits Rectangle {
     in property <bool> autosave-enabled;
     in property <bool> remember-last-mode;
-    in property <string> autosave-status;
     callback autosave-toggled(bool);
     callback remember-last-mode-toggled(bool);
     in property <string> jack-mode;
@@ -959,16 +958,6 @@ export component ToolsPanel inherits Rectangle {
                                     on: root.remember-last-mode;
                                     toggled(enabled) => { root.remember-last-mode-toggled(enabled); }
                                 }
-                            }
-                        }
-                        if root.autosave-status != "": Rectangle {
-                            height: 48px;
-                            background: transparent;
-                            Text {
-                                text: root.autosave-status;
-                                color: #ececec;
-                                font-size: 16px;
-                                wrap: word-wrap;
                             }
                         }
                         OptionRow {

@@ -26,8 +26,10 @@ pub(super) fn refresh(app: &AppWindow, force: bool) {
     }
     SHOWN.store(version, Ordering::Relaxed);
     app.set_scene_library_notice(crate::scenes::notice().into());
-    app.set_scene_error(crate::scenes::error_notice().into());
-    app.set_autosave_status(crate::scenes::error_notice().into());
+    let error = crate::scenes::take_error_notice();
+    if !error.is_empty() {
+        app.invoke_show_error(error.into());
+    }
     app.set_scene_library_busy(crate::scenes::busy());
     app.set_scene_dirty(crate::scenes::scene_dirty());
     let names = crate::state::nano_state_preset_names();

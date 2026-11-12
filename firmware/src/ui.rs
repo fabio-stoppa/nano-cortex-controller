@@ -158,11 +158,10 @@ fn ensure() {
             match crate::settings::save_remember_mode(enabled, app.get_gig_open()) {
                 Ok(()) => {
                     app.set_remember_last_mode(enabled);
-                    app.set_autosave_status("".into());
                 }
                 Err(error) => {
                     log::warn!("could not save boot mode preference: {error}");
-                    app.set_autosave_status(error.into());
+                    app.invoke_show_error(error.into());
                 }
             }
         }
@@ -186,17 +185,14 @@ fn ensure() {
                 3 => trim = [0; 3],
                 _ => {
                     crate::scenes::report("Invalid EQ trim control");
-                    app.set_autosave_status("Invalid EQ trim control".into());
+                    scenes_ui::refresh(&app, true);
                     return;
                 }
             }
             match crate::scenes::set_eq_trim(trim) {
-                Ok(()) => {
-                    app.set_autosave_status("".into());
-                }
+                Ok(()) => {}
                 Err(error) => {
                     crate::scenes::report(error);
-                    app.set_autosave_status(error.into());
                 }
             }
             scenes_ui::refresh(&app, true);
@@ -212,11 +208,9 @@ fn ensure() {
                 Ok(()) => {
                     app.set_autosave_enabled(enabled);
                     crate::scenes::set_autosave(enabled);
-                    app.set_autosave_status("".into());
                 }
                 Err(error) => {
                     crate::scenes::report(error);
-                    app.set_autosave_status(error.into());
                 }
             }
         }
@@ -402,7 +396,6 @@ fn ensure() {
                     app.set_autosave_enabled(false);
                     app.set_remember_last_mode(false);
                     app.set_gig_open(false);
-                    app.set_autosave_status("".into());
                     crate::scenes::set_autosave(false);
                     "Preferences reset: landscape, Autosave off"
                 }
@@ -1184,12 +1177,6 @@ pub fn refresh_midi() {
         .is_some_and(|ui| ui.app.get_usb_storage_open())
     {
         return;
-    }
-    if let Some(ui) = state().as_ref() {
-        if ui.app.get_autosave_enabled() {
-            ui.app
-                .set_autosave_status(crate::scenes::error_notice().into());
-        }
     }
     crate::midi::persist();
     if let Some(ui) = state().as_ref() {

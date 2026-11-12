@@ -408,6 +408,24 @@ mod tests {
     }
 
     #[test]
+    fn scene_error_toasts_are_delivered_once_and_repeated_errors_are_new_events() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        *settings::SCENE_RECORD.lock().unwrap() = None;
+        scenes::load();
+        assert_eq!(scenes::take_error_notice(), "");
+        scenes::report("Scene recall failed");
+        assert_eq!(scenes::take_error_notice(), "Scene recall failed");
+        assert_eq!(scenes::take_error_notice(), "");
+        scenes::report("Scene recall failed");
+        assert_eq!(scenes::take_error_notice(), "Scene recall failed");
+        assert_eq!(scenes::take_error_notice(), "");
+        scenes::report("Old failure");
+        scenes::load();
+        assert_eq!(scenes::take_error_notice(), "");
+    }
+
+    #[test]
     fn preset_eq_trims_preserve_scene_bases_live_edits_and_master_level() {
         let _guard = LOCK.lock().unwrap();
         reset();
