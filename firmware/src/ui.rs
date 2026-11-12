@@ -792,7 +792,14 @@ impl ListRows {
             .iter()
             .find(|item| !item.header && item.index == current)
             .map_or(0, |item| item.section);
+        let tabs: alloc::vec::Vec<ModelItem> = self
+            .items
+            .iter()
+            .filter(|item| item.header)
+            .cloned()
+            .collect();
         app.set_model_list_height(self.y);
+        app.set_model_list_tabs(slint::ModelRc::new(slint::VecModel::from(tabs)));
         app.set_model_list(slint::ModelRc::new(slint::VecModel::from(self.items)));
         app.set_model_list_current(current);
         app.set_model_list_section(section);

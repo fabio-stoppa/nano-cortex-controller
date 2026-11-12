@@ -1,0 +1,700 @@
+import {
+    Radius, Surface, ChainRail, HeaderButton, ScrollFade, VCenter,
+    PopupHeader, TempoReadout,
+} from "common.slint";
+
+export component StatusLine inherits Rectangle {
+    in property <string> label;
+    in property <string> status: "";
+    // -1 not seen, 0 nearby, 1 connecting, 2 connected
+    in property <int> state;
+    height: 28px;
+    HorizontalLayout {
+        alignment: center;
+        spacing: 10px;
+        VCenter {
+            Rectangle {
+                width: 12px;
+                height: 12px;
+                border-radius: 6px;
+                background: root.state == 2 ? #3dcc7a : (root.state == 1 ? #1a3af8 : (root.state == 0 ? #c8c8c8 : #505050));
+            }
+        }
+        Text {
+            text: root.label + ": " + (root.status != "" ? root.status : (root.state == 2 ? "Connected" : (root.state == 1 ? "Connecting..." : (root.state == 0 ? "Found, not connected" : "Searching..."))));
+            color: root.state >= 1 ? #ffffff : #909090;
+            font-size: 17px;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component ConnectingOverlay inherits Rectangle {
+    in property <string> stage: "Searching";
+    in property <string> error: "";
+    in property <int> amp-state: -1;
+    in property <int> foot-state: -1;
+    in property <string> loading: "";
+    in property <string> version: "";
+    callback scene-library();
+    callback usb-storage();
+    callback retry-now();
+    background: #1e1e1e;
+    TouchArea {}
+    VerticalLayout {
+        alignment: center;
+        spacing: 10px;
+        padding: Surface.screen-margin;
+        // Logo: a knob ring with a pointer dot, echoing the amp's GAIN ring.
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 72px;
+                height: 72px;
+                border-radius: 36px;
+                border-width: 6px;
+                border-color: #1a3af8;
+                Rectangle {
+                    width: 50px;
+                    height: 50px;
+                    border-radius: 25px;
+                    background: #2a2a2a;
+                    border-width: 2px;
+                    border-color: #ffffff;
+                }
+                Rectangle {
+                    y: 11px;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 6px;
+                    background: #ffffff;
+                }
+            }
+        }
+        Text {
+            text: "NANO CORTEX";
+            color: #ffffff;
+            font-size: 30px;
+            font-weight: 700;
+            letter-spacing: 5px;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "CONTROLLER";
+            color: #909090;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 6px;
+            horizontal-alignment: center;
+        }
+        Rectangle { height: 8px; }
+        StatusLine {
+            label: "Nano Cortex";
+            status: root.stage;
+            state: root.amp-state;
+        }
+        StatusLine { label: "Footswitch"; state: root.foot-state; }
+        Text {
+            text: root.loading;
+            color: #ffffff;
+            font-size: 16px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            visible: root.loading != "";
+        }
+        Text {
+            text: root.error;
+            color: #ff9090;
+            font-size: 15px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+            visible: root.error != "";
+        }
+        if root.error != "": HeaderButton {
+            width: 140px;
+            height: 40px;
+            label: "Retry now";
+            tapped => { root.retry-now(); }
+        }
+        Rectangle { height: 6px; }
+        Text {
+            text: "Hold EXIT + CAPTURE on the Nano until the GAIN ring spins.";
+            color: #909090;
+            font-size: 15px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        Text {
+            text: "Make sure it is not paired with a smartphone or Cortex Cloud.";
+            color: #909090;
+            font-size: 15px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+    HeaderButton {
+        x: parent.width - self.width - Surface.screen-margin;
+        y: Surface.screen-margin;
+        width: 120px;
+        height: 40px;
+        label: "USB drive";
+        tapped => { root.usb-storage(); }
+    }
+    Text {
+        x: Surface.screen-margin;
+        y: parent.height - self.height - Surface.screen-margin;
+        width: parent.width - 2 * Surface.screen-margin;
+        text: root.version == "" ? "" : "v" + root.version;
+        color: #707070;
+        font-size: 14px;
+        font-weight: 700;
+        horizontal-alignment: center;
+    }
+}
+
+export component GigButton inherits Rectangle {
+    in property <int> number;
+    in property <string> label;
+    in property <bool> highlight: false;
+    in property <bool> enabled: true;
+    callback tapped();
+    background: root.highlight ? #1a3af8 : !root.enabled ? #202020 : #303030;
+    border-radius: Radius.default;
+    Text {
+        x: 14px;
+        y: 10px;
+        width: max(0px, root.width - 28px);
+        height: 30px;
+        text: "0" + root.number;
+        color: #ffffff70;
+        font-size: 24px;
+        font-weight: 700;
+        horizontal-alignment: left;
+        vertical-alignment: top;
+    }
+    Text {
+        x: 14px;
+        y: 42px;
+        width: max(0px, root.width - 28px);
+        height: max(0px, root.height - 52px);
+        text: root.label;
+        color: root.enabled ? #ffffff : #777777;
+        font-size: 30px;
+        font-weight: 700;
+        horizontal-alignment: left;
+        vertical-alignment: top;
+        wrap: word-wrap;
+        overflow: elide;
+    }
+    TouchArea { enabled: root.enabled; clicked => { root.tapped(); } }
+}
+
+export component GigHeader inherits PopupHeader {
+    in property <bool> portrait;
+    in property <string> capture-value;
+    in property <string> cab-value;
+    in property <string> bpm-text;
+    in property <int> bpm-value;
+    in property <bool> tempo-global;
+    callback tempo();
+    callback preset-tapped();
+    subtitle: root.capture-value + " / " + root.cab-value;
+    right-reserved-width: root.portrait ? 90px : 154px;
+    // Title band between the close button and the tempo readout.
+    TouchArea {
+        x: 54px;
+        width: max(0px, parent.width - self.x - root.right-reserved-width);
+        clicked => { root.preset-tapped(); }
+    }
+    TempoReadout {
+        x: parent.width - self.width;
+        y: 3px;
+        width: root.portrait ? 78px : 142px;
+        height: 42px;
+        bpm-text: root.bpm-text;
+        bpm-value: root.bpm-value;
+        tempo-global: root.tempo-global;
+        right-aligned: true;
+        stacked: root.portrait;
+        tapped => { root.tempo(); }
+    }
+}
+
+export component GigPanel inherits Rectangle {
+    in property <bool> portrait;
+    in property <bool> connected;
+    in property <bool> busy;
+    in property <string> preset;
+    in property <string> bpm-text;
+    in property <int> bpm-value;
+    in property <bool> tempo-global;
+    in property <[string]> fx-labels;
+    in property <[int]> fx-categories;
+    in property <[bool]> fx-on;
+    in property <string> capture-value;
+    in property <string> cab-value;
+    in property <[string]> scenes;
+    in property <[bool]> scene-assigned;
+    in property <int> scene: -1;
+    callback scene-recall(int);
+    callback chain-tapped(int);
+    callback chain-held(int);
+    callback chain-double(int);
+    callback tempo();
+    callback editor();
+    callback preset-tapped();
+    background: Surface.background;
+    TouchArea {}
+    VerticalLayout {
+        padding: Surface.screen-margin;
+        spacing: 8px;
+        GigHeader {
+            width: parent.width - 2 * Surface.screen-margin;
+            portrait: root.portrait;
+            title: root.preset;
+            capture-value: root.capture-value;
+            cab-value: root.cab-value;
+            bpm-text: root.bpm-text;
+            bpm-value: root.bpm-value;
+            tempo-global: root.tempo-global;
+            closed => { root.editor(); }
+            tempo => { root.tempo(); }
+            preset-tapped => { root.preset-tapped(); }
+        }
+        scene-grid := Rectangle {
+            min-height: 160px;
+            vertical-stretch: 1;
+            background: transparent;
+            for label[index] in root.scenes: GigButton {
+                width: root.portrait ? (scene-grid.width - 8px) / 2 : (scene-grid.width - 16px) / 3;
+                height: (scene-grid.height - (ceil(root.scenes.length / (root.portrait ? 2 : 3)) - 1) * 8px) / max(1, ceil(root.scenes.length / (root.portrait ? 2 : 3)));
+                x: mod(index, root.portrait ? 2 : 3) * (self.width + 8px);
+                y: floor(index / (root.portrait ? 2 : 3)) * (self.height + 8px);
+                label: label;
+                number: index + 1;
+                highlight: root.scene == index;
+                enabled: root.connected && root.scene-assigned[index];
+                tapped => { root.scene-recall(index); }
+            }
+        }
+        ChainRail {
+            height: root.portrait ? 88px : 60px;
+            horizontal: true;
+            two-rows: root.portrait;
+            horizontal-spacing: 8px;
+            horizontal-inset: root.portrait ? 2px : 0px;
+            page: -1;
+            chain: -1;
+            tab-0: root.fx-labels[0];
+            tab-1: root.fx-labels[1];
+            tab-3: root.fx-labels[3];
+            tab-4: root.fx-labels[4];
+            tab-5: root.fx-labels[5];
+            category-0: root.fx-categories[0];
+            category-1: root.fx-categories[1];
+            category-3: root.fx-categories[3];
+            category-4: root.fx-categories[4];
+            category-5: root.fx-categories[5];
+            on-0: root.fx-on[0];
+            on-1: root.fx-on[1];
+            on-3: root.fx-on[3];
+            on-4: root.fx-on[4];
+            on-5: root.fx-on[5];
+            chain-tapped(index) => {
+                if root.connected && !root.busy { root.chain-tapped(index); }
+            }
+            chain-held(index) => {
+                if root.connected && !root.busy { root.chain-held(index); }
+            }
+            chain-double(index) => {
+                if root.connected && !root.busy { root.chain-double(index); }
+            }
+        }
+    }
+}
+
+export component SceneContextMenu inherits Rectangle {
+    in property <bool> assigned;
+    in property <bool> actions-enabled: true;
+    callback chosen(int);
+    width: 220px;
+    height: 180px;
+    background: #303030;
+    border-radius: Radius.default;
+    for action in 3: Rectangle {
+        x: 4px; y: action * 60px;
+        width: parent.width - 8px; height: 60px;
+        property <bool> action-enabled: root.actions-enabled && (action == 1 || root.assigned);
+        Text {
+            x: 12px;
+            text: action == 0 ? "Rename" : action == 1 ? "Save" : "Delete";
+            color: parent.action-enabled ? #f0f0f0 : #666666;
+            font-size: 18px; font-weight: 700;
+            vertical-alignment: center;
+        }
+        if action == 2: Rectangle {
+            x: 8px;
+            y: 0px;
+            width: parent.width - 16px;
+            height: 1px;
+            background: #ffffff30;
+        }
+        TouchArea {
+            enabled: parent.action-enabled;
+            clicked => { root.chosen(action); }
+        }
+    }
+}
+
+export component ScenePanel inherits Rectangle {
+    in-out property <int> menu-index: -1;
+    property <length> menu-x;
+    property <length> menu-y;
+    changed enabled => { root.menu-index = -1; }
+    changed portrait => { root.menu-index = -1; }
+    changed title => { root.menu-index = -1; }
+    in property <bool> portrait;
+    property <int> columns: root.portrait ? 2 : 3;
+    in property <bool> dirty;
+    in property <string> title;
+    in property <bool> enabled;
+    in property <bool> recall-enabled;
+    in property <[bool]> assigned;
+    in property <[string]> scenes;
+    in property <int> scene: -1;
+    callback scene-recall(int);
+    callback scene-store(int);
+    callback scene-rename(int);
+    callback scene-clear(int);
+    callback closed();
+    background: Surface.background;
+    TouchArea {}
+    VerticalLayout {
+        padding: Surface.screen-margin;
+        spacing: 8px;
+        PopupHeader {
+            title: root.title;
+            closed => { root.closed(); }
+        }
+        Rectangle { height: 2px; }
+        scene-list := Flickable {
+            vertical-stretch: 1;
+            viewport-width: self.width;
+            viewport-height: ceil(root.scenes.length / root.columns) * 102px - 8px;
+            for label[index] in root.scenes: Rectangle {
+                x: mod(index, root.columns) * (self.width + 8px);
+                y: floor(index / root.columns) * 102px;
+                width: (scene-list.width - (root.columns - 1) * 8px) / root.columns;
+                height: 94px;
+                background: index == root.scene ? #1a3af8 : #2a2a2a;
+                border-radius: Radius.default;
+                TouchArea {
+                    x: 0px; y: 0px;
+                    width: parent.width - 64px;
+                    height: parent.height;
+                    enabled: root.recall-enabled && root.assigned[index];
+                    clicked => { root.scene-recall(index); }
+                }
+                Text {
+                    x: 10px;
+                    width: 32px;
+                    text: "0" + (index + 1);
+                    color: #ffffff70;
+                    font-size: 19px; font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                        Text {
+                            x: 48px; y: 8px; height: 78px;
+                            width: parent.width - 124px - (index == root.scene && root.dirty ? 16px : 0px);
+                            text: label;
+                            color: index == root.scene ? #ffffff : #ececec;
+                            font-size: 19px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            wrap: word-wrap;
+                        }
+                        if index == root.scene && root.dirty: Text {
+                            x: parent.width - 92px;
+                            width: 16px;
+                            text: "*";
+                            color: #ffffff;
+                            font-size: 20px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                    Rectangle {
+                        x: parent.width - 64px;
+                        width: 64px;
+                        height: parent.height;
+                        VerticalLayout {
+                            x: parent.width - 34px;
+                            width: 28px;
+                            height: parent.height;
+                            alignment: center;
+                            spacing: 4px;
+                            for dot in 3: Rectangle {
+                                width: 5px; height: 5px;
+                                background: #e0e0e0;
+                                border-radius: 3px;
+                            }
+                        }
+                        TouchArea {
+                            enabled: root.enabled;
+                            clicked => {
+                                root.menu-index = index;
+                                root.menu-x = clamp(Surface.screen-margin + mod(index, root.columns) * (scene-list.width + 8px) / root.columns
+                                    + (scene-list.width - (root.columns - 1) * 8px) / root.columns - 42px,
+                                    8px, root.width - 228px);
+                                root.menu-y = clamp(90px + floor(index / root.columns) * 102px + scene-list.viewport-y,
+                                    8px, root.height - 188px);
+                        }
+                    }
+                }
+            }
+            ScrollFade { width: scene-list.width; offset: -scene-list.viewport-y; page: scene-list.height; total: scene-list.viewport-height; }
+        }
+    }
+    if root.menu-index >= 0: Rectangle {
+        TouchArea { clicked => { root.menu-index = -1; } }
+        SceneContextMenu {
+            x: root.menu-x; y: root.menu-y;
+            assigned: root.assigned[root.menu-index];
+            actions-enabled: root.enabled;
+            chosen(action) => {
+                if action == 0 { root.scene-rename(root.menu-index); }
+                else if action == 1 { root.scene-store(root.menu-index); }
+                else { root.scene-clear(root.menu-index); }
+                root.menu-index = -1;
+            }
+        }
+    }
+}
+
+// Centered card over a dimmed backdrop. Outside taps are swallowed, not dismissals.
+// The dim is one full-screen blend on open/close; it only covers the static preset list.
+export component DialogCard inherits Rectangle {
+    in property <length> card-width: 440px;
+    callback closed();
+    background: #000000b0;
+    TouchArea {}
+    Rectangle {
+        width: min(root.card-width, root.width - 24px);
+        height: card-content.preferred-height + 36px;
+        background: Surface.background;
+        border-radius: Radius.default;
+        TouchArea {}
+        card-content := VerticalLayout {
+            padding: 18px;
+            spacing: 10px;
+            @children
+        }
+    }
+}
+
+export component DialogButton inherits Rectangle {
+    in property <string> label;
+    in property <color> fill: #2a2a2a;
+    in property <bool> enabled: true;
+    callback tapped();
+    height: 56px;
+    background: root.enabled ? root.fill : #202020;
+    border-radius: Radius.default;
+    Text {
+        text: root.label;
+        color: root.enabled ? #ffffff : #666666;
+        font-size: 19px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    TouchArea { enabled: root.enabled; clicked => { root.tapped(); } }
+}
+
+export component ConfirmDialog inherits DialogCard {
+    in property <string> title;
+    in property <string> message;
+    in property <string> accept-label: "OK";
+    in property <color> accept-fill: #1a3af8;
+    in property <bool> show-cancel: true;
+    callback accepted();
+    Text {
+        text: root.title;
+        color: #e0e0e0;
+        font-size: 22px;
+        font-weight: 700;
+    }
+    Text {
+        text: root.message;
+        color: #c8c8c8;
+        font-size: 17px;
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        if root.show-cancel: DialogButton { label: "Cancel"; fill: #000000; tapped => { root.closed(); } }
+        DialogButton { label: root.accept-label; fill: root.accept-fill; tapped => { root.accepted(); } }
+    }
+}
+
+export component KeyCap inherits Rectangle {
+    in property <string> label;
+    in property <bool> hot: false;
+    in property <length> key-height: 56px;
+    // Held keys repeat like a PC keyboard: one tap, a pause, then a steady stream.
+    in property <bool> repeat: false;
+    property <bool> repeated: false;
+    callback tapped();
+    height: root.key-height;
+    horizontal-stretch: 1;
+    background: touch.pressed ? (root.hot ? #5a78ff : #5c5c5c) : (root.hot ? #1a3af8 : #2a2a2a);
+    border-radius: 8px;
+    Text {
+        text: root.label;
+        color: #ffffff;
+        font-size: 20px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        changed pressed => {
+            if self.pressed { root.repeated = false; }
+        }
+        clicked => {
+            if !root.repeated { root.tapped(); }
+        }
+    }
+    Timer {
+        interval: root.repeated ? 60ms : 400ms;
+        running: root.repeat && touch.pressed;
+        triggered => {
+            root.repeated = true;
+            root.tapped();
+        }
+    }
+}
+
+// Typing goes through `key` ("\u{8}" is backspace) so Rust owns the text and its limits.
+export component NameKeyboard inherits Rectangle {
+    in property <string> title;
+    in property <string> text;
+    in property <string> error;
+    callback key(string);
+    callback accepted();
+    callback closed();
+    property <bool> shift: true;
+    property <bool> cursor-visible: true;
+    Timer {
+        interval: 500ms;
+        running: true;
+        triggered => { root.cursor-visible = !root.cursor-visible; }
+    }
+    changed text => { root.cursor-visible = true; }
+    // Square keys, capped so five rows fit below the header and error line.
+    property <length> key-width: (root.width - 2 * Surface.screen-margin - 54px) / 10;
+    property <length> key-height: min(root.key-width, (root.height - 2 * Surface.screen-margin - 136px) / 5);
+    background: Surface.background;
+    TouchArea {}
+    Rectangle {
+        width: root.width;
+        height: root.height;
+        background: Surface.background;
+        TouchArea {}
+        VerticalLayout {
+            padding: Surface.screen-margin;
+            spacing: 8px;
+            PopupHeader {
+                title: "";
+                closed => { root.closed(); }
+                Rectangle {
+                    x: 54px;
+                    y: 3px;
+                    width: parent.width - 54px;
+                    height: 42px;
+                    background: #101010;
+                    border-radius: Radius.default;
+                    // Long names keep their end visible; the start scrolls off to the left.
+                    Rectangle {
+                        x: 14px;
+                        width: parent.width - 38px;
+                        clip: true;
+                        name-text := Text {
+                            x: min(0px, parent.width - self.preferred-width);
+                            width: self.preferred-width;
+                            text: root.text;
+                            color: #e0e0e0;
+                            font-size: 26px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Text {
+                        x: 14px + min(name-text.preferred-width, parent.width - 38px);
+                        width: 10px;
+                        text: "|";
+                        color: #e0e0e0;
+                        font-size: 26px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                        visible: root.cursor-visible;
+                    }
+                }
+            }
+            Text {
+                height: 22px;
+                text: root.error;
+                color: #ff8a80;
+                font-size: 15px;
+            }
+            // Header stays on top like the other popups; keys sit at the bottom.
+            Rectangle { vertical-stretch: 1; }
+            HorizontalLayout {
+                vertical-stretch: 0;
+                spacing: 6px;
+                for k in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]: KeyCap { label: k; key-height: root.key-height; tapped => { root.key(k); } }
+            }
+            HorizontalLayout {
+                vertical-stretch: 0;
+                spacing: 6px;
+                for k in ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"]: KeyCap {
+                    label: root.shift ? k.to-uppercase() : k;
+                    key-height: root.key-height;
+                    tapped => { root.key(root.shift ? k.to-uppercase() : k); root.shift = false; }
+                }
+            }
+            HorizontalLayout {
+                vertical-stretch: 0;
+                spacing: 6px;
+                Rectangle { horizontal-stretch: 0.5; }
+                for k in ["a", "s", "d", "f", "g", "h", "j", "k", "l"]: KeyCap {
+                    label: root.shift ? k.to-uppercase() : k;
+                    key-height: root.key-height;
+                    tapped => { root.key(root.shift ? k.to-uppercase() : k); root.shift = false; }
+                }
+                Rectangle { horizontal-stretch: 0.5; }
+            }
+            HorizontalLayout {
+                vertical-stretch: 0;
+                spacing: 6px;
+                KeyCap { label: "Aa"; hot: root.shift; key-height: root.key-height; horizontal-stretch: 1.5; tapped => { root.shift = !root.shift; } }
+                for k in ["z", "x", "c", "v", "b", "n", "m"]: KeyCap {
+                    label: root.shift ? k.to-uppercase() : k;
+                    key-height: root.key-height;
+                    tapped => { root.key(root.shift ? k.to-uppercase() : k); root.shift = false; }
+                }
+                KeyCap { label: "<-"; repeat: true; key-height: root.key-height; horizontal-stretch: 1.5; tapped => { root.key("\u{8}"); } }
+            }
+            HorizontalLayout {
+                vertical-stretch: 0;
+                spacing: 6px;
+                KeyCap { label: "-"; key-height: root.key-height; tapped => { root.key("-"); } }
+                KeyCap { label: "_"; key-height: root.key-height; tapped => { root.key("_"); } }
+                KeyCap { label: "Space"; key-height: root.key-height; horizontal-stretch: 4; tapped => { root.key(" "); } }
+                KeyCap { label: "Done"; hot: root.error == ""; key-height: root.key-height; horizontal-stretch: 2; tapped => { if (root.error == "") { root.accepted(); } } }
+            }
+        }
+    }
+}

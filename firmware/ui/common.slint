@@ -1,0 +1,1345 @@
+// The software renderer embeds only fonts it can resolve at build time, so the
+// bold face is bundled explicitly.
+import "fonts/IBMPlexSans-Regular.ttf";
+import "fonts/IBMPlexSans-Bold.ttf";
+
+// One corner radius for every card, button, tab and popup (the former cell radius).
+export global Radius {
+    out property <length> default: 12px;
+}
+
+export global Surface {
+    out property <color> background: #1e1e1e;
+    out property <length> screen-margin: 12px;
+}
+
+export global FxPalette {
+    // Category IDs match NANO_FX_CAT_*; RGB extrema match blue and amp red.
+    public pure function category-color(category: int) -> color {
+        if category == 1 { return #f88a1a; } // Guitar overdrive
+        if category == 2 { return #f8c11a; } // Bass overdrive
+        if category == 3 { return #f8f01a; } // Compressor
+        if category == 4 { return #f01af8; } // Pitch
+        if category == 5 { return #88f81a; } // Filter
+        if category == 6 { return #1af858; } // Wah
+        if category == 7 { return #f81a8a; } // Utility
+        if category == 8 { return #881af8; } // Modulation
+        if category == 9 { return #1ac1f8; } // Delay
+        if category == 10 { return #1a3af8; } // Reverb
+        return #909090;
+    }
+}
+
+export component ParamCell inherits Rectangle {
+    in property <string> name;
+    in property <string> value: "-";
+    in property <float> amount: 0;
+    in property <bool> slider: false;
+    in property <bool> bare: false;
+    in property <bool> value-first: true;
+    in property <length> label-font-size: 17px;
+    callback changed(float);
+    callback tapped();
+    callback double-tapped();
+    height: 100px;
+    min-width: 0px;
+    preferred-width: 0px;
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+    background: root.bare ? transparent : #262626;
+    border-width: 0px;
+    border-radius: Radius.default;
+    VerticalLayout {
+        height: 100%;
+        alignment: center;
+        padding: root.slider ? 8px : 6px;
+        // Text line boxes leave more room under the value than above the label.
+        padding-top: (root.slider ? 8px : 6px) + 2px;
+        spacing: 4px;
+        if root.bare && root.value-first: Text {
+            text: value;
+            color: #ececec;
+            font-size: 24px;
+            font-weight: 700;
+            horizontal-alignment: center;
+        }
+        if !root.bare: Text {
+            text: name;
+            color: #909090;
+            font-size: root.label-font-size;
+            font-weight: 700;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+        HorizontalLayout {
+            padding-left: 4px;
+            padding-right: 4px;
+            Rectangle {
+            height: 18px;
+            background: #1e1e1e;
+            border-color: #707070;
+            border-width: 1px;
+            border-radius: 3px;
+            Rectangle {
+                x: 0px;
+                width: parent.width * amount;
+                height: 100%;
+                background: #b8c0c8;
+                border-radius: 2px;
+            }
+        }
+        }
+        if !root.bare || !root.value-first: Text {
+            text: value;
+            color: #ececec;
+            font-size: 24px;
+            font-weight: 700;
+            horizontal-alignment: center;
+        }
+    }
+    property <bool> armed: false;
+    property <bool> pressed: false;
+    property <length> down-x: 0px;
+    property <length> down-y: 0px;
+    Timer {
+        interval: 200ms;
+        running: root.pressed && !root.armed;
+        triggered => { root.armed = true; }
+    }
+    if root.slider: TouchArea {
+        double-clicked => { root.double-tapped(); }
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.pressed = true;
+                root.armed = false;
+                root.down-x = self.mouse-x;
+                root.down-y = self.mouse-y;
+            }
+            if (event.kind == PointerEventKind.move && root.pressed && !root.armed) {
+                if (abs(self.mouse-x - root.down-x) > 14px && abs(self.mouse-x - root.down-x) > 2 * abs(self.mouse-y - root.down-y)) {
+                    root.armed = true;
+                }
+            }
+            if ((event.kind == PointerEventKind.down || event.kind == PointerEventKind.move) && root.armed) {
+                root.changed(clamp((self.mouse-x - 12px) / max(self.width - 24px, 1px), 0, 1));
+            }
+            if (event.kind == PointerEventKind.up && root.pressed && !root.armed
+                && abs(self.mouse-x - root.down-x) <= 14px
+                && abs(self.mouse-y - root.down-y) <= 14px) {
+                root.changed(clamp((self.mouse-x - 12px) / max(self.width - 24px, 1px), 0, 1));
+            }
+            if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                root.pressed = false;
+                root.armed = false;
+            }
+        }
+    }
+    if !root.slider: TouchArea {
+        clicked => { root.tapped(); }
+    }
+}
+
+export component ChainTab inherits Rectangle {
+    in property <string> label;
+    in property <color> accent;
+    in property <bool> active: false;
+    in property <bool> selected: false;
+    callback tapped();
+    callback held();
+    callback double-tapped();
+    property <bool> pressed: false;
+    property <bool> held-sent: false;
+    property <bool> tap-pending: false;
+    background: active ? accent : #000000;
+    border-width: selected ? 2px : 0px;
+    border-color: #ffffff;
+    border-radius: Radius.default;
+    Text {
+        x: 8px;
+        width: max(0px, root.width - 16px);
+        text: label;
+        overflow: elide;
+        color: active ? (accent == FxPalette.category-color(3) ? #1e1e1e : #ffffff) : accent;
+        font-size: 20px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    Timer {
+        interval: 450ms;
+        running: root.pressed && !root.held-sent;
+        triggered => {
+            root.held-sent = true;
+            root.held();
+        }
+    }
+    Timer {
+        interval: 350ms;
+        running: root.tap-pending;
+        triggered => { root.tap-pending = false; }
+    }
+    TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.pressed = true;
+                root.held-sent = false;
+            }
+            if (event.kind == PointerEventKind.up) {
+                if (!root.held-sent) {
+                    if (root.tap-pending) {
+                        root.tap-pending = false;
+                        root.double-tapped();
+                    } else {
+                        root.tap-pending = true;
+                        root.tapped();
+                    }
+                }
+                root.pressed = false;
+            }
+            if (event.kind == PointerEventKind.cancel) {
+                root.pressed = false;
+            }
+        }
+    }
+}
+
+export component ChainRail inherits Rectangle {
+    in property <bool> horizontal: false;
+    in property <bool> two-rows: false;
+    in property <length> horizontal-spacing: 4px;
+    in property <length> horizontal-inset: 0px;
+    in property <int> page;
+    in property <int> chain;
+    in property <string> tab-0;
+    in property <string> tab-1;
+    in property <string> tab-3;
+    in property <string> tab-4;
+    in property <string> tab-5;
+    in property <int> category-0;
+    in property <int> category-1;
+    in property <int> category-3;
+    in property <int> category-4;
+    in property <int> category-5;
+    in property <bool> on-0;
+    in property <bool> on-1;
+    in property <bool> on-3;
+    in property <bool> on-4;
+    in property <bool> on-5;
+    callback chain-tapped(int);
+    callback chain-held(int);
+    callback chain-double(int);
+    background: transparent;
+
+    if !root.horizontal: VerticalLayout {
+        spacing: 8px;
+        padding-top: 0px;
+        padding-bottom: 4px;
+        ChainTab {
+            label: tab-0;
+            accent: FxPalette.category-color(root.category-0);
+            active: on-0;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 0;
+            vertical-stretch: 1;
+            tapped => { root.chain-tapped(0); }
+            held => { root.chain-held(0); }
+            double-tapped => { root.chain-double(0); }
+        }
+        ChainTab {
+            label: tab-1;
+            accent: FxPalette.category-color(root.category-1);
+            active: on-1;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 1;
+            vertical-stretch: 1;
+            tapped => { root.chain-tapped(1); }
+            held => { root.chain-held(1); }
+            double-tapped => { root.chain-double(1); }
+        }
+        ChainTab {
+            label: "AMP";
+            accent: #f8281a;
+            active: true;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 2;
+            vertical-stretch: 1;
+            tapped => { root.chain-tapped(2); }
+            held => { root.chain-held(2); }
+            double-tapped => { root.chain-double(2); }
+        }
+        ChainTab {
+            label: tab-3;
+            accent: FxPalette.category-color(root.category-3);
+            active: on-3;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 3;
+            vertical-stretch: 1;
+            tapped => { root.chain-tapped(3); }
+            held => { root.chain-held(3); }
+            double-tapped => { root.chain-double(3); }
+        }
+        ChainTab {
+            label: tab-4;
+            accent: FxPalette.category-color(root.category-4);
+            active: on-4;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 4;
+            vertical-stretch: 1;
+            tapped => { root.chain-tapped(4); }
+            held => { root.chain-held(4); }
+            double-tapped => { root.chain-double(4); }
+        }
+        ChainTab {
+            label: tab-5;
+            accent: FxPalette.category-color(root.category-5);
+            active: on-5;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 5;
+            vertical-stretch: 1;
+            tapped => { root.chain-tapped(5); }
+            held => { root.chain-held(5); }
+            double-tapped => { root.chain-double(5); }
+        }
+    }
+
+    if root.horizontal && root.two-rows: VerticalLayout {
+        spacing: 8px;
+        padding-left: root.horizontal-inset;
+        padding-right: root.horizontal-inset;
+        HorizontalLayout {
+            spacing: root.horizontal-spacing;
+            ChainTab {
+                label: tab-0;
+                accent: FxPalette.category-color(root.category-0);
+                active: on-0;
+                selected: (root.page == 0 || root.page == 1) && root.chain == 0;
+                horizontal-stretch: 1;
+                tapped => { root.chain-tapped(0); }
+                held => { root.chain-held(0); }
+                double-tapped => { root.chain-double(0); }
+            }
+            ChainTab {
+                label: tab-1;
+                accent: FxPalette.category-color(root.category-1);
+                active: on-1;
+                selected: (root.page == 0 || root.page == 1) && root.chain == 1;
+                horizontal-stretch: 1;
+                tapped => { root.chain-tapped(1); }
+                held => { root.chain-held(1); }
+                double-tapped => { root.chain-double(1); }
+            }
+            ChainTab {
+                label: "AMP";
+                accent: #f8281a;
+                active: true;
+                selected: (root.page == 0 || root.page == 1) && root.chain == 2;
+                horizontal-stretch: 1;
+                tapped => { root.chain-tapped(2); }
+                held => { root.chain-held(2); }
+                double-tapped => { root.chain-double(2); }
+            }
+        }
+        HorizontalLayout {
+            spacing: root.horizontal-spacing;
+            ChainTab {
+                label: tab-3;
+                accent: FxPalette.category-color(root.category-3);
+                active: on-3;
+                selected: (root.page == 0 || root.page == 1) && root.chain == 3;
+                horizontal-stretch: 1;
+                tapped => { root.chain-tapped(3); }
+                held => { root.chain-held(3); }
+                double-tapped => { root.chain-double(3); }
+            }
+            ChainTab {
+                label: tab-4;
+                accent: FxPalette.category-color(root.category-4);
+                active: on-4;
+                selected: (root.page == 0 || root.page == 1) && root.chain == 4;
+                horizontal-stretch: 1;
+                tapped => { root.chain-tapped(4); }
+                held => { root.chain-held(4); }
+                double-tapped => { root.chain-double(4); }
+            }
+            ChainTab {
+                label: tab-5;
+                accent: FxPalette.category-color(root.category-5);
+                active: on-5;
+                selected: (root.page == 0 || root.page == 1) && root.chain == 5;
+                horizontal-stretch: 1;
+                tapped => { root.chain-tapped(5); }
+                held => { root.chain-held(5); }
+                double-tapped => { root.chain-double(5); }
+            }
+        }
+    }
+
+    if root.horizontal && !root.two-rows: HorizontalLayout {
+        spacing: root.horizontal-spacing;
+        padding-left: root.horizontal-inset;
+        padding-right: root.horizontal-inset;
+        ChainTab {
+            label: tab-0;
+            accent: FxPalette.category-color(root.category-0);
+            active: on-0;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 0;
+            horizontal-stretch: 1;
+            tapped => { root.chain-tapped(0); }
+            held => { root.chain-held(0); }
+            double-tapped => { root.chain-double(0); }
+        }
+        ChainTab {
+            label: tab-1;
+            accent: FxPalette.category-color(root.category-1);
+            active: on-1;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 1;
+            horizontal-stretch: 1;
+            tapped => { root.chain-tapped(1); }
+            held => { root.chain-held(1); }
+            double-tapped => { root.chain-double(1); }
+        }
+        ChainTab {
+            label: "AMP";
+            accent: #f8281a;
+            active: true;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 2;
+            horizontal-stretch: 1;
+            tapped => { root.chain-tapped(2); }
+            held => { root.chain-held(2); }
+            double-tapped => { root.chain-double(2); }
+        }
+        ChainTab {
+            label: tab-3;
+            accent: FxPalette.category-color(root.category-3);
+            active: on-3;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 3;
+            horizontal-stretch: 1;
+            tapped => { root.chain-tapped(3); }
+            held => { root.chain-held(3); }
+            double-tapped => { root.chain-double(3); }
+        }
+        ChainTab {
+            label: tab-4;
+            accent: FxPalette.category-color(root.category-4);
+            active: on-4;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 4;
+            horizontal-stretch: 1;
+            tapped => { root.chain-tapped(4); }
+            held => { root.chain-held(4); }
+            double-tapped => { root.chain-double(4); }
+        }
+        ChainTab {
+            label: tab-5;
+            accent: FxPalette.category-color(root.category-5);
+            active: on-5;
+            selected: (root.page == 0 || root.page == 1) && root.chain == 5;
+            horizontal-stretch: 1;
+            tapped => { root.chain-tapped(5); }
+            held => { root.chain-held(5); }
+            double-tapped => { root.chain-double(5); }
+        }
+    }
+}
+
+export component HeaderButton inherits Rectangle {
+    in property <bool> enabled: true;
+    in property <string> label;
+    in property <TextHorizontalAlignment> text-alignment: center;
+    in property <length> text-size: 16px;
+    in property <bool> hot: false;
+    in property <bool> light: false;
+    in property <bool> choice: false;
+    in property <bool> hold-enabled: false;
+    in property <bool> marked: false;
+    callback tapped();
+    callback held();
+    property <bool> held-sent: false;
+    property <bool> hold-cancelled: false;
+    property <length> down-x;
+    property <length> down-y;
+    preferred-width: btn-text.preferred-width + 36px;
+    min-width: max(72px, self.preferred-width);
+    height: 52px;
+    background: choice ? (hot ? #404040 : transparent) : (light ? #ffffff : (hot ? #1a3af8 : #000000));
+    border-radius: Radius.default;
+    btn-text := Text {
+        visible: !root.marked;
+        width: root.width - (root.marked ? 20px : 0px);
+        text: label;
+        overflow: elide;
+        color: choice ? (hot ? #ffffff : #666666) : (light ? #000000 : (hot ? #ffffff : #e0e0e0));
+        font-size: root.text-size;
+        font-weight: 700;
+        horizontal-alignment: root.text-alignment;
+        vertical-alignment: center;
+    }
+    if root.marked: HorizontalLayout {
+        width: min(max(0px, root.width - 16px), btn-text.preferred-width + root.text-size * 0.75 + 4px);
+        x: 0px;
+        height: root.height;
+        spacing: 4px;
+        Text {
+            text: root.label;
+            min-width: 0px;
+            horizontal-stretch: 1;
+            overflow: elide;
+            color: root.choice ? (root.hot ? #ffffff : #666666) : (root.light ? #000000 : (root.hot ? #ffffff : #e0e0e0));
+            font-size: root.text-size;
+            font-weight: 700;
+            horizontal-alignment: left;
+            vertical-alignment: center;
+        }
+        Text {
+            width: root.text-size * 0.75;
+            text: "*";
+            color: root.choice ? (root.hot ? #ffffff : #666666) : (root.light ? #000000 : (root.hot ? #ffffff : #e0e0e0));
+            font-size: root.text-size;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
+    }
+    Timer {
+        interval: 450ms;
+        running: root.hold-enabled && button-touch.pressed && root.enabled && !root.held-sent && !root.hold-cancelled;
+        triggered => { root.held-sent = true; root.held(); }
+    }
+    button-touch := TouchArea {
+        enabled: root.enabled;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.held-sent = false;
+                root.hold-cancelled = false;
+                root.down-x = self.mouse-x;
+                root.down-y = self.mouse-y;
+            }
+            if event.kind == PointerEventKind.cancel
+                || (event.kind == PointerEventKind.move
+                    && (abs(self.mouse-x - root.down-x) > 14px || abs(self.mouse-y - root.down-y) > 14px)) {
+                root.hold-cancelled = true;
+            }
+        }
+        clicked => {
+            if !root.hold-enabled || (!root.held-sent && !root.hold-cancelled) { root.tapped(); }
+        }
+    }
+}
+
+// Lives inside a vertical Flickable: it cancels the scroll offset so it stays put on screen.
+export component ScrollBar inherits Rectangle {
+    in property <length> offset;
+    in property <length> page;
+    in property <length> total;
+    property <length> thumb-height: max(32px, root.page * root.page / max(1px, root.total));
+    visible: root.total > root.page + 1px;
+    width: 6px;
+    height: root.page;
+    y: root.offset;
+    background: #ffffff18;
+    border-radius: 3px;
+    Rectangle {
+        y: (root.page - root.thumb-height) * root.offset / max(1px, root.total - root.page);
+        height: root.thumb-height;
+        background: #909090;
+        border-radius: 3px;
+    }
+}
+
+// Fades the content at the top and bottom edges when more is scrolled out of view.
+// Lives inside a vertical Flickable, like ScrollBar.
+export component ScrollFade inherits Rectangle {
+    in property <length> offset;
+    in property <length> page;
+    in property <length> total;
+    y: root.offset;
+    height: root.page;
+    background: transparent;
+    Rectangle {
+        y: 0px;
+        height: 28px;
+        visible: root.offset > 1px;
+        background: @linear-gradient(180deg, #1e1e1e 0%, #1e1e1e00 100%);
+    }
+    Rectangle {
+        y: root.page - 28px;
+        height: 28px;
+        visible: root.offset < root.total - root.page - 1px;
+        background: @linear-gradient(180deg, #1e1e1e00 0%, #1e1e1e 100%);
+    }
+}
+
+// One settings line: bold label on the left, controls (@children) on the right.
+export component OptionRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> highlight: false;
+    in property <length> label-width: 0px;
+    in property <length> pad-right: 14px;
+    height: 68px;
+    background: highlight ? #1a3af8 : #262626;
+    border-radius: Radius.default;
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: root.pad-right;
+        spacing: 8px;
+        Text {
+            text: root.label;
+            color: #e0e0e0;
+            font-size: 20px;
+            font-weight: 700;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+            min-width: root.label-width;
+            max-width: root.label-width > 0px ? root.label-width : 100000px;
+        }
+        if root.value != "": Text {
+            text: root.value;
+            color: #ffffffb0;
+            font-size: 16px;
+            font-weight: 700;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            overflow: elide;
+        }
+        if root.value != "": Rectangle { width: 10px; }
+        @children
+    }
+}
+
+export struct MidiRow {
+    index: int,
+    name: string,
+    assigned: string,
+    learning: bool,
+}
+
+export struct ExpressionRangeRow {
+    target: int,
+    name: string,
+    enabled: bool,
+    summary: string,
+    inverted: bool,
+}
+
+export struct ExpressionBypassRow {
+    target: int,
+    name: string,
+    enabled: bool,
+    summary: string,
+    mode: int,
+    inverted: bool,
+    latch: bool,
+}
+
+export struct BtDevice {
+    name: string,
+    kind: string,
+    // 0 nearby, 1 connecting, 2 connected
+    state: int,
+    selected: bool,
+}
+
+// Rune-style Bluetooth mark; the icon color shows connected / connecting / off.
+export component VCenter inherits VerticalLayout {
+    alignment: center;
+}
+
+// Shared popup header: square close button and title on the left, optional
+// children (e.g. tabs) on the right, and a separator drawn over the bottom edge.
+export component PopupHeader inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <length> right-reserved-width: 0px;
+    callback closed();
+    height: 58px;
+    HorizontalLayout {
+        width: root.width;
+        height: root.height;
+        spacing: 12px;
+        padding-right: root.right-reserved-width;
+        // Pinned to the top so its gap to the popup edge equals the side padding.
+        VerticalLayout {
+            width: 42px;
+            padding-top: 3px;
+            alignment: start;
+            Rectangle {
+                width: 42px;
+                height: 42px;
+                background: #2a2a2a;
+                border-radius: Radius.default;
+                Image {
+                    width: 26px;
+                    height: 26px;
+                    source: @image-url("icons/close.png");
+                    colorize: #e0e0e0;
+                }
+                TouchArea { clicked => { root.closed(); } }
+            }
+        }
+        // Title and optional subtitle share the close button's 48px band.
+        VerticalLayout {
+            width: max(0px, root.width - root.right-reserved-width - 54px);
+            horizontal-stretch: 1;
+            alignment: start;
+            title-text := Text {
+                width: parent.width;
+                height: root.subtitle == "" ? 48px : 36px;
+                text: root.title;
+                overflow: elide;
+                color: #e0e0e0;
+                font-size: 26px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+            if root.subtitle != "": Text {
+                width: parent.width;
+                height: 18px;
+                text: root.subtitle;
+                color: #909090;
+                font-size: 14px;
+                font-weight: 700;
+                overflow: elide;
+            }
+        }
+    }
+    // z keeps the separator above the tabs and their underline.
+    Rectangle {
+        z: 100;
+        y: parent.height - 2px;
+        height: 2px;
+        background: #3a3a3a;
+    }
+        // Children are parented to the header itself, so they place themselves with these.
+    out property <length> tabs-x: 42px + 12px + title-text.preferred-width + 16px;
+    out property <length> tabs-width: max(0px, root.width - self.tabs-x);
+    @children
+}
+
+// Shared tab for every popup. The 2px gap is part of the tab so empty loop items add no spacing.
+export component PopupTab inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    in property <bool> shown: true;
+    callback tapped();
+    preferred-width: shown ? tab-text.preferred-width + 26px : 0px;
+    min-width: self.preferred-width;
+    max-width: self.preferred-width;
+    horizontal-stretch: 0;
+    visible: shown;
+    Rectangle {
+        width: parent.width - 2px;
+        background: root.active ? #454545 : #151515;
+        border-top-left-radius: Radius.default;
+        border-top-right-radius: Radius.default;
+        tab-text := Text {
+            text: root.label;
+            color: root.active ? #ffffff : #909090;
+            font-size: 18px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        Rectangle {
+            y: parent.height - 6px;
+            height: 6px;
+            background: root.active ? #1a3af8 : transparent;
+        }
+        if root.shown: TouchArea { clicked => { root.tapped(); } }
+    }
+}
+
+export component BluetoothList inherits VerticalLayout {
+    in property <[BtDevice]> devices;
+    callback picked(int);
+    callback forget(int);
+    callback choose-another();
+    spacing: 8px;
+    HeaderButton {
+        width: parent.width;
+        label: "Choose another Nano";
+        tapped => { root.choose-another(); }
+    }
+    if root.devices.length == 0: Text {
+        // No word-wrap: wrapped height would loop with the Settings scroll width.
+        text: "Searching for Nano Cortex or FootCtrl / Chocolate...";
+        color: #909090;
+        font-size: 17px;
+        overflow: elide;
+    }
+    for device[index] in root.devices: Rectangle {
+        height: 68px;
+        TouchArea { clicked => { root.picked(index); } }
+        OptionRow {
+            width: parent.width;
+            label: device.name;
+            value: device.state == 2 ? "Connected"
+                : device.state == 1 ? "Connecting"
+                : device.selected ? "Selected Nano" : device.kind;
+            highlight: device.state == 2;
+            // Matches the 8px above and below the 52px button.
+            pad-right: 8px;
+            VCenter {
+                Rectangle {
+                    width: 52px;
+                    height: 52px;
+                    background: #000000;
+                    border-radius: Radius.default;
+                    Image {
+                        width: 22px;
+                        height: 22px;
+                        source: device.state == 2 ? @image-url("icons/unlink.png") : (device.state == 1 ? @image-url("icons/refresh.png") : @image-url("icons/link.png"));
+                        colorize: #e0e0e0;
+                        rotation-angle: device.state == 1 ? mod(animation-tick() / 900ms, 1) * 360deg : 0deg;
+                    }
+                    TouchArea { clicked => { if (device.state > 0) { root.forget(index); } else { root.picked(index); } } }
+                }
+            }
+        }
+    }
+}
+
+export struct ModelItem {
+    name: string,
+    header: bool,
+    index: int,
+    col: int,
+    y: float,
+    // Tab the entry belongs to; a header's `height` is its tab's content height.
+    section: int,
+    height: float,
+}
+
+export component ModelPicker inherits Rectangle {
+    in property <string> title;
+    in property <[ModelItem]> items;
+    // Just the header entries of `items`; tabs and scroll areas repeat over these only.
+    in property <[ModelItem]> tabs;
+    in property <int> columns: 3;
+    in property <float> content-height: 0;
+    in property <int> current;
+    in property <int> initial-section: 0;
+    property <int> tab: 0;
+    init => { root.tab = root.initial-section; }
+    in property <bool> show-preset-actions: false;
+    in property <bool> show-preset-numbers: false;
+    in property <bool> two-line-names: false;
+    // Preset lists wrap names to three lines, so their cards are taller.
+    in property <bool> three-line-names: false;
+    property <length> card-height: root.three-line-names ? 94px : 68px;
+    property <length> name-height: root.three-line-names ? 78px : 52px;
+    callback picked(int);
+    callback preset-action-chosen(int, int);
+    callback closed();
+    property <length> gap: 8px;
+    property <length> action-width: 64px;
+    in-out property <int> menu-index: -1;
+    property <length> menu-x: 0px;
+    property <length> menu-y: 0px;
+    background: Surface.background;
+    TouchArea {}
+    Rectangle {
+        width: root.width;
+        height: root.height;
+        background: Surface.background;
+        TouchArea {}
+        VerticalLayout {
+            padding: Surface.screen-margin;
+            spacing: 8px;
+            // Tabs sit on the right; a list whose first header is empty (presets) has none.
+            PopupHeader {
+                title: root.title;
+                closed => { root.closed(); }
+                tab-flick := Flickable {
+                    x: parent.tabs-x;
+                    width: parent.tabs-width;
+                    height: parent.height;
+                    viewport-width: max(self.width, tab-row.preferred-width);
+                    tab-row := HorizontalLayout {
+                        x: 0px;
+                        height: parent.height;
+                        width: max(tab-flick.width, self.preferred-width);
+                        alignment: end;
+                        spacing: 0px;
+                        for hdr in root.tabs: PopupTab {
+                            label: hdr.header ? hdr.name : "";
+                            shown: hdr.header && root.items[0].name != "";
+                            active: hdr.section == root.tab;
+                            tapped => { root.tab = hdr.section; }
+                        }
+                    }
+                }
+                Rectangle {
+                    x: parent.tabs-x;
+                    width: 28px;
+                    height: parent.height - 4px;
+                    visible: tab-flick.viewport-x < -1px;
+                    background: @linear-gradient(90deg, #1e1e1e 0%, #1e1e1e00 100%);
+                }
+                Rectangle {
+                    x: parent.tabs-x + parent.tabs-width - 28px;
+                    width: 28px;
+                    height: parent.height - 4px;
+                    visible: tab-flick.viewport-x + tab-flick.width < tab-flick.viewport-width - 1px;
+                    background: @linear-gradient(90deg, #1e1e1e00 0%, #1e1e1e 100%);
+                }
+            }
+            Rectangle { height: 2px; }
+            Rectangle {
+                vertical-stretch: 1;
+                // One scroll area per tab so each keeps its own content height.
+                for hdr in root.tabs: Rectangle {
+                    if hdr.header && hdr.section == root.tab: tab-list := Flickable {
+                        width: parent.width;
+                        height: parent.height;
+                        viewport-height: hdr.height * 1px;
+                        for item in root.items: card := Rectangle {
+                            property <length> cell: (parent.width - (tab-list.viewport-height > tab-list.height ? 16px : 0px) - (root.columns - 1) * root.gap) / root.columns;
+                            x: item.col * (cell + root.gap);
+                            y: item.y * 1px;
+                            width: cell;
+                            height: root.card-height;
+                            // Only the open tab builds card content; hidden cards stay bare shells.
+                            if !item.header && item.section == hdr.section: Rectangle {
+                                background: item.index == root.current ? #1a3af8 : #2a2a2a;
+                                border-radius: Radius.default;
+                                TouchArea {
+                                    width: parent.width - (root.show-preset-actions && item.name != "" ? root.action-width : 0px);
+                                    enabled: !item.header;
+                                    clicked => { root.picked(item.index); }
+                                }
+                                Text {
+                                    x: root.show-preset-numbers ? 48px : 12px;
+                                    y: root.two-line-names ? 8px : 0px;
+                                    height: root.two-line-names ? root.name-height : parent.height;
+                                    width: parent.width - (root.show-preset-actions ? root.action-width + 60px : (root.show-preset-numbers ? 60px : 24px));
+                                    text: item.header ? "" : item.name;
+                                    color: item.index == root.current ? #ffffff : #ececec;
+                                    font-size: 19px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    wrap: root.two-line-names ? word-wrap : no-wrap;
+                                }
+                                if root.show-preset-numbers && !item.header: Text {
+                                    x: 10px;
+                                    width: 32px;
+                                    text: item.index < 10 ? "0" + item.index : "" + item.index;
+                                    color: #ffffff70;
+                                    font-size: 19px;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                if root.show-preset-actions && item.name != "": Rectangle {
+                                    x: parent.width - root.action-width;
+                                    width: root.action-width;
+                                    height: parent.height;
+                                    background: #00000000;
+                                    VerticalLayout {
+                                        x: parent.width - 34px;
+                                        width: 28px;
+                                        height: parent.height;
+                                        alignment: center;
+                                        spacing: 4px;
+                                        for dot in 3: Rectangle {
+                                            width: 5px;
+                                            height: 5px;
+                                            background: #e0e0e0;
+                                            border-radius: 3px;
+                                        }
+                                    }
+                                    TouchArea {
+                                        clicked => {
+                                            root.menu-index = item.index;
+                                            root.menu-x = max(8px, min(root.width - 228px, Surface.screen-margin + item.col * (card.cell + root.gap) + card.cell - 42px));
+                                            root.menu-y = max(8px, min(root.height - 248px, 90px + item.y * 1px - tab-list.viewport-y));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        ScrollFade {
+                            width: tab-list.width;
+                            offset: -tab-list.viewport-y;
+                            page: tab-list.height;
+                            total: tab-list.viewport-height;
+                        }
+                        ScrollBar {
+                            x: tab-list.width - 6px;
+                            offset: -tab-list.viewport-y;
+                            page: tab-list.height;
+                            total: tab-list.viewport-height;
+                        }
+                    }
+                }
+                // Lists without tabs scroll as one block.
+                if root.items.length > 0 && root.items[0].name == "": plain-list := Flickable {
+                    width: parent.width;
+                    height: parent.height;
+                    viewport-height: root.content-height * 1px;
+                    for item in root.items: Rectangle {
+                        property <length> cell: (parent.width - (plain-list.viewport-height > plain-list.height ? 16px : 0px) - (root.columns - 1) * root.gap) / root.columns;
+                        x: item.col * (cell + root.gap);
+                        y: item.y * 1px;
+                        width: cell;
+                        height: root.card-height;
+                        visible: !item.header;
+                        background: item.index == root.current ? #1a3af8 : #2a2a2a;
+                        border-radius: Radius.default;
+                        TouchArea {
+                            width: parent.width - (root.show-preset-actions && item.name != "" ? root.action-width : 0px);
+                            enabled: !item.header;
+                            clicked => { root.picked(item.index); }
+                        }
+                        Text {
+                            x: root.show-preset-numbers ? 48px : 12px;
+                            y: root.two-line-names ? 8px : 0px;
+                            height: root.two-line-names ? root.name-height : parent.height;
+                            width: parent.width - (root.show-preset-actions ? root.action-width + 60px : (root.show-preset-numbers ? 60px : 24px));
+                            text: item.header ? "" : item.name;
+                            color: item.index == root.current ? #ffffff : #ececec;
+                            font-size: 19px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            wrap: root.two-line-names ? word-wrap : no-wrap;
+                        }
+                        if root.show-preset-numbers && !item.header: Text {
+                            x: 10px;
+                            width: 32px;
+                            text: item.index < 10 ? "0" + item.index : "" + item.index;
+                            color: #ffffff70;
+                            font-size: 19px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        if root.show-preset-actions && item.name != "": Rectangle {
+                            x: parent.width - root.action-width;
+                            width: root.action-width;
+                            height: parent.height;
+                            background: #00000000;
+                            VerticalLayout {
+                                x: parent.width - 34px;
+                                width: 28px;
+                                height: parent.height;
+                                alignment: center;
+                                spacing: 4px;
+                                for dot in 3: Rectangle {
+                                    width: 5px;
+                                    height: 5px;
+                                    background: #e0e0e0;
+                                    border-radius: 3px;
+                                }
+                            }
+                            TouchArea {
+                                clicked => {
+                                    root.menu-index = item.index;
+                                    root.menu-x = max(8px, min(root.width - 228px, Surface.screen-margin + item.col * (cell + root.gap) + cell - 42px));
+                                    root.menu-y = max(8px, min(root.height - 248px, 90px + item.y * 1px - plain-list.viewport-y));
+                                }
+                            }
+                        }
+                    }
+                    ScrollFade {
+                        width: plain-list.width;
+                        offset: -plain-list.viewport-y;
+                        page: plain-list.height;
+                        total: plain-list.viewport-height;
+                    }
+                    ScrollBar {
+                        x: plain-list.width - 6px;
+                        offset: -plain-list.viewport-y;
+                        page: plain-list.height;
+                        total: plain-list.viewport-height;
+                    }
+                }
+            }
+        }
+        if root.menu-index >= 0: Rectangle {
+            x: root.menu-x;
+            y: root.menu-y;
+            z: 1000;
+            width: 220px;
+            height: 240px;
+            background: #303030;
+            border-radius: Radius.default;
+            for action in 4: Rectangle {
+                x: 4px;
+                y: action * 59px;
+                width: parent.width - 8px;
+                height: 58px;
+                background: #00000000;
+                Text {
+                    x: 12px;
+                    text: action == 0 ? "Rename" : action == 1 ? "Move to..." : action == 2 ? "Copy to..." : "Delete";
+                    color: #f0f0f0;
+                    font-size: 18px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                if action == 2: Rectangle {
+                    x: 8px;
+                    y: parent.height - 1px;
+                    width: parent.width - 16px;
+                    height: 1px;
+                    background: #ffffff30;
+                }
+                TouchArea {
+                    clicked => {
+                        root.preset-action-chosen(root.menu-index, action);
+                        root.menu-index = -1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component MenuButton inherits Rectangle {
+    callback tapped();
+    width: 36px;
+    height: 36px;
+    background: transparent;
+    border-radius: Radius.default;
+    VerticalLayout {
+        x: root.width - 13px;
+        width: 5px;
+        alignment: center;
+        spacing: 4px;
+        for dot in 3: Rectangle {
+            width: 5px;
+            height: 5px;
+            background: #e0e0e0;
+            border-radius: 3px;
+        }
+    }
+    TouchArea { clicked => { root.tapped(); } }
+}
+
+export component TempoReadout inherits Rectangle {
+    in property <string> bpm-text;
+    in property <int> bpm-value: 0;
+    in property <bool> tempo-global: true;
+    in property <bool> animate-beat: true;
+    in property <bool> stacked: false;
+    in property <length> text-size: 21px;
+    in property <bool> right-aligned: false;
+    property <bool> beat-on: false;
+    callback tapped();
+    background: transparent;
+    Timer {
+        interval: root.bpm-value > 0 ? 60000ms / root.bpm-value : 1000ms;
+        running: root.animate-beat && root.bpm-value > 0;
+        triggered => { root.beat-on = true; fade.running = true; }
+    }
+    fade := Timer {
+        interval: 160ms;
+        running: false;
+        triggered => { root.beat-on = false; self.running = false; }
+    }
+    TouchArea {
+        clicked => { root.tapped(); }
+        HorizontalLayout {
+            alignment: root.right-aligned ? end : start;
+            spacing: 6px;
+            VCenter { Rectangle {
+                width: 20px;
+                height: 20px;
+                property <color> tint: #ffffff;
+                opacity: root.beat-on || root.bpm-value == 0 || !root.animate-beat ? 1 : 0.2;
+                if root.tempo-global: Rectangle {
+                    border-width: 2.5px;
+                    border-color: parent.tint;
+                    border-radius: 10px;
+                }
+                if root.tempo-global: Rectangle {
+                    x: 6px; width: 8px;
+                    border-width: 2px;
+                    border-color: parent.tint;
+                    border-radius: 4px;
+                }
+                if root.tempo-global: Rectangle {
+                    y: 8.75px; height: 2.5px;
+                    background: parent.tint;
+                }
+                if !root.tempo-global: Rectangle {
+                    x: 4px; y: 4px; width: 12px; height: 12px;
+                    background: parent.tint;
+                    border-radius: 6px;
+                }
+            } }
+            if !root.stacked: Text {
+                text: root.bpm-text;
+                color: #ffffff;
+                font-size: root.text-size;
+                font-weight: 800;
+                vertical-alignment: center;
+            }
+            if root.stacked: VerticalLayout {
+                spacing: 0px;
+                alignment: center;
+                Text {
+                    text: root.bpm-value > 0 ? "" + root.bpm-value : "-";
+                    color: #ffffff;
+                    font-size: root.text-size;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "BPM";
+                    color: #ffffff;
+                    font-size: 12px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+export component HeaderBar inherits Rectangle {
+    in property <string> scene-label: "Scene";
+    in property <bool> scene-enabled: true;
+    in property <bool> portrait;
+    in property <int> page;
+    in property <string> preset;
+    in property <bool> model-enabled;
+    in property <string> bpm-text;
+    in property <bool> save-dirty: false;
+    in property <bool> tempo-active: false;
+    in property <bool> tempo-global: true;
+    in property <int> bpm-value: 0;
+    in property <bool> animate-beat: true;
+    callback tempo-tapped();
+    callback preset-list-tapped();
+    callback settings-tapped();
+    callback scene-library-tapped();
+    callback scene-held();
+    background: transparent;
+    if root.portrait: Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        Rectangle {
+            x: 2px;
+            y: 0px;
+            width: max(0px, parent.width - 132px);
+            height: parent.height;
+            HeaderButton {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: 28px;
+                min-width: 0px;
+                preferred-width: 0px;
+                background: transparent;
+                label: root.preset;
+                text-size: 24px;
+                text-alignment: left;
+                marked: root.save-dirty;
+                tapped => { root.preset-list-tapped(); }
+            }
+            HeaderButton {
+                x: 0px;
+                y: 28px;
+                width: parent.width;
+                height: 20px;
+                min-width: 0px;
+                preferred-width: 0px;
+                background: transparent;
+                label: root.scene-label;
+                text-size: 15px;
+                text-alignment: left;
+                enabled: root.scene-enabled;
+                hold-enabled: true;
+                held => { root.scene-held(); }
+                tapped => { root.scene-library-tapped(); }
+            }
+        }
+        TempoReadout {
+            x: parent.width - 122px;
+            y: 2px;
+            width: 78px;
+            height: 44px;
+            bpm-text: root.bpm-text;
+            bpm-value: root.bpm-value;
+            tempo-global: root.tempo-global;
+            animate-beat: root.animate-beat;
+            text-size: 18px;
+            right-aligned: true;
+            stacked: true;
+            tapped => { root.tempo-tapped(); }
+        }
+        MenuButton {
+            x: parent.width - self.width;
+            y: 6px;
+            tapped => { root.settings-tapped(); }
+        }
+    }
+    if !root.portrait: HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 0px;
+        spacing: 8px;
+        // Reserve enough room for the Scene button and menu in both orientations.
+        VCenter {
+            width: portrait ? 174px : 254px;
+            TempoReadout {
+                height: 44px;
+                bpm-text: root.bpm-text;
+                bpm-value: root.bpm-value;
+                tempo-global: root.tempo-global;
+                animate-beat: root.animate-beat;
+                text-size: root.portrait ? 18px : 21px;
+                tapped => { root.tempo-tapped(); }
+            }
+        }
+        VCenter { min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; TouchArea {
+            height: 44px;
+            clicked => { root.preset-list-tapped(); }
+            HorizontalLayout {
+                x: (parent.width - self.width) / 2;
+                y: -2px;
+                width: min(parent.width, preset-name.preferred-width + (root.save-dirty ? 18px : 0px));
+                height: parent.height;
+                spacing: 0px;
+                preset-name := Text {
+                    min-width: 0px;
+                    horizontal-stretch: 1;
+                    text: preset;
+                    color: model-enabled ? #ececec : #606060;
+                    font-size: 26px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                if root.save-dirty: Text {
+                    width: 18px;
+                    text: "*";
+                    color: model-enabled ? #ececec : #606060;
+                    font-size: 26px;
+                    font-weight: 700;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+            }
+        } }
+        HorizontalLayout {
+            alignment: end;
+            spacing: portrait ? 8px : 14px;
+            width: portrait ? 154px : 214px;
+            VCenter { HeaderButton {
+                background: transparent;
+                label: root.scene-label;
+                text-alignment: right;
+                text-size: root.portrait ? 18px : 21px;
+                min-width: 110px;
+                preferred-width: 110px;
+                enabled: root.scene-enabled;
+                height: 44px;
+                hold-enabled: true;
+                held => { root.scene-held(); }
+                tapped => { root.scene-library-tapped(); }
+            } }
+            VCenter { MenuButton {
+                tapped => { root.settings-tapped(); }
+            } }
+        }
+    }
+}
