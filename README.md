@@ -274,8 +274,7 @@ General settings errors appear as a bottom toast overlay, dismissed after six
 seconds or by tapping it, rather than taking up space in Settings or Gig view.
 Routine recall/save confirmations are not displayed there.
 Gig scene titles reserve room for three lines beneath a smaller scene number,
-breaking long words when necessary instead of using ellipses. Text scales down
-on shorter buttons.
+wrapping between words without splitting them. Text scales down on shorter buttons.
 Older scenes remain loadable but must be re-saved to include capture/CAB selections;
 missing selection fields leave the current selections unchanged.
 Bypassed sources have no saved slot selection and retain this same behavior.
