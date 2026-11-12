@@ -266,40 +266,47 @@ export component GigPanel inherits Rectangle {
             tempo => { root.tempo(); }
             preset-tapped => { root.preset-tapped(); }
         }
-        scene-grid := Rectangle {
-            min-height: 160px;
-            vertical-stretch: 1;
-            background: transparent;
-            for label[index] in root.scenes: GigButton {
-                width: root.portrait ? (scene-grid.width - 8px) / 2 : (scene-grid.width - 16px) / 3;
-                height: (scene-grid.height - (ceil(root.scenes.length / (root.portrait ? 2 : 3)) - 1) * 8px) / max(1, ceil(root.scenes.length / (root.portrait ? 2 : 3)));
-                x: mod(index, root.portrait ? 2 : 3) * (self.width + 8px);
-                y: floor(index / (root.portrait ? 2 : 3)) * (self.height + 8px);
-                label: label;
-                number: index + 1;
-                highlight: root.scene == index;
-                enabled: root.connected && root.scene-assigned[index];
-                tapped => { root.scene-recall(index); }
-            }
-        }
         HorizontalLayout {
-            height: 100px;
+            vertical-stretch: 1;
             spacing: 8px;
-            for label[index] in ["Bass trim", "Mid trim", "Treble trim"]: ParamCell {
-                property <float> saved-amount: root.eq-trim-amounts[index];
-                property <float> draft: self.saved-amount;
-                changed saved-amount => { self.draft = self.saved-amount; }
-                property <int> tenths: round(self.draft * 200 - 100);
-                slider: root.eq-trim-enabled;
-                name: label;
-                value: (self.tenths >= 0 ? "+" : "") + self.tenths / 10;
-                amount: self.draft;
-                changed(v) => { self.draft = v; }
-                editing-finished => {
-                    root.eq-trim-adjusted(index, self.tenths);
-                    self.draft = self.saved-amount;
+            scene-grid := Rectangle {
+                min-height: 160px;
+                min-width: 0px;
+                horizontal-stretch: 1;
+                background: transparent;
+                for label[index] in root.scenes: GigButton {
+                    width: root.portrait ? (scene-grid.width - 8px) / 2 : (scene-grid.width - 16px) / 3;
+                    height: (scene-grid.height - (ceil(root.scenes.length / (root.portrait ? 2 : 3)) - 1) * 8px) / max(1, ceil(root.scenes.length / (root.portrait ? 2 : 3)));
+                    x: mod(index, root.portrait ? 2 : 3) * (self.width + 8px);
+                    y: floor(index / (root.portrait ? 2 : 3)) * (self.height + 8px);
+                    label: label;
+                    number: index + 1;
+                    highlight: root.scene == index;
+                    enabled: root.connected && root.scene-assigned[index];
+                    tapped => { root.scene-recall(index); }
                 }
-                double-tapped => { root.eq-trim-adjusted(index, 0); }
+            }
+            VerticalLayout {
+                width: root.portrait ? 120px : 180px;
+                spacing: 8px;
+                for label[index] in ["Bass trim", "Mid trim", "Treble trim"]: ParamCell {
+                    height: 100px;
+                    vertical-stretch: 1;
+                    property <float> saved-amount: root.eq-trim-amounts[index];
+                    property <float> draft: self.saved-amount;
+                    changed saved-amount => { self.draft = self.saved-amount; }
+                    property <int> tenths: round(self.draft * 200 - 100);
+                    slider: root.eq-trim-enabled;
+                    name: label;
+                    value: (self.tenths >= 0 ? "+" : "") + self.tenths / 10;
+                    amount: self.draft;
+                    changed(v) => { self.draft = v; }
+                    editing-finished => {
+                        root.eq-trim-adjusted(index, self.tenths);
+                        self.draft = self.saved-amount;
+                    }
+                    double-tapped => { root.eq-trim-adjusted(index, 0); }
+                }
             }
         }
         ChainRail {
