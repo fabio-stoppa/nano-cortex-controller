@@ -12,8 +12,6 @@ pub struct Config {
     pub format: String,
     pub version: u8,
     #[serde(default)]
-    pub keep_master_eq: bool,
-    #[serde(default)]
     pub preset_scenes: Vec<PresetScenes>,
 }
 
@@ -21,6 +19,9 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct PresetScenes {
     pub preset: u8,
+    // Offsets are in tenths of the amp's displayed 0-10 knob range.
+    #[serde(default)]
+    pub eq_trim: [i16; 3],
     pub scenes: [Option<Scene>; SCENES],
 }
 
@@ -29,8 +30,8 @@ pub struct PresetScenes {
 struct StoredConfig {
     format: String,
     version: u8,
-    #[serde(default)]
-    keep_master_eq: bool,
+    #[serde(default, rename = "keep_master_eq")]
+    _keep_master_eq: bool,
     #[serde(default)]
     preset_scenes: Vec<StoredPresetScenes>,
 }
@@ -39,7 +40,44 @@ struct StoredConfig {
 #[serde(deny_unknown_fields)]
 struct StoredPresetScenes {
     preset: u8,
+    #[serde(default)]
+    eq_trim: [i16; 3],
     scenes: Vec<Option<Scene>>,
+}
+
+fn trim_delta(trim: i16) -> i32 {
+    let scaled = i32::from(trim) * 255;
+    (scaled + scaled.signum() * 50) / 100
+}
+
+pub fn trim_eq(base: [u8; 3], trim: [i16; 3]) -> [u8; 3] {
+    core::array::from_fn(|index| {
+        let delta = trim_delta(trim[index]);
+        (i32::from(base[index]) + delta).clamp(0, 255) as u8
+    })
+}
+
+pub fn untrim_eq(live: [u8; 3], base: [u8; 3], trim: [i16; 3]) -> [u8; 3] {
+    let applied = trim_eq(base, trim);
+    core::array::from_fn(|index| {
+        if live[index] == applied[index] {
+            // Subtracting from a clipped value would destroy the original scene EQ.
+            base[index]
+        } else {
+            let delta = trim_delta(trim[index]);
+            (i32::from(live[index]) - delta).clamp(0, 255) as u8
+        }
+    })
+}
+
+impl Snapshot {
+    pub fn eq(&self) -> [u8; 3] {
+        [self.amp[2], self.amp[3], self.amp[4]]
+    }
+
+    pub fn set_eq(&mut self, eq: [u8; 3]) {
+        self.amp[2..5].copy_from_slice(&eq);
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -168,7 +206,6 @@ impl Default for Config {
         Self {
             format: String::from("nano-scenes"),
             version: 4,
-            keep_master_eq: false,
             preset_scenes: Vec::new(),
         }
     }
@@ -203,6 +240,13 @@ impl Config {
             return Err("At most 64 preset scene collections are supported");
         }
         for (index, collection) in self.preset_scenes.iter().enumerate() {
+            if collection
+                .eq_trim
+                .iter()
+                .any(|trim| !(-100..=100).contains(trim))
+            {
+                return Err("Preset EQ trims must be within -10 to +10");
+            }
             if !(1..=64).contains(&collection.preset)
                 || self.preset_scenes[..index]
                     .iter()
@@ -251,6 +295,7 @@ impl Config {
             collection.scenes.truncate(SCENES);
             preset_scenes.push(PresetScenes {
                 preset: collection.preset,
+                eq_trim: collection.eq_trim,
                 scenes: collection
                     .scenes
                     .try_into()
@@ -260,7 +305,6 @@ impl Config {
         let config = Self {
             format: stored.format,
             version: 4,
-            keep_master_eq: stored.keep_master_eq,
             preset_scenes,
         };
         config.validate()?;
@@ -280,6 +324,44 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eq_trims_are_symmetric_clamped_and_do_not_accumulate() {
+        let base = [102, 153, 230];
+        let trim = [-10, 10, 20];
+        let applied = trim_eq(base, trim);
+        assert_eq!(applied, [76, 179, 255]);
+        assert_eq!(untrim_eq(applied, base, trim), base);
+        for _ in 0..20 {
+            assert_eq!(trim_eq(untrim_eq(applied, base, trim), trim), applied);
+        }
+        assert_eq!(untrim_eq([90, 179, 255], base, trim), [116, 153, 230]);
+        assert_eq!(trim_eq(base, [-100; 3]), [0; 3]);
+        assert_eq!(trim_eq(base, [100; 3]), [255; 3]);
+        assert_eq!(trim_eq(base, [0; 3]), base);
+    }
+
+    #[test]
+    fn eq_trims_default_for_old_backups_and_round_trip_per_preset() {
+        let old = r#"{"format":"nano-scenes","version":4,"keep_master_eq":true,"preset_scenes":[{"preset":1,"scenes":[null,null,null,null,null,null]}]}"#;
+        let mut config = Config::decode(old).unwrap();
+        assert_eq!(config.preset_scenes[0].eq_trim, [0; 3]);
+        config.preset_scenes[0].eq_trim = [-10, 20, -100];
+        config.preset_scenes.push(PresetScenes {
+            preset: 2,
+            eq_trim: [30, 0, 100],
+            scenes: Default::default(),
+        });
+        let decoded = Config::decode(&config.encode().unwrap()).unwrap();
+        assert_eq!(decoded.preset_scenes[0].eq_trim, [-10, 20, -100]);
+        assert_eq!(decoded.preset_scenes[1].eq_trim, [30, 0, 100]);
+        config.preset_scenes[0].eq_trim[0] = 101;
+        assert!(config.encode().is_err());
+        assert!(
+            Config::decode(&old.replace("\"scenes\":", "\"eq_trim\":[-101,0,0],\"scenes\":"))
+                .is_err()
+        );
+    }
 
     #[test]
     fn nanos_230_effects_validate_and_survive_scene_backup() {
@@ -408,6 +490,7 @@ mod tests {
         for preset in 1..=64 {
             config.preset_scenes.push(PresetScenes {
                 preset,
+                eq_trim: [0; 3],
                 scenes: core::array::from_fn(|index| {
                     Some(Scene {
                         name: alloc::format!("Scene name {:02}", index),

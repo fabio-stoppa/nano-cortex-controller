@@ -303,8 +303,10 @@ export component Preview inherits AppWindow {
     tuner-tapped => { root.page = root.page == 2 ? (root.chain == 2 ? 0 : 1) : 2; }
     tempo-tapped => { root.tap-mode = !root.tap-mode; }
     tools-opened => { root.popup = root.tools-section == 2 ? "midi" : root.tools-section == 1 ? "pedals" : "settings"; }
-    keep-master-eq-toggled(enabled) => {
-        root.keep-master-eq-enabled = enabled;
+    eq-trim-enabled: true;
+    eq-trim-preset: 1;
+    eq-trim-adjusted(index, delta) => {
+        root.autosave-status = "Preview only - EQ trims are not sent to the Nano.";
     }
     autosave-toggled(enabled) => {
         root.autosave-enabled = enabled;

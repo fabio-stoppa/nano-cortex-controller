@@ -408,6 +408,138 @@ mod tests {
     }
 
     #[test]
+    fn preset_eq_trims_preserve_scene_bases_live_edits_and_master_level() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        *settings::SCENE_RECORD.lock().unwrap() = None;
+        scenes::load();
+        state::AMP.with(|amp| {
+            let mut amp = amp.borrow_mut();
+            amp.valid = true;
+            amp.have_capture_slot = true;
+            amp.capture_slot = 1;
+            amp.bass = 102;
+            amp.mid = 153;
+            amp.treble = 230;
+        });
+        fx::SNAPSHOT.with(|snapshot| {
+            let mut view = snapshot.borrow_mut();
+            *view = types::NanoFxState::reset_with_ids();
+            view.valid = true;
+            view.gate.on_known = true;
+            for block in &mut view.blocks {
+                block.valid = true;
+            }
+        });
+        fn finish_recall() {
+            for _ in 0..100 {
+                match scenes::poll() {
+                    Some(link::Cmd::AmpKnob { knob, raw }) => {
+                        assert_ne!(knob, 1, "Scene recall must not write Master Level");
+                        state::AMP.with(|amp| {
+                            let mut amp = amp.borrow_mut();
+                            match knob {
+                                0 => amp.gain = raw,
+                                2 => amp.bass = raw,
+                                3 => amp.mid = raw,
+                                4 => amp.treble = raw,
+                                _ => panic!("Unexpected amp knob"),
+                            }
+                        });
+                    }
+                    Some(link::Cmd::CaptureAt(slot)) => {
+                        state::AMP.with(|amp| amp.borrow_mut().capture_slot = slot);
+                        state::GENERATION.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Some(link::Cmd::CaptureVolume(raw)) => {
+                        state::AMP.with(|amp| amp.borrow_mut().capture_volume = raw);
+                    }
+                    Some(link::Cmd::SceneRefresh | link::Cmd::SceneFxRefresh) => {
+                        state::GENERATION.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Some(_) => panic!("Unexpected scene command"),
+                    None => {}
+                }
+                if !scenes::busy() {
+                    assert_eq!(scenes::notice(), "Recall verified");
+                    return;
+                }
+            }
+            panic!("Recall did not finish");
+        }
+        fn live_eq() -> [u8; 3] {
+            state::AMP.with(|amp| {
+                let amp = amp.borrow();
+                [amp.bass, amp.mid, amp.treble]
+            })
+        }
+        scenes::capture_scene(1, 0, "Clean").unwrap();
+        state::AMP.with(|amp| {
+            let mut amp = amp.borrow_mut();
+            amp.capture_slot = 2;
+            amp.bass = 51;
+            amp.mid = 100;
+            amp.treble = 80;
+            amp.level = 99;
+        });
+        scenes::capture_scene(1, 1, "High").unwrap();
+        assert!(scenes::set_eq_trim([101, 0, 0]).is_err());
+        scenes::set_eq_trim([-10, 10, 20]).unwrap();
+        assert!(scenes::set_eq_trim([0; 3]).is_err(), "Busy trims must be refused");
+        finish_recall();
+        assert_eq!(live_eq(), [25, 126, 131]);
+        assert!(!scenes::scene_dirty());
+        assert_eq!(scenes::scene(), Some(1));
+        assert_eq!(scenes::eq_trim(2), [0; 3]);
+        scenes::recall_scene(0).unwrap();
+        finish_recall();
+        assert_eq!(live_eq(), [76, 179, 255]);
+        state::AMP.with(|amp| assert_eq!(amp.borrow().level, 99));
+        for _ in 0..3 {
+            scenes::capture_scene(1, 0, "Clean").unwrap();
+            scenes::recall_scene(0).unwrap();
+            finish_recall();
+            assert_eq!(live_eq(), [76, 179, 255]);
+        }
+        let mut config = scenes::data::Config::decode(&scenes::export_json().unwrap()).unwrap();
+        assert_eq!(
+            config.preset_scenes[0].scenes[0].as_ref().unwrap().snapshot.eq(),
+            [102, 153, 230]
+        );
+        config.preset_scenes[0].scenes[0].as_mut().unwrap().snapshot.capture_slot = None;
+        scenes::import_json(&config.encode().unwrap()).unwrap();
+        assert_eq!(scenes::eq_trim(1), [-10, 10, 20]);
+        scenes::recall_scene(0).unwrap();
+        finish_recall();
+        scenes::capture_scene(1, 0, "Clean").unwrap();
+        let config = scenes::data::Config::decode(&scenes::export_json().unwrap()).unwrap();
+        assert_eq!(
+            config.preset_scenes[0].scenes[0].as_ref().unwrap().snapshot.eq(),
+            [102, 153, 230],
+            "Legacy scenes without capture selections must not bake in trims"
+        );
+        state::AMP.with(|amp| amp.borrow_mut().bass = 90);
+        scenes::sound_edited();
+        scenes::set_eq_trim([-20, 0, 0]).unwrap();
+        finish_recall();
+        assert!(scenes::scene_dirty(), "Trimming must not hide ordinary edits");
+        assert_eq!(live_eq(), [65, 153, 230]);
+        scenes::autosave_selected().unwrap();
+        assert!(!scenes::scene_dirty());
+        scenes::set_eq_trim([0; 3]).unwrap();
+        finish_recall();
+        assert_eq!(live_eq(), [116, 153, 230]);
+        let before = scenes::export_json().unwrap();
+        settings::FAIL.store(true, Ordering::Relaxed);
+        assert!(scenes::set_eq_trim([10; 3]).is_err());
+        settings::FAIL.store(false, Ordering::Relaxed);
+        assert_eq!(scenes::export_json().unwrap(), before);
+        assert!(!scenes::busy());
+        scenes::load();
+        assert_eq!(scenes::eq_trim(1), [0; 3]);
+    }
+
+    #[test]
     fn latest_scene_replaces_unverified_recall_and_restores_stale_values() {
         let _guard = LOCK.lock().unwrap();
         reset();
@@ -444,7 +576,7 @@ mod tests {
         assert_eq!(scenes::version(), version, "Repeated press must not restart recall");
         assert!(matches!(
             scenes::poll(),
-            Some(link::Cmd::AmpKnob { knob: 1, .. })
+            Some(link::Cmd::AmpKnob { knob: 2, .. })
         ));
         assert!(scenes::recall_scene(5).is_err());
         assert_eq!(

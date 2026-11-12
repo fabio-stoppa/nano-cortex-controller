@@ -9,9 +9,17 @@ use data::Config;
 use restore::{Plan, Progress, View};
 
 struct Pending {
-    index: usize,
+    index: Option<usize>,
+    dirty: bool,
+    trim_only: bool,
     plan: Plan,
     started_us: i64,
+}
+
+struct AppliedEq {
+    preset: u8,
+    capture: Option<u8>,
+    base: [u8; 3],
 }
 
 struct State {
@@ -25,6 +33,7 @@ struct State {
     pending: Option<Pending>,
     autosave: bool,
     autosave_edit: Option<(u8, i64)>,
+    applied_eq: Option<AppliedEq>,
 }
 
 struct Store(RefCell<State>);
@@ -42,6 +51,7 @@ static STATE: Store = Store(RefCell::new(State {
     pending: None,
     autosave: false,
     autosave_edit: None,
+    applied_eq: None,
 }));
 
 fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
@@ -98,6 +108,7 @@ fn install(config: Config) {
         state.preset = crate::state::nano_state_preset_slot();
         state.pending = None;
         state.autosave_edit = None;
+        state.applied_eq = None;
         state.notice = "Scenes saved";
         state.version = state.version.wrapping_add(1);
     });
@@ -137,15 +148,89 @@ fn edit(f: impl FnOnce(&mut Config) -> Result<(), &'static str>) -> Result<(), &
     Ok(())
 }
 
-pub fn keep_master_eq() -> bool {
-    with(|state| state.config().keep_master_eq)
+pub fn eq_trim(preset: u8) -> [i16; 3] {
+    with(|state| {
+        state
+            .config()
+            .preset_scenes
+            .iter()
+            .find(|collection| collection.preset == preset)
+            .map_or([0; 3], |collection| collection.eq_trim)
+    })
 }
 
-pub fn set_keep_master_eq(enabled: bool) -> Result<(), &'static str> {
+fn untrim_snapshot(snapshot: &mut data::Snapshot, preset: u8) {
+    let trim = eq_trim(preset);
+    let base = with(|state| {
+        state
+            .applied_eq
+            .as_ref()
+            .filter(|eq| eq.preset == preset && eq.capture == snapshot.capture_slot)
+            .map(|eq| eq.base)
+    });
+    if let Some(base) = base {
+        snapshot.set_eq(data::untrim_eq(snapshot.eq(), base, trim));
+    }
+}
+
+pub fn set_eq_trim(trim: [i16; 3]) -> Result<(), &'static str> {
+    if trim.iter().any(|value| !(-100..=100).contains(value)) {
+        return Err("Preset EQ trims must be within -10 to +10");
+    }
+    if busy() || !crate::link::connected() || crate::tuner::nano_tuner_is_active() {
+        return Err("Connect the Nano and finish recall before adjusting EQ trims");
+    }
+    let current = view();
+    let preset = current.preset;
+    if !(1..=64).contains(&preset) {
+        return Err("Wait for the Nano preset to load");
+    }
+    let mut snapshot = data::Snapshot::capture(&current)?;
+    untrim_snapshot(&mut snapshot, preset);
+    let base = snapshot.eq();
+    let capture = snapshot.capture_slot;
+    snapshot.set_eq(data::trim_eq(base, trim));
+    let started_us = crate::clock::now_us();
+    let plan = Plan::scene(snapshot, &current, started_us)?;
     edit(|config| {
-        config.keep_master_eq = enabled;
+        let collection = config
+            .preset_scenes
+            .iter_mut()
+            .find(|collection| collection.preset == preset);
+        if let Some(collection) = collection {
+            collection.eq_trim = trim;
+        } else {
+            config.preset_scenes.push(data::PresetScenes {
+                preset,
+                eq_trim: trim,
+                scenes: Default::default(),
+            });
+        }
         Ok(())
-    })
+    })?;
+    with(|state| {
+        if state.preset != preset {
+            state.scene = None;
+            state.scene_dirty = false;
+        }
+        state.preset = preset;
+        state.applied_eq = Some(AppliedEq {
+            preset,
+            capture,
+            base,
+        });
+        state.pending = Some(Pending {
+            index: state.scene,
+            dirty: state.scene_dirty,
+            trim_only: true,
+            plan,
+            started_us,
+        });
+        state.notice = "Applying EQ trim and verifying...";
+        state.version = state.version.wrapping_add(1);
+    });
+    crate::link::COMMAND_READY.signal(());
+    Ok(())
 }
 
 pub fn notice() -> &'static str {
@@ -183,7 +268,7 @@ pub fn scene() -> Option<usize> {
     with(|state| state.scene)
 }
 pub fn recalling_scene() -> Option<usize> {
-    with(|state| state.pending.as_ref().map(|pending| pending.index))
+    with(|state| state.pending.as_ref().and_then(|pending| pending.index))
 }
 pub fn scene_dirty() -> bool {
     with(|state| state.scene_dirty)
@@ -191,6 +276,7 @@ pub fn scene_dirty() -> bool {
 pub fn cancel(reason: &'static str) {
     let cancelled = with(|state| {
         state.autosave_edit = None;
+        state.applied_eq = None;
         let selected = state.scene.take().is_some() || state.scene_dirty;
         state.scene_dirty = false;
         if selected {
@@ -236,7 +322,8 @@ pub fn capture_scene(preset: u8, index: usize, name: &str) -> Result<(), &'stati
     if !(1..=64).contains(&preset) || current.preset != preset {
         return Err("Nano preset changed; reopen the scene selector before saving");
     }
-    let snapshot = data::Snapshot::capture(&current)?;
+    let mut snapshot = data::Snapshot::capture(&current)?;
+    untrim_snapshot(&mut snapshot, preset);
     edit(|config| {
         if !config
             .preset_scenes
@@ -245,6 +332,7 @@ pub fn capture_scene(preset: u8, index: usize, name: &str) -> Result<(), &'stati
         {
             config.preset_scenes.push(data::PresetScenes {
                 preset,
+                eq_trim: [0; 3],
                 scenes: Default::default(),
             });
         }
@@ -293,8 +381,7 @@ pub fn clear_all_scenes() -> Result<(), &'static str> {
         return Err("Wait for the current recall to finish");
     }
     // Explicit, confirmed clearing must also recover an unreadable configuration.
-    let mut config = Config::default();
-    config.keep_master_eq = keep_master_eq();
+    let config = Config::default();
     crate::settings::save_scenes_json(&config.encode()?)?;
     install(config);
     Ok(())
@@ -328,7 +415,7 @@ pub fn recall_scene(index: usize) -> Result<(), &'static str> {
             && state
                 .pending
                 .as_ref()
-                .is_some_and(|pending| pending.index == index)
+                .is_some_and(|pending| !pending.trim_only && pending.index == Some(index))
     }) {
         return Ok(());
     }
@@ -337,7 +424,7 @@ pub fn recall_scene(index: usize) -> Result<(), &'static str> {
         current.idle = false;
     }
     let preset = current.preset;
-    let snapshot = with(|state| -> Result<_, &'static str> {
+    let mut snapshot = with(|state| -> Result<_, &'static str> {
         let collection = state
             .config()
             .preset_scenes
@@ -352,12 +439,26 @@ pub fn recall_scene(index: usize) -> Result<(), &'static str> {
         Ok(scene.snapshot.clone())
     })?;
     let started_us = crate::clock::now_us();
-    let keep_master_eq = keep_master_eq();
-    let plan = Plan::scene(snapshot, &current, started_us, keep_master_eq)?;
+    let base = snapshot.eq();
+    let capture = snapshot.capture_slot.or_else(|| {
+        current
+            .amp
+            .have_capture_slot
+            .then_some(current.amp.capture_slot)
+    });
+    snapshot.set_eq(data::trim_eq(base, eq_trim(preset)));
+    let plan = Plan::scene(snapshot, &current, started_us)?;
     with(|state| {
+        state.applied_eq = Some(AppliedEq {
+            preset,
+            capture,
+            base,
+        });
         state.preset = preset;
         state.pending = Some(Pending {
-            index,
+            index: Some(index),
+            dirty: false,
+            trim_only: false,
             plan,
             started_us,
         });
@@ -377,6 +478,7 @@ pub fn poll() -> Option<crate::link::Cmd> {
             state.preset = preset;
             state.scene = None;
             state.scene_dirty = false;
+            state.applied_eq = None;
             state.version = state.version.wrapping_add(1);
         }
         state.pending.take()
@@ -387,13 +489,13 @@ pub fn poll() -> Option<crate::link::Cmd> {
     match result {
         Progress::Complete => {
             log::info!(
-                "Scene {} verified in {} us",
-                pending.index + 1,
+                "Scene/EQ {:?} verified in {} us",
+                pending.index,
                 now - pending.started_us
             );
             with(|state| {
-                state.scene = Some(pending.index);
-                state.scene_dirty = false;
+                state.scene = pending.index;
+                state.scene_dirty = pending.dirty;
                 state.notice = "Recall verified";
                 state.version = state.version.wrapping_add(1);
             });
@@ -403,6 +505,7 @@ pub fn poll() -> Option<crate::link::Cmd> {
             with(|state| {
                 state.scene = None;
                 state.scene_dirty = false;
+                state.applied_eq = None;
             });
             report(error);
             None
@@ -414,8 +517,8 @@ pub fn poll() -> Option<crate::link::Cmd> {
         Progress::Write(command) => {
             if matches!(&command, crate::link::Cmd::SceneRefresh) {
                 log::info!(
-                    "Scene {} writes sent in {} us; awaiting readback (not audio latency)",
-                    pending.index + 1,
+                    "Scene/EQ {:?} writes sent in {} us; awaiting readback (not audio latency)",
+                    pending.index,
                     now - pending.started_us
                 );
             }

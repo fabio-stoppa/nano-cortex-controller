@@ -249,14 +249,23 @@ Six MIDI Learn actions recall scenes of the current Nano preset.
 New scene names are limited to **16 ASCII characters** (letters,
 numbers, spaces, `-`, `_`, no outer spaces), unique within their collection.
 
-Scenes restore the capture slot, CAB/IR selection, amp controls, capture volume
+Scenes restore the capture slot, CAB/IR selection, amp Gain/Bass/Mid/Treble, capture volume
 when available, active cab EQ/level, gate, and all five FX models, parameters and
 bypass states. Capture and CAB/IR selections load before their saved controls.
 The saved CAB/IR name must identify a unique entry in the connected Nano library.
 Expression assignments, tempo and global USB/mute settings are not scene data.
-**Settings → General → Keep master/EQ** (saved with the scenes) makes recall leave
-the amp Level, Bass, Mid and Treble knobs untouched; Gain, capture volume and cab
-settings still follow the scene.
+Master Level is always left untouched during scene recall; use each scene's capture
+volume to balance clean and high-gain sounds. **Settings → General → Preset EQ trim**
+provides shared Bass/Mid/Treble offsets for the current Nano preset, in 0.1 steps
+from -10 to +10. Each scene keeps its own EQ: recall adds the preset's offsets and
+limits the result to the knob range. Reset clears all three offsets. Trims apply
+immediately, use verified readback, and are saved separately in `scenes.json`, including
+USB backups. Normal amp knobs still edit the scene, not its shared trims. Saving or
+autosaving a scene removes the applied trims first, preserving the original values
+at range limits so offsets cannot accumulate. Stored trims apply when recalling a
+scene; simply loading a Nano preset does not alter its sound. This replaces
+**Keep master/EQ**; old backups still load, but that legacy flag no longer overrides
+scene EQ. Master Level remains independent regardless of the old flag.
 Older scenes remain loadable but must be re-saved to include capture/CAB selections;
 missing selection fields leave the current selections unchanged.
 Bypassed sources have no saved slot selection and retain this same behavior.

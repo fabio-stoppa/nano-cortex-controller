@@ -149,7 +149,6 @@ fn ensure() {
     let autosave = crate::settings::load_autosave();
     app.set_autosave_enabled(autosave);
     crate::scenes::set_autosave(autosave);
-    app.set_keep_master_eq_enabled(crate::scenes::keep_master_eq());
     app.on_remember_last_mode_toggled({
         let weak = app.as_weak();
         move |enabled| {
@@ -173,15 +172,27 @@ fn ensure() {
             log::warn!("could not save last mode: {error}");
         }
     });
-    app.on_keep_master_eq_toggled({
+    app.on_eq_trim_adjusted({
         let weak = app.as_weak();
-        move |enabled| {
+        move |index, delta| {
             let Some(app) = weak.upgrade() else {
                 return;
             };
-            match crate::scenes::set_keep_master_eq(enabled) {
+            let mut trim = crate::scenes::eq_trim(crate::state::nano_state_preset_slot());
+            match index {
+                0..=2 if delta == -1 || delta == 1 => {
+                    let value = &mut trim[index as usize];
+                    *value = (*value + delta as i16).clamp(-100, 100);
+                }
+                3 => trim = [0; 3],
+                _ => {
+                    crate::scenes::report("Invalid EQ trim control");
+                    app.set_autosave_status("Invalid EQ trim control".into());
+                    return;
+                }
+            }
+            match crate::scenes::set_eq_trim(trim) {
                 Ok(()) => {
-                    app.set_keep_master_eq_enabled(enabled);
                     app.set_autosave_status("".into());
                 }
                 Err(error) => {
@@ -189,6 +200,7 @@ fn ensure() {
                     app.set_autosave_status(error.into());
                 }
             }
+            scenes_ui::refresh(&app, true);
         }
     });
     app.on_autosave_toggled({

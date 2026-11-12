@@ -45,10 +45,12 @@ export component AppWindow inherits Window {
     in-out property <bool> tuner-muted: false;
     in-out property <bool> save-dirty: false;
     in-out property <bool> autosave-enabled: false;
-    in-out property <bool> keep-master-eq-enabled: false;
+    in-out property <[string]> eq-trim-values: ["+0.0", "+0.0", "+0.0"];
+    in-out property <bool> eq-trim-enabled: false;
+    in-out property <int> eq-trim-preset: 0;
     in-out property <string> autosave-status: "";
     callback autosave-toggled(bool);
-    callback keep-master-eq-toggled(bool);
+    callback eq-trim-adjusted(int, int);
     in-out property <bool> ble-on: false;
     in-out property <bool> bt-busy: false;
     in-out property <int> settings-tab: 0;
@@ -709,11 +711,13 @@ export component AppWindow inherits Window {
     if root.settings-open: ToolsPanel {
         autosave-enabled: root.autosave-enabled;
         remember-last-mode: root.remember-last-mode;
-        keep-master-eq-enabled: root.keep-master-eq-enabled;
+        eq-trim-values: root.eq-trim-values;
+        eq-trim-enabled: root.eq-trim-enabled;
+        eq-trim-preset: root.eq-trim-preset;
         autosave-status: root.autosave-status;
         autosave-toggled(enabled) => { root.autosave-toggled(enabled); }
         remember-last-mode-toggled(enabled) => { root.remember-last-mode-toggled(enabled); }
-        keep-master-eq-toggled(enabled) => { root.keep-master-eq-toggled(enabled); }
+        eq-trim-adjusted(index, delta) => { root.eq-trim-adjusted(index, delta); }
         visible: !root.kbd-open;
         jack-mode: root.tools-jack-mode;
         jack-expression: root.tools-jack-expression;

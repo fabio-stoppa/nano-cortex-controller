@@ -773,11 +773,13 @@ export component SwitchToggle inherits Rectangle {
 export component ToolsPanel inherits Rectangle {
     in property <bool> autosave-enabled;
     in property <bool> remember-last-mode;
-    in property <bool> keep-master-eq-enabled;
+    in property <[string]> eq-trim-values;
+    in property <bool> eq-trim-enabled;
+    in property <int> eq-trim-preset;
     in property <string> autosave-status;
     callback autosave-toggled(bool);
     callback remember-last-mode-toggled(bool);
-    callback keep-master-eq-toggled(bool);
+    callback eq-trim-adjusted(int, int);
     in property <string> jack-mode;
     in property <bool> jack-expression;
     in property <string> usb-level;
@@ -964,11 +966,39 @@ export component ToolsPanel inherits Rectangle {
                             }
                         }
                         OptionRow {
-                            label: "Keep master/EQ";
+                            label: "Preset " + root.eq-trim-preset + " EQ trim";
                             VCenter {
-                                SwitchToggle {
-                                    on: root.keep-master-eq-enabled;
-                                    toggled(enabled) => { root.keep-master-eq-toggled(enabled); }
+                                HeaderButton {
+                                    label: "Reset";
+                                    enabled: root.eq-trim-enabled;
+                                    tapped => { root.eq-trim-adjusted(3, 0); }
+                                }
+                            }
+                        }
+                        for label[index] in ["Bass trim", "Mid trim", "Treble trim"]: OptionRow {
+                            label: label;
+                            VCenter {
+                                HeaderButton {
+                                    label: "-";
+                                    enabled: root.eq-trim-enabled;
+                                    tapped => { root.eq-trim-adjusted(index, -1); }
+                                }
+                            }
+                            VCenter {
+                                width: 72px;
+                                horizontal-stretch: 0;
+                                Text {
+                                    text: root.eq-trim-values[index];
+                                    color: #ffffff;
+                                    font-size: 24px;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                            VCenter {
+                                HeaderButton {
+                                    label: "+";
+                                    enabled: root.eq-trim-enabled;
+                                    tapped => { root.eq-trim-adjusted(index, 1); }
                                 }
                             }
                         }
