@@ -241,6 +241,9 @@ numbers, spaces, `-`, `_`, no outer spaces), unique within their collection.
 Scenes restore amp controls, capture volume when available, active cab EQ/level,
 gate, and all five FX models, parameters and bypass states. Library selections,
 expression assignments, tempo and global USB/mute settings are not scene data.
+**Settings → General → Keep master/EQ** (saved with the scenes) makes recall leave
+the amp Level, Bass, Mid and Treble knobs untouched; Gain, capture volume and cab
+settings still follow the scene.
 Recall is transient: it never saves over the Nano preset. The controller waits
 for model/parameter loading and fresh readback before reporting **Recall verified**.
 Recall sends only changed values for already-loaded models; changing a model
@@ -418,11 +421,10 @@ above; a failed write may require retrying the reset.
 Each action leaves the other two configurations alone. Nano presets, Nano settings,
 pedal calibration and Bluetooth pairings are not cleared.
 
-**Settings → General → Autosave** is off by default and persisted with the screen
+**Settings → General → Autosave scenes** is off by default and persisted with the screen
 layout. When enabled, edits made through touch or MIDI restart a five-second idle
-timer. It overwrites the selected dirty scene using its existing name, then saves
-the current dirty Nano preset. No empty controller
-slots are created. Autosave waits for state transfers/recalls to finish and for
+timer. It overwrites the selected dirty scene using its existing name; it never
+saves the Nano preset. No empty controller slots are created. Autosave waits for state transfers/recalls to finish and for
 tuner exit; changing Nano presets, disconnecting or recalling a controller preset
 cancels the pending timer. Enabling it applies to subsequent edits.
 Errors are displayed in General; a failed autosave requires another edit to retry.

@@ -2106,8 +2106,10 @@ component SwitchToggle inherits Rectangle {
 
 component ToolsPanel inherits Rectangle {
     in property <bool> autosave-enabled;
+    in property <bool> keep-master-eq-enabled;
     in property <string> autosave-status;
     callback autosave-toggled(bool);
+    callback keep-master-eq-toggled(bool);
     in property <string> jack-mode;
     in property <bool> jack-expression;
     in property <string> usb-level;
@@ -2264,7 +2266,7 @@ component ToolsPanel inherits Rectangle {
                             VCenter { HeaderButton { label: "Port flip"; choice: true; hot: root.layout-mode == 2; tapped => { root.layout-tapped(2); } } }
                         }
                         OptionRow {
-                            label: "Autosave";
+                            label: "Autosave scenes";
                             VCenter {
                                 Rectangle {
                                     width: 56px;
@@ -2281,6 +2283,15 @@ component ToolsPanel inherits Rectangle {
                                         animate x { duration: 120ms; }
                                     }
                                     TouchArea { clicked => { root.autosave-toggled(!root.autosave-enabled); } }
+                                }
+                            }
+                        }
+                        OptionRow {
+                            label: "Keep master/EQ";
+                            VCenter {
+                                SwitchToggle {
+                                    on: root.keep-master-eq-enabled;
+                                    toggled(enabled) => { root.keep-master-eq-toggled(enabled); }
                                 }
                             }
                         }
@@ -3237,8 +3248,10 @@ export component AppWindow inherits Window {
     in-out property <bool> tuner-muted: false;
     in-out property <bool> save-dirty: false;
     in-out property <bool> autosave-enabled: false;
+    in-out property <bool> keep-master-eq-enabled: false;
     in-out property <string> autosave-status: "";
     callback autosave-toggled(bool);
+    callback keep-master-eq-toggled(bool);
     in-out property <bool> ble-on: false;
     in-out property <bool> bt-busy: false;
     in-out property <int> settings-tab: 0;
@@ -3895,6 +3908,8 @@ export component AppWindow inherits Window {
         autosave-enabled: root.autosave-enabled;
         autosave-status: root.autosave-status;
         autosave-toggled(enabled) => { root.autosave-toggled(enabled); }
+        keep-master-eq-enabled: root.keep-master-eq-enabled;
+        keep-master-eq-toggled(enabled) => { root.keep-master-eq-toggled(enabled); }
         visible: !root.kbd-open;
         jack-mode: root.tools-jack-mode;
         jack-expression: root.tools-jack-expression;

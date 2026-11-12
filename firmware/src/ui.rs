@@ -146,6 +146,25 @@ fn ensure() {
     let autosave = crate::settings::load_autosave();
     app.set_autosave_enabled(autosave);
     crate::scenes::set_autosave(autosave);
+    app.set_keep_master_eq_enabled(crate::scenes::keep_master_eq());
+    app.on_keep_master_eq_toggled({
+        let weak = app.as_weak();
+        move |enabled| {
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
+            match crate::scenes::set_keep_master_eq(enabled) {
+                Ok(()) => {
+                    app.set_keep_master_eq_enabled(enabled);
+                    app.set_autosave_status("".into());
+                }
+                Err(error) => {
+                    crate::scenes::report(error);
+                    app.set_autosave_status(error.into());
+                }
+            }
+        }
+    });
     app.on_autosave_toggled({
         let weak = app.as_weak();
         move |enabled| {

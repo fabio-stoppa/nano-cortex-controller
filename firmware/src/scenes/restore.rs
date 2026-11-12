@@ -133,7 +133,7 @@ impl Snapshot {
         Ok(snapshot)
     }
 
-    pub fn matches(&self, view: &View) -> bool {
+    pub fn matches(&self, view: &View, keep_master_eq: bool) -> bool {
         let amp = &view.verified_amp;
         let actual = [amp.gain, amp.level, amp.bass, amp.mid, amp.treble];
         view.idle
@@ -142,7 +142,10 @@ impl Snapshot {
                 .amp
                 .iter()
                 .zip(actual)
-                .all(|(&expected, actual)| expected.abs_diff(actual) <= 1)
+                .enumerate()
+                .all(|(knob, (&expected, actual))| {
+                    (keep_master_eq && knob != GAIN_KNOB) || expected.abs_diff(actual) <= 1
+                })
             && self.capture_volume.is_none_or(|expected| {
                 amp.have_capture_volume && expected.abs_diff(amp.capture_volume) <= 1
             })
@@ -180,7 +183,11 @@ pub enum Progress {
     Failed(&'static str),
 }
 
+// Level, bass, mid and treble are the global master/EQ controls; gain stays per-scene.
+const GAIN_KNOB: usize = 0;
+
 pub struct Plan {
+    keep_master_eq: bool,
     steps: VecDeque<Step>,
     target: Snapshot,
     preset: u8,
@@ -231,7 +238,12 @@ fn enqueue_effect(
 }
 
 impl Plan {
-    pub fn scene(snapshot: Snapshot, current: &View, now: i64) -> Result<Self, &'static str> {
+    pub fn scene(
+        snapshot: Snapshot,
+        current: &View,
+        now: i64,
+        keep_master_eq: bool,
+    ) -> Result<Self, &'static str> {
         snapshot.validate()?;
         let mut steps = VecDeque::new();
         for (block, effect) in snapshot.effects.iter().enumerate() {
@@ -252,6 +264,9 @@ impl Plan {
             current.amp.treble,
         ];
         for (knob, &raw) in snapshot.amp.iter().enumerate() {
+            if keep_master_eq && knob != GAIN_KNOB {
+                continue;
+            }
             if current.idle
                 && amp.valid
                 && current.amp.valid
@@ -311,6 +326,7 @@ impl Plan {
             steps.push_back(Step::Write(Cmd::Gate(snapshot.gate_on)));
         }
         Ok(Self {
+            keep_master_eq,
             steps,
             target: snapshot,
             preset: current.preset,
@@ -374,7 +390,7 @@ impl Plan {
             }
             Some((_, Some(cab_generation)))
                 if (self.target.cab.is_none() || view.cab_generation != cab_generation)
-                    && self.target.matches(view) =>
+                    && self.target.matches(view, self.keep_master_eq) =>
             {
                 Progress::Complete
             }
@@ -459,7 +475,7 @@ mod tests {
         let mut view = fixture();
         loaded_model(&mut view, 0);
         let snapshot = Snapshot::capture(&view).unwrap();
-        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        let mut plan = Plan::scene(snapshot, &view, 0, false).unwrap();
         assert!(writes_before_readback(&mut plan, &view).is_empty());
         assert!(matches!(plan.poll(&view, 2), Progress::Waiting));
         view.generation += 1;
@@ -479,7 +495,7 @@ mod tests {
         view.cab.high_pass = Some(0.0);
         view.cab.low_pass = Some(1.0);
         let snapshot = Snapshot::capture(&view).unwrap();
-        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        let mut plan = Plan::scene(snapshot, &view, 0, false).unwrap();
         assert!(writes_before_readback(&mut plan, &view).is_empty());
         assert!(matches!(plan.poll(&view, 2), Progress::Waiting));
         view.generation += 1;
@@ -498,7 +514,7 @@ mod tests {
         loaded_model(&mut view, 0);
         let mut snapshot = Snapshot::capture(&view).unwrap();
         snapshot.effects[0].enabled = true;
-        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        let mut plan = Plan::scene(snapshot, &view, 0, false).unwrap();
         let writes = writes_before_readback(&mut plan, &view);
         assert!(matches!(
             writes.as_slice(),
@@ -512,7 +528,7 @@ mod tests {
         loaded_model(&mut view, 0);
         let mut snapshot = Snapshot::capture(&view).unwrap();
         snapshot.effects[0].parameters[0] = 0.9;
-        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        let mut plan = Plan::scene(snapshot, &view, 0, false).unwrap();
         let writes = writes_before_readback(&mut plan, &view);
         assert!(matches!(
             writes.as_slice(),
@@ -522,6 +538,18 @@ mod tests {
                 ..
             })]
         ));
+    }
+
+    #[test]
+    fn keep_master_eq_skips_level_and_eq_but_still_restores_gain() {
+        let view = fixture();
+        let mut snapshot = Snapshot::capture(&view).unwrap();
+        for raw in &mut snapshot.amp {
+            *raw = raw.wrapping_add(10);
+        }
+        let mut plan = Plan::scene(snapshot, &view, 0, true).unwrap();
+        let writes = writes_before_readback(&mut plan, &view);
+        assert!(matches!(writes.as_slice(), [Cmd::AmpKnob { knob: 0, .. }]));
     }
 
     #[test]
@@ -540,7 +568,7 @@ mod tests {
         snapshot.cab.as_mut().unwrap()[0] = 0.6;
         snapshot.gate_amount = Some(50);
         snapshot.gate_on = true;
-        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        let mut plan = Plan::scene(snapshot, &view, 0, false).unwrap();
         let writes = writes_before_readback(&mut plan, &view);
         assert!(matches!(
             writes.as_slice(),
@@ -563,7 +591,7 @@ mod tests {
         let snapshot = Snapshot::capture(&view).unwrap();
         view.amp.gain = view.amp.gain.wrapping_add(1);
         view.amp.capture_volume = view.amp.capture_volume.wrapping_add(1);
-        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        let mut plan = Plan::scene(snapshot, &view, 0, false).unwrap();
         let writes = writes_before_readback(&mut plan, &view);
         assert!(matches!(
             writes.as_slice(),
@@ -578,7 +606,7 @@ mod tests {
         let snapshot = Snapshot::capture(&view).unwrap();
         let count = snapshot.effects[0].parameters.len();
         view.effects.blocks[0].model_id_raw[0] ^= 0xff;
-        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        let mut plan = Plan::scene(snapshot, &view, 0, false).unwrap();
         assert!(matches!(
             plan.poll(&view, 1),
             Progress::Write(Cmd::FxModelId { block: 0, .. })
@@ -602,7 +630,7 @@ mod tests {
         let snapshot = Snapshot::capture(&view).unwrap();
         let count = snapshot.effects[0].parameters.len();
         view.idle = false;
-        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        let mut plan = Plan::scene(snapshot, &view, 0, false).unwrap();
         assert!(matches!(plan.poll(&view, 1), Progress::Waiting));
         view.idle = true;
         let writes = writes_before_readback(&mut plan, &view);
@@ -646,7 +674,7 @@ mod tests {
         loaded_model(&mut view, 0);
         let snapshot = Snapshot::capture(&view).unwrap();
         view.effects.blocks[0].params_loaded = false;
-        let mut plan = Plan::scene(snapshot.clone(), &view, 0).unwrap();
+        let mut plan = Plan::scene(snapshot.clone(), &view, 0, false).unwrap();
         assert!(matches!(
             plan.poll(&view, 1),
             Progress::Write(Cmd::FxModelId { block: 0, .. })

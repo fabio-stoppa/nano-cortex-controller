@@ -12,6 +12,8 @@ pub struct Config {
     pub format: String,
     pub version: u8,
     #[serde(default)]
+    pub keep_master_eq: bool,
+    #[serde(default)]
     pub preset_scenes: Vec<PresetScenes>,
 }
 
@@ -27,6 +29,8 @@ pub struct PresetScenes {
 struct StoredConfig {
     format: String,
     version: u8,
+    #[serde(default)]
+    keep_master_eq: bool,
     #[serde(default)]
     preset_scenes: Vec<StoredPresetScenes>,
 }
@@ -111,6 +115,7 @@ impl Default for Config {
         Self {
             format: String::from("nano-scenes"),
             version: 4,
+            keep_master_eq: false,
             preset_scenes: Vec::new(),
         }
     }
@@ -202,6 +207,7 @@ impl Config {
         let config = Self {
             format: stored.format,
             version: 4,
+            keep_master_eq: stored.keep_master_eq,
             preset_scenes,
         };
         config.validate()?;

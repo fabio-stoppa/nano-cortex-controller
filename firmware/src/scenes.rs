@@ -137,6 +137,17 @@ fn edit(f: impl FnOnce(&mut Config) -> Result<(), &'static str>) -> Result<(), &
     Ok(())
 }
 
+pub fn keep_master_eq() -> bool {
+    with(|state| state.config().keep_master_eq)
+}
+
+pub fn set_keep_master_eq(enabled: bool) -> Result<(), &'static str> {
+    edit(|config| {
+        config.keep_master_eq = enabled;
+        Ok(())
+    })
+}
+
 pub fn notice() -> &'static str {
     with(|state| state.notice)
 }
@@ -282,7 +293,8 @@ pub fn clear_all_scenes() -> Result<(), &'static str> {
         return Err("Wait for the current recall to finish");
     }
     // Explicit, confirmed clearing must also recover an unreadable configuration.
-    let config = Config::default();
+    let mut config = Config::default();
+    config.keep_master_eq = keep_master_eq();
     crate::settings::save_scenes_json(&config.encode()?)?;
     install(config);
     Ok(())
@@ -340,7 +352,8 @@ pub fn recall_scene(index: usize) -> Result<(), &'static str> {
         Ok(scene.snapshot.clone())
     })?;
     let started_us = crate::clock::now_us();
-    let plan = Plan::scene(snapshot, &current, started_us)?;
+    let keep_master_eq = keep_master_eq();
+    let plan = Plan::scene(snapshot, &current, started_us, keep_master_eq)?;
     with(|state| {
         state.preset = preset;
         state.pending = Some(Pending {
