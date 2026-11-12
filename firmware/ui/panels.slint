@@ -772,9 +772,11 @@ export component SwitchToggle inherits Rectangle {
 
 export component ToolsPanel inherits Rectangle {
     in property <bool> autosave-enabled;
+    in property <bool> remember-last-mode;
     in property <bool> keep-master-eq-enabled;
     in property <string> autosave-status;
     callback autosave-toggled(bool);
+    callback remember-last-mode-toggled(bool);
     callback keep-master-eq-toggled(bool);
     in property <string> jack-mode;
     in property <bool> jack-expression;
@@ -949,6 +951,15 @@ export component ToolsPanel inherits Rectangle {
                                         animate x { duration: 120ms; }
                                     }
                                     TouchArea { clicked => { root.autosave-toggled(!root.autosave-enabled); } }
+                                }
+                            }
+                        }
+                        OptionRow {
+                            label: "Remember last mode";
+                            VCenter {
+                                SwitchToggle {
+                                    on: root.remember-last-mode;
+                                    toggled(enabled) => { root.remember-last-mode-toggled(enabled); }
                                 }
                             }
                         }

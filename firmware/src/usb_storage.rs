@@ -80,7 +80,7 @@ fn prepare() -> Result<disk::Disk, &'static str> {
          midi.json limit: 48 KiB. scenes.json limit: 1048544 bytes (format version 4, six scenes per preset).\r\n\
          preferences.json limit: 4 KiB; format nano-controller-preferences, version 1.\r\n\
          orientation: landscape, portrait, portrait_flipped, landscape_flipped.\r\n\
-         autosave: true or false. Preferences take effect after restart, not on the Nano.\r\n\
+         autosave and remember_mode: true or false. Preferences take effect after restart, not on the Nano.\r\n\
          MIDI channels: 1-16; numbers: 0-127; kinds: cc, note, program.\r\n\
          Omitted MIDI actions are cleared; a message may target several actions.\r\n\r\n\
          Active MIDI action IDs:\r\n",

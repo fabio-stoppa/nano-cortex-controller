@@ -1,4 +1,4 @@
-//! Persists screen layout and autosave preferences in the first NVS sector.
+//! Persists screen layout, autosave, and boot-mode preferences in the first NVS sector.
 //!
 //! Current MIDI and scene configuration live in separate partitions.
 //! The last NVS sector marks completion of the controller-wide storage reset.
@@ -28,25 +28,37 @@ fn flash() -> Option<&'static mut FlashStorage<'static>> {
     slot.as_mut().filter(|f| f.capacity() != 0)
 }
 
-fn record(mode: u8, autosave: bool, selected_nano: Option<[u8; 7]>) -> [u8; 16] {
+fn record(
+    mode: u8,
+    autosave: bool,
+    selected_nano: Option<[u8; 7]>,
+    remember_mode: bool,
+    gig_mode: bool,
+) -> [u8; 16] {
     let mut r = [0u8; 16];
     r[..4].copy_from_slice(&MAGIC.to_le_bytes());
-    r[4] = mode;
-    r[5] = !mode;
+    r[4] = mode | (u8::from(remember_mode) << 2) | (u8::from(gig_mode) << 3);
+    r[5] = !r[4];
     r[6] = u8::from(autosave);
     r[7] = !r[6];
     selected_device::write(&mut r, selected_nano);
     r
 }
 
+fn valid_preferences_record(record: &[u8; 16]) -> bool {
+    u32::from_le_bytes(record[..4].try_into().unwrap()) == MAGIC
+        && record[5] == !record[4]
+        && record[4] & !0x0f == 0
+        && record[6] <= 1
+        && record[7] == !record[6]
+}
+
+fn remembered_mode(record: &[u8; 16]) -> (bool, bool) {
+    (record[4] & 0x04 != 0, record[4] & 0x08 != 0)
+}
+
 fn selected_nano_from_record(record: &[u8; 16]) -> Option<[u8; 7]> {
-    let magic = u32::from_le_bytes(record[..4].try_into().ok()?);
-    if magic != MAGIC
-        || record[5] != !record[4]
-        || record[4] > 3
-        || record[6] > 1
-        || record[7] != !record[6]
-    {
+    if !valid_preferences_record(record) {
         return None;
     }
     selected_device::read(record)
@@ -76,8 +88,7 @@ pub fn load_layout() -> Option<i32> {
     with_region(|region| {
         let mut r = [0u8; 16];
         region.read(0, &mut r).ok()?;
-        let magic = u32::from_le_bytes(r[..4].try_into().ok()?);
-        (magic == MAGIC && r[5] == !r[4] && r[4] <= 3).then_some(r[4] as i32)
+        valid_preferences_record(&r).then_some((r[4] & 0x03) as i32)
     })
 }
 
@@ -98,41 +109,71 @@ pub fn load_autosave() -> bool {
             .read(0, &mut r)
             .map_err(|error| log::warn!("read autosave {error:?}"))
             .ok()?;
-        Some(
-            u32::from_le_bytes(r[..4].try_into().ok()?) == MAGIC
-                && r[5] == !r[4]
-                && r[4] <= 3
-                && r[6] == 1
-                && r[7] == !r[6],
-        )
+        Some(valid_preferences_record(&r) && r[6] == 1)
     })
     .unwrap_or(false)
+}
+
+pub fn load_remember_mode() -> bool {
+    read_preferences_record()
+        .filter(valid_preferences_record)
+        .is_some_and(|record| remembered_mode(&record).0)
+}
+
+pub fn load_last_gig_mode() -> bool {
+    read_preferences_record()
+        .filter(valid_preferences_record)
+        .is_some_and(|record| remembered_mode(&record).1)
+}
+
+fn read_preferences_record() -> Option<[u8; 16]> {
+    with_region(|region| {
+        let mut record = [0u8; 16];
+        region.read(0, &mut record).ok()?;
+        Some(record)
+    })
 }
 
 pub fn save_autosave(enabled: bool) -> Result<(), &'static str> {
     save_preferences(load_layout().unwrap_or(0) as u8, enabled)
 }
 
+pub fn save_remember_mode(enabled: bool, gig_mode: bool) -> Result<(), &'static str> {
+    save_preferences_with_selection(
+        load_layout().unwrap_or(0) as u8,
+        load_autosave(),
+        load_selected_nano(),
+        enabled,
+        gig_mode,
+    )
+}
+
+pub fn save_last_mode(gig_mode: bool) -> Result<(), &'static str> {
+    if !load_remember_mode() {
+        return Ok(());
+    }
+    save_remember_mode(true, gig_mode)
+}
+
 fn save_preferences(mode: u8, autosave: bool) -> Result<(), &'static str> {
-    let selected_nano = with_region(|region| {
-        let mut current = [0u8; 16];
-        region
-            .read(0, &mut current)
-            .map_err(|e| log::warn!("read selected Nano {e:?}"))
-            .ok()?;
-        Some(selected_nano_from_record(&current))
-    })
-    .flatten();
-    save_preferences_with_selection(mode, autosave, selected_nano)
+    let current = read_preferences_record().filter(valid_preferences_record);
+    let selected_nano = current.as_ref().and_then(selected_nano_from_record);
+    let (remember_mode, gig_mode) = current
+        .as_ref()
+        .map(remembered_mode)
+        .unwrap_or((false, false));
+    save_preferences_with_selection(mode, autosave, selected_nano, remember_mode, gig_mode)
 }
 
 fn save_preferences_with_selection(
     mode: u8,
     autosave: bool,
     selected_nano: Option<[u8; 7]>,
+    remember_mode: bool,
+    gig_mode: bool,
 ) -> Result<(), &'static str> {
     let _pause = crate::bounce::FlashPause::begin()?;
-    let expected = record(mode, autosave, selected_nano);
+    let expected = record(mode, autosave, selected_nano, remember_mode, gig_mode);
     let saved = with_region(|region| {
         let mut current = [0u8; 16];
         region
@@ -170,7 +211,18 @@ pub fn load_selected_nano() -> Option<[u8; 7]> {
 }
 
 pub fn save_selected_nano(address: Option<[u8; 7]>) -> Result<(), &'static str> {
-    save_preferences_with_selection(load_layout().unwrap_or(0) as u8, load_autosave(), address)
+    let current = read_preferences_record().filter(valid_preferences_record);
+    let (remember_mode, gig_mode) = current
+        .as_ref()
+        .map(remembered_mode)
+        .unwrap_or((false, false));
+    save_preferences_with_selection(
+        load_layout().unwrap_or(0) as u8,
+        load_autosave(),
+        address,
+        remember_mode,
+        gig_mode,
+    )
 }
 
 mod json_record;
@@ -180,7 +232,13 @@ mod reset;
 pub mod selected_device;
 
 pub fn import_preferences(preferences: &preferences::Preferences) -> Result<(), &'static str> {
-    save_preferences(preferences.orientation.layout(), preferences.autosave)
+    save_preferences_with_selection(
+        preferences.orientation.layout(),
+        preferences.autosave,
+        load_selected_nano(),
+        preferences.remember_mode,
+        false,
+    )
 }
 
 pub fn reset_preferences() -> Result<(), &'static str> {

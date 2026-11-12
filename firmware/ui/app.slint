@@ -291,14 +291,18 @@ export component AppWindow inherits Window {
     in-out property <[bool]> scene-assigned: [];
     in-out property <[string]> scene-library-scenes: [];
     in-out property <bool> gig-open: false;
+    in-out property <bool> remember-last-mode: false;
     in-out property <bool> scene-library-busy: false;
     in-out property <[string]> gig-scenes: [];
     in-out property <[bool]> gig-scene-assigned: [];
     in-out property <int> gig-scene: -1;
     callback gig-scene-recall(int);
     callback gig-mode-set(bool);
+    callback gig-mode-changed(bool);
+    callback remember-last-mode-toggled(bool);
     gig-mode-set(enabled) => {
         root.gig-open = enabled;
+        root.gig-mode-changed(enabled);
         root.settings-open = false;
         root.scene-library-open = false;
         root.model-open = false;
@@ -704,9 +708,11 @@ export component AppWindow inherits Window {
 
     if root.settings-open: ToolsPanel {
         autosave-enabled: root.autosave-enabled;
+        remember-last-mode: root.remember-last-mode;
         keep-master-eq-enabled: root.keep-master-eq-enabled;
         autosave-status: root.autosave-status;
         autosave-toggled(enabled) => { root.autosave-toggled(enabled); }
+        remember-last-mode-toggled(enabled) => { root.remember-last-mode-toggled(enabled); }
         keep-master-eq-toggled(enabled) => { root.keep-master-eq-toggled(enabled); }
         visible: !root.kbd-open;
         jack-mode: root.tools-jack-mode;

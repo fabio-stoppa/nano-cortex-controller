@@ -141,12 +141,38 @@ fn ensure() {
     if let Some(mode) = crate::settings::load_layout() {
         app.set_layout_mode(mode);
     }
+    let remember_last_mode = crate::settings::load_remember_mode();
+    app.set_remember_last_mode(remember_last_mode);
+    app.set_gig_open(remember_last_mode && crate::settings::load_last_gig_mode());
     crate::midi::load();
     crate::scenes::load();
     let autosave = crate::settings::load_autosave();
     app.set_autosave_enabled(autosave);
     crate::scenes::set_autosave(autosave);
     app.set_keep_master_eq_enabled(crate::scenes::keep_master_eq());
+    app.on_remember_last_mode_toggled({
+        let weak = app.as_weak();
+        move |enabled| {
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
+            match crate::settings::save_remember_mode(enabled, app.get_gig_open()) {
+                Ok(()) => {
+                    app.set_remember_last_mode(enabled);
+                    app.set_autosave_status("".into());
+                }
+                Err(error) => {
+                    log::warn!("could not save boot mode preference: {error}");
+                    app.set_autosave_status(error.into());
+                }
+            }
+        }
+    });
+    app.on_gig_mode_changed(|enabled| {
+        if let Err(error) = crate::settings::save_last_mode(enabled) {
+            log::warn!("could not save last mode: {error}");
+        }
+    });
     app.on_keep_master_eq_toggled({
         let weak = app.as_weak();
         move |enabled| {
@@ -363,6 +389,8 @@ fn ensure() {
                 Ok(()) => {
                     app.set_layout_mode(0);
                     app.set_autosave_enabled(false);
+                    app.set_remember_last_mode(false);
+                    app.set_gig_open(false);
                     app.set_autosave_status("".into());
                     crate::scenes::set_autosave(false);
                     "Preferences reset: landscape, Autosave off"
@@ -1130,9 +1158,10 @@ pub fn usb_storage_status(message: &str, finished: bool) {
 
 pub fn export_preferences_json() -> Result<alloc::string::String, &'static str> {
     let ui = state().as_ref().ok_or("Controller UI is not initialized")?;
-    crate::settings::preferences::Preferences::new(
+    crate::settings::preferences::Preferences::new_with_remember_mode(
         ui.app.get_layout_mode(),
         ui.app.get_autosave_enabled(),
+        ui.app.get_remember_last_mode(),
     )?
     .encode()
 }

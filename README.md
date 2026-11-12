@@ -356,7 +356,8 @@ The computer mounts a disposable 3 MiB FAT12 volume named **NANO CONFIG** contai
 - `midi.json`: learned MIDI assignments (maximum 48 KiB).
 - `scenes.json`: all controller scenes, using the current version-4 `nano-scenes`
   format (maximum 1,048,544 bytes). Older banks/`performance.json` are not imported.
-- `preferences.json`: controller screen orientation and Autosave (maximum 4 KiB).
+- `preferences.json`: controller screen orientation, Autosave, and Remember last
+  mode (maximum 4 KiB).
   Does not include Nano settings or Bluetooth pairings.
 - `README.TXT`: editing instructions and active MIDI action IDs.
 
@@ -395,16 +396,17 @@ time/futures runtime remain on their published dependencies.
   "format": "nano-controller-preferences",
   "version": 1,
   "orientation": "landscape",
-  "autosave": false
+  "autosave": false,
+  "remember_mode": false
 }
 ```
 
 `orientation` accepts `landscape`, `portrait`, `portrait_flipped`, or
-`landscape_flipped`. `autosave` must be a JSON boolean. Missing/unknown fields,
+`landscape_flipped`. `autosave` and `remember_mode` must be JSON booleans. Missing
+or unknown fields (except the optional `remember_mode` in older files),
 unsupported versions and invalid values are rejected rather than defaulted.
 Imported preferences take effect on **Restart controller**, so the USB screen
-does not rotate mid-import. Existing touch settings and boot behavior are unchanged;
-unchanged preference records are not rewritten.
+does not rotate mid-import. Unchanged preference records are not rewritten.
 
 **Settings → General → Clear** provides independent, confirmed recovery actions
 for every editable USB file:
@@ -434,6 +436,11 @@ tuner exit; changing Nano presets, disconnecting or recalling a controller prese
 cancels the pending timer. Enabling it applies to subsequent edits.
 Errors are displayed in General; a failed autosave requires another edit to retry.
 The Nano save status reports the request being sent, not an unverified success.
+
+**Settings → General → Remember last mode** is off by default. When enabled, the
+controller saves whether Gig mode or the editor was last open and restores that
+screen on the next boot. It applies to mode changes from the menu, Gig screen, or
+MIDI; disabling it boots into the editor.
 
 The firmware reads the JSON configuration at boot and updates it when MIDI Learn
 or Clear changes assignments. It uses two checked flash records, commits to the
