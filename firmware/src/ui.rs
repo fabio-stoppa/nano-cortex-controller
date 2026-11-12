@@ -665,6 +665,23 @@ fn ensure() {
     app.on_retry_now(move || crate::ble::retry_now());
     app.on_library_tapped(move || crate::link::push_cmd(Cmd::Library));
     app.on_param_changed(move |cell, amount| send_fx_param(cell, amount));
+    app.on_param_reset(move |cell| {
+        let amount = state().as_ref().and_then(|ui| {
+            let block = ui.fx.blocks.get(fx_block_for_chain(ui.app.get_chain())?)?;
+            if !ui.fx_valid || cell < 0 || cell as usize >= usize::from(block.param_count) {
+                return None;
+            }
+            let model = unsafe { block.model.as_ref() }?;
+            let wire = crate::fx::nano_fx_param_wire_index(model, cell as usize);
+            (wire < usize::from(block.param_count))
+                .then(|| crate::fx::params::neutral_for_model(model, wire))
+        });
+        if let Some(amount) = amount {
+            send_fx_param(cell, amount);
+        } else {
+            crate::scenes::report("Wait for the FX parameter to load before resetting");
+        }
+    });
     app.on_layout_tapped({
         let weak = weak.clone();
         move |mode| {

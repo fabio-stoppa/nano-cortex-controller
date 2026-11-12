@@ -601,6 +601,43 @@ pub fn display_to_normalized_for_model(
     normalize_for_model(model, param_index, normalized)
 }
 
+/// Heuristic neutral values, not device-verified factory defaults.
+pub fn neutral_for_model(model: &NanoFxModelDef, param_index: usize) -> f32 {
+    let name = param_name(model, param_index);
+    let base = enum_base_name(name);
+    if let Some(options) = model_param_enum_options(model_name(model), name) {
+        let index = options
+            .iter()
+            .position(|option| *option == "Off")
+            .unwrap_or(0);
+        return display_to_normalized_for_model(model, param_index, index as f32);
+    }
+    if param_is_enum(name) {
+        return display_to_normalized_for_model(model, param_index, 0.0);
+    }
+    let range = param_range_for_model(model_name(model), name);
+    let unit = param_unit_for_model(model_name(model), name);
+    let display = if base.contains("Low Pass") || base.starts_with("LPF") {
+        range.max
+    } else if base.contains("High Pass")
+        || base.starts_with("HPF")
+        || matches!(
+            base,
+            "Mix" | "Feedback" | "Ducking" | "Mod Depth" | "Modulation" | "Pre Delay"
+        )
+    {
+        range.min
+    } else if range.min <= 0.0
+        && range.max >= 0.0
+        && (range.min < 0.0 || matches!(unit, "dB" | "Sem" | "Cent"))
+    {
+        0.0
+    } else {
+        (range.min + range.max) * 0.5
+    };
+    display_to_normalized_for_model(model, param_index, display)
+}
+
 pub fn param_scale(name: &str) -> i32 {
     if param_is_enum(name) {
         return 1;
@@ -845,6 +882,38 @@ pub fn nano_fx_format_param(block: &NanoFxBlock, param_index: u8) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn neutral_values_cover_every_catalog_parameter_and_stay_on_the_model_grid() {
+        for model in &super::super::catalog::NANO_FX_CATALOG {
+            for wire in 0..usize::from(model.param_count) {
+                let neutral = neutral_for_model(model, wire);
+                assert!(neutral.is_finite() && (0.0..=1.0).contains(&neutral));
+                assert!((normalize_for_model(model, wire, neutral) - neutral).abs() < 0.00001);
+            }
+        }
+    }
+
+    #[test]
+    fn neutral_values_use_display_units_not_normalized_midpoints() {
+        let blossom = super::super::catalog::NANO_FX_CATALOG
+            .iter()
+            .find(|model| model_name(model) == "Blossom (ST)")
+            .unwrap();
+        for (wire, expected) in [
+            (0, 0.0),
+            (3, 30.0),
+            (4, 20000.0),
+            (5, 0.0),
+            (8, 0.0),
+            (9, 0.0),
+        ] {
+            let actual =
+                normalized_to_display_for_model(blossom, wire, neutral_for_model(blossom, wire));
+            assert!((actual - expected).abs() < 0.05, "wire {wire}: {actual}");
+        }
+        assert!(neutral_for_model(blossom, 8) > 0.0);
+    }
 
     static SYNC_NOTE_PARAMS: super::super::types::ParamNames<1> =
         super::super::types::ParamNames([c"Sync Note".as_ptr()]);

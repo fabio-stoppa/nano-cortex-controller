@@ -159,6 +159,7 @@ export component AmpPanel inherits Rectangle {
                 value: gate-amnt-text;
                 amount: gate-amnt-amount;
                 changed(v) => { root.slider-moved(6, v); }
+                double-tapped => { root.slider-moved(6, 0); }
             }
             ParamCell {
                 height: root.row-h;
@@ -168,6 +169,7 @@ export component AmpPanel inherits Rectangle {
                 value: gain-text;
                 amount: gain-amount;
                 changed(v) => { root.slider-moved(0, v); }
+                double-tapped => { root.slider-moved(0, 0.5); }
             }
             ParamCell {
                 height: root.row-h;
@@ -177,6 +179,7 @@ export component AmpPanel inherits Rectangle {
                 value: cap-text;
                 amount: cap-amount;
                 changed(v) => { root.slider-moved(5, v); }
+                double-tapped => { root.slider-moved(5, 0.5); }
             }
         }
         if !root.portrait: HorizontalLayout {
@@ -191,6 +194,7 @@ export component AmpPanel inherits Rectangle {
                 value: master-text;
                 amount: master-amount;
                 changed(v) => { root.slider-moved(1, v); }
+                double-tapped => { root.slider-moved(1, 0.5); }
             }
             ParamCell {
                 height: root.row-h;
@@ -200,6 +204,7 @@ export component AmpPanel inherits Rectangle {
                 value: bass-text;
                 amount: bass-amount;
                 changed(v) => { root.slider-moved(2, v); }
+                double-tapped => { root.slider-moved(2, 0.5); }
             }
             ParamCell {
                 height: root.row-h;
@@ -209,6 +214,7 @@ export component AmpPanel inherits Rectangle {
                 value: mid-text;
                 amount: mid-amount;
                 changed(v) => { root.slider-moved(3, v); }
+                double-tapped => { root.slider-moved(3, 0.5); }
             }
             ParamCell {
                 height: root.row-h;
@@ -218,6 +224,7 @@ export component AmpPanel inherits Rectangle {
                 value: treble-text;
                 amount: treble-amount;
                 changed(v) => { root.slider-moved(4, v); }
+                double-tapped => { root.slider-moved(4, 0.5); }
             }
         }
         if root.portrait: HorizontalLayout {
@@ -240,6 +247,7 @@ export component AmpPanel inherits Rectangle {
                 value: gate-amnt-text;
                 amount: gate-amnt-amount;
                 changed(v) => { root.slider-moved(6, v); }
+                double-tapped => { root.slider-moved(6, 0); }
             }
         }
         if root.portrait: HorizontalLayout {
@@ -254,6 +262,7 @@ export component AmpPanel inherits Rectangle {
                 value: cap-text;
                 amount: cap-amount;
                 changed(v) => { root.slider-moved(5, v); }
+                double-tapped => { root.slider-moved(5, 0.5); }
             }
             ParamCell {
                 height: root.row-h;
@@ -263,6 +272,7 @@ export component AmpPanel inherits Rectangle {
                 value: master-text;
                 amount: master-amount;
                 changed(v) => { root.slider-moved(1, v); }
+                double-tapped => { root.slider-moved(1, 0.5); }
             }
             ParamCell {
                 height: root.row-h;
@@ -272,6 +282,7 @@ export component AmpPanel inherits Rectangle {
                 value: gain-text;
                 amount: gain-amount;
                 changed(v) => { root.slider-moved(0, v); }
+                double-tapped => { root.slider-moved(0, 0.5); }
             }
         }
         if root.portrait: HorizontalLayout {
@@ -286,6 +297,7 @@ export component AmpPanel inherits Rectangle {
                 value: bass-text;
                 amount: bass-amount;
                 changed(v) => { root.slider-moved(2, v); }
+                double-tapped => { root.slider-moved(2, 0.5); }
             }
             ParamCell {
                 height: root.row-h;
@@ -295,6 +307,7 @@ export component AmpPanel inherits Rectangle {
                 value: mid-text;
                 amount: mid-amount;
                 changed(v) => { root.slider-moved(3, v); }
+                double-tapped => { root.slider-moved(3, 0.5); }
             }
             ParamCell {
                 height: root.row-h;
@@ -304,6 +317,7 @@ export component AmpPanel inherits Rectangle {
                 value: treble-text;
                 amount: treble-amount;
                 changed(v) => { root.slider-moved(4, v); }
+                double-tapped => { root.slider-moved(4, 0.5); }
             }
         }
         HorizontalLayout {
@@ -318,6 +332,7 @@ export component AmpPanel inherits Rectangle {
                 value: root.cab-output-text;
                 amount: root.cab-output-amount;
                 changed(v) => { root.cab-slider-moved(0, v); }
+                double-tapped => { if root.cab-active { root.cab-slider-moved(0, 0.66212219); } }
             }
             ParamCell {
                 height: root.row-h;
@@ -327,6 +342,7 @@ export component AmpPanel inherits Rectangle {
                 value: root.cab-high-pass-text;
                 amount: root.cab-high-pass-amount;
                 changed(v) => { root.cab-slider-moved(1, v); }
+                double-tapped => { if root.cab-active { root.cab-slider-moved(1, 0); } }
             }
             ParamCell {
                 height: root.row-h;
@@ -336,6 +352,7 @@ export component AmpPanel inherits Rectangle {
                 value: root.cab-low-pass-text;
                 amount: root.cab-low-pass-amount;
                 changed(v) => { root.cab-slider-moved(2, v); }
+                double-tapped => { if root.cab-active { root.cab-slider-moved(2, 1); } }
             }
             if !root.portrait: Rectangle {
                 min-width: 0px;
@@ -429,6 +446,7 @@ export component FxPanel inherits Rectangle {
     callback model-list-tapped();
     callback model-stepped(int);
     callback param-changed(int, float);
+    callback param-reset(int);
     property <int> columns: root.portrait ? 3 : 4;
     property <[string]> names: [root.n0, root.n1, root.n2, root.n3, root.n4, root.n5,
         root.n6, root.n7, root.n8, root.n9, root.n10, root.n11, root.n12, root.n13,
@@ -475,6 +493,7 @@ export component FxPanel inherits Rectangle {
                     value: root.values[self.index];
                     amount: root.amounts[self.index];
                     changed(v) => { root.param-changed(self.index, v); }
+                    double-tapped => { root.param-reset(self.index); }
                 }
             }
         }

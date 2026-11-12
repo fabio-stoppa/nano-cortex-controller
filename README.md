@@ -275,6 +275,14 @@ seconds or by tapping it, rather than taking up space in Settings or Gig view.
 Routine recall/save confirmations are not displayed there.
 Gig scene titles reserve room for three lines beneath a smaller scene number,
 wrapping between words without splitting them. Text scales down on shorter buttons.
+Double-tap an editable Amp, Cab or FX parameter cell to reset it to a heuristic
+neutral value (not a verified Nano factory default). Amp Gain, Master Level,
+Capture Level and Bass/Mid/Treble use the midpoint; Gate Amount uses zero.
+Cab Output uses 0 dB, High Pass 20 Hz and Low Pass 20 kHz. FX uses zero for
+bipolar/dB controls, minimum Mix/Feedback/modulation, open high/low-pass filters,
+Off (or the first option) for selectors, and the display-range midpoint otherwise.
+Trims reset individually to zero; tuner reference resets to 440 Hz. Resets are
+ordinary sound edits and follow the same scene dirty/autosave rules as dragging.
 Older scenes remain loadable but must be re-saved to include capture/CAB selections;
 missing selection fields leave the current selections unchanged.
 Bypassed sources have no saved slot selection and retain this same behavior.

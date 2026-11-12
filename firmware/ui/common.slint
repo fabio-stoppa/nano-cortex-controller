@@ -106,6 +106,7 @@ export component ParamCell inherits Rectangle {
     }
     property <bool> armed: false;
     property <bool> pressed: false;
+    property <bool> double-tap-reset: false;
     property <length> down-x: 0px;
     property <length> down-y: 0px;
     Timer {
@@ -114,7 +115,10 @@ export component ParamCell inherits Rectangle {
         triggered => { root.armed = true; }
     }
     if root.slider: TouchArea {
-        double-clicked => { root.double-tapped(); }
+        double-clicked => {
+            root.double-tap-reset = true;
+            root.double-tapped();
+        }
         pointer-event(event) => {
             if (event.kind == PointerEventKind.down) {
                 root.pressed = true;
@@ -127,20 +131,21 @@ export component ParamCell inherits Rectangle {
                     root.armed = true;
                 }
             }
-            if ((event.kind == PointerEventKind.down || event.kind == PointerEventKind.move) && root.armed) {
+            if ((event.kind == PointerEventKind.down || event.kind == PointerEventKind.move) && root.armed && !root.double-tap-reset) {
                 root.changed(clamp((self.mouse-x - 12px) / max(self.width - 24px, 1px), 0, 1));
             }
-            if (event.kind == PointerEventKind.up && root.pressed && !root.armed
+            if (event.kind == PointerEventKind.up && root.pressed && !root.armed && !root.double-tap-reset
                 && abs(self.mouse-x - root.down-x) <= 14px
                 && abs(self.mouse-y - root.down-y) <= 14px) {
                 root.changed(clamp((self.mouse-x - 12px) / max(self.width - 24px, 1px), 0, 1));
             }
             if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
-                if event.kind == PointerEventKind.up && root.pressed {
+                if event.kind == PointerEventKind.up && root.pressed && !root.double-tap-reset {
                     root.editing-finished();
                 }
                 root.pressed = false;
                 root.armed = false;
+                root.double-tap-reset = false;
             }
         }
     }

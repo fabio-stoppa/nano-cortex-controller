@@ -229,6 +229,7 @@ export component AppWindow inherits Window {
     callback cab-slider-moved(int, float);
     callback gate-tapped();
     callback param-changed(int, float);
+    callback param-reset(int);
     callback preset-list-tapped();
     callback capture-stepped(int);
     callback model-stepped(int);
@@ -517,6 +518,7 @@ export component AppWindow inherits Window {
                         n22: root.fx-n22; v22: root.fx-v22; a22: root.fx-a22;
                         n23: root.fx-n23; v23: root.fx-v23; a23: root.fx-a23;
                         param-changed(cell, amount) => { root.param-changed(cell, amount); }
+                        param-reset(cell) => { root.param-reset(cell); }
                     }
                 }
             }
@@ -599,6 +601,7 @@ export component AppWindow inherits Window {
                         n22: root.fx-n22; v22: root.fx-v22; a22: root.fx-a22;
                         n23: root.fx-n23; v23: root.fx-v23; a23: root.fx-a23;
                         param-changed(cell, amount) => { root.param-changed(cell, amount); }
+                        param-reset(cell) => { root.param-reset(cell); }
                     }
                 }
                 ChainRail {
