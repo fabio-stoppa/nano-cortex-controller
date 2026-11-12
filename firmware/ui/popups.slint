@@ -287,7 +287,9 @@ export component GigPanel inherits Rectangle {
                 }
             }
             VerticalLayout {
-                width: root.portrait ? 120px : 180px;
+                width: root.portrait
+                    ? (root.width - 2 * Surface.screen-margin - 4px - 16px) / 3
+                    : (root.width - 2 * Surface.screen-margin - 108px - 6px - 4px - 24px) / 4;
                 spacing: 8px;
                 for label[index] in ["Bass trim", "Mid trim", "Treble trim"]: ParamCell {
                     height: 100px;
