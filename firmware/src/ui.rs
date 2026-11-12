@@ -182,7 +182,6 @@ fn ensure() {
                 0..=2 if (-100..=100).contains(&value) => {
                     trim[index as usize] = value as i16;
                 }
-                3 => trim = [0; 3],
                 _ => {
                     crate::scenes::report("Invalid EQ trim control");
                     scenes_ui::refresh(&app, true);

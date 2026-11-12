@@ -1204,7 +1204,6 @@ export component TempoReadout inherits Rectangle {
 
 export component HeaderBar inherits Rectangle {
     in property <string> scene-label: "No scene";
-    in property <bool> scene-selected: false;
     in property <bool> scene-enabled: true;
     in property <bool> portrait;
     in property <int> page;
@@ -1254,8 +1253,7 @@ export component HeaderBar inherits Rectangle {
                 min-width: 0px;
                 preferred-width: 0px;
                 label: root.scene-label;
-                hot: root.scene-selected;
-                background: root.scene-selected ? #1a3af8 : transparent;
+                background: transparent;
                 text-size: 15px;
                 text-alignment: left;
                 enabled: root.scene-enabled;
@@ -1337,7 +1335,7 @@ export component HeaderBar inherits Rectangle {
             spacing: portrait ? 8px : 14px;
             width: portrait ? 154px : 214px;
             VCenter { HeaderButton {
-                background: root.scene-selected ? #1a3af8 : transparent;
+                background: transparent;
                 label: root.scene-label;
                 text-alignment: right;
                 text-size: root.portrait ? 18px : 21px;

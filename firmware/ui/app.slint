@@ -412,7 +412,6 @@ export component AppWindow inherits Window {
                     }
                 }
                 scene-label: root.scene-label;
-                scene-selected: root.gig-scene >= 0;
                 scene-enabled: !root.connecting && !root.scene-library-busy;
             }
             if root.page != 2: Rectangle { height: 8px; }

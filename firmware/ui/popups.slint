@@ -301,15 +301,6 @@ export component GigPanel inherits Rectangle {
                 }
                 double-tapped => { root.eq-trim-adjusted(index, 0); }
             }
-            VCenter {
-                width: 72px;
-                horizontal-stretch: 0;
-                HeaderButton {
-                    label: "Reset";
-                    enabled: root.eq-trim-enabled;
-                    tapped => { root.eq-trim-adjusted(3, 0); }
-                }
-            }
         }
         ChainRail {
             height: root.portrait ? 88px : 60px;

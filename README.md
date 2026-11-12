@@ -259,7 +259,7 @@ volume to balance clean and high-gain sounds. **Gig view** keeps Bass/Mid/Treble
 controls always visible for the current Nano preset, with shared offsets in 0.1 steps
 from -10 to +10. These use the same sliders as Edit mode, centred at zero; changes
 apply on release. Double-tap a slider to zero it. Each scene keeps its own EQ: recall adds the preset's offsets and
-limits the result to the knob range. Reset clears all three offsets. Trims apply
+limits the result to the knob range. Trims apply
 immediately, use verified readback, and are saved separately in `scenes.json`, including
 USB backups. Normal amp knobs still edit the scene, not its shared trims. Saving or
 autosaving a scene removes the applied trims first, preserving the original values
@@ -267,8 +267,8 @@ at range limits so offsets cannot accumulate. Stored trims apply when recalling 
 scene; simply loading a Nano preset does not alter its sound. This replaces
 **Keep master/EQ**; old backups still load, but that legacy flag no longer overrides
 scene EQ. Master Level remains independent regardless of the old flag.
-In Edit mode the scene selector reads **No scene** when unselected and highlights
-the selected scene name in blue; `*` marks unsaved scene edits. Scene, EQ trim and
+In Edit mode the background-free scene selector reads **No scene** when unselected
+and shows the selected scene name otherwise; `*` marks unsaved scene edits. Scene, EQ trim and
 General settings errors appear as a bottom toast overlay, dismissed after six
 seconds or by tapping it, rather than taking up space in Settings or Gig view.
 Routine recall/save confirmations are not displayed there.
