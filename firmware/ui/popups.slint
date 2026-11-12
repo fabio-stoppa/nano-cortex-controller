@@ -163,24 +163,24 @@ export component GigButton inherits Rectangle {
     border-radius: Radius.default;
     Text {
         x: 14px;
-        y: 10px;
+        y: 8px;
         width: max(0px, root.width - 28px);
-        height: 30px;
+        height: 24px;
         text: "0" + root.number;
         color: #ffffff70;
-        font-size: 24px;
+        font-size: 18px;
         font-weight: 700;
         horizontal-alignment: left;
         vertical-alignment: top;
     }
     Text {
         x: 14px;
-        y: 38px;
+        y: 32px;
         width: max(0px, root.width - 28px);
-        height: max(0px, root.height - 44px);
+        height: max(0px, root.height - 40px);
         text: root.label;
         color: root.enabled ? #ffffff : #777777;
-        font-size: min(30px, max(12px, self.height / 3));
+        font-size: min(30px, max(12px, self.height / 4.2));
         font-weight: 700;
         horizontal-alignment: left;
         vertical-alignment: top;
