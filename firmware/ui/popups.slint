@@ -175,12 +175,12 @@ export component GigButton inherits Rectangle {
     }
     Text {
         x: 14px;
-        y: 42px;
+        y: 38px;
         width: max(0px, root.width - 28px);
-        height: max(0px, root.height - 52px);
+        height: min(76px, max(0px, root.height - 44px));
         text: root.label;
         color: root.enabled ? #ffffff : #777777;
-        font-size: 30px;
+        font-size: min(30px, max(12px, self.height / 2.5));
         font-weight: 700;
         horizontal-alignment: left;
         vertical-alignment: top;
