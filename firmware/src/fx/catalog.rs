@@ -1,7 +1,7 @@
 //! FX model catalog (port of `components/nano/nano_fx_catalog.c`).
 //!
-//! Transcribed 1:1 from the C table (archived in `recovered/fx-c/`); the
-//! catalog index also drives category and per-slot allow rules in `models.rs`.
+//! Original entries retain their C-table indices. NanOS 2.3 models are appended;
+//! catalog indices also drive category and per-slot allow rules in `models.rs`.
 
 use super::types::{NanoFxModelDef, ParamNames};
 
@@ -494,7 +494,55 @@ static PARAMS_52: ParamNames<5> = ParamNames([
     c"Mix".as_ptr(),
 ]);
 
-pub const NANO_FX_CATALOG_COUNT: usize = 53;
+static PARAMS_53: ParamNames<3> = ParamNames([c"Dry".as_ptr(), c"Oct".as_ptr(), c"Sub".as_ptr()]);
+
+static PARAMS_54: ParamNames<7> = ParamNames([
+    c"Mix".as_ptr(),
+    c"Pedal".as_ptr(),
+    c"Heel Pitch 1".as_ptr(),
+    c"Toe Pitch 1".as_ptr(),
+    c"Heel Pitch 2".as_ptr(),
+    c"Toe Pitch 2".as_ptr(),
+    c"Blend".as_ptr(),
+]);
+
+static PARAMS_55: ParamNames<4> = ParamNames([
+    c"Output".as_ptr(),
+    c"Dry".as_ptr(),
+    c"Oct 1".as_ptr(),
+    c"Oct 2".as_ptr(),
+]);
+
+static PARAMS_56: ParamNames<12> = ParamNames([
+    c"Mix".as_ptr(),
+    c"Decay".as_ptr(),
+    c"Pre Delay".as_ptr(),
+    c"High Pass".as_ptr(),
+    c"Low Pass".as_ptr(),
+    c"Extra E.R. (Off/On)".as_ptr(),
+    c"E.R. Length".as_ptr(),
+    c"Diffusion".as_ptr(),
+    c"Bass".as_ptr(),
+    c"Treble".as_ptr(),
+    c"Ducking".as_ptr(),
+    c"Modulation".as_ptr(),
+]);
+
+static PARAMS_57: ParamNames<11> = ParamNames([
+    c"Mix".as_ptr(),
+    c"Decay".as_ptr(),
+    c"Brightness".as_ptr(),
+    c"Feedback".as_ptr(),
+    c"Pitch".as_ptr(),
+    c"Pre Delay".as_ptr(),
+    c"Damping".as_ptr(),
+    c"High Pass".as_ptr(),
+    c"Rand Pitch".as_ptr(),
+    c"Mod Speed".as_ptr(),
+    c"Mod Depth".as_ptr(),
+]);
+
+pub const NANO_FX_CATALOG_COUNT: usize = 58;
 
 pub static NANO_FX_CATALOG: [NanoFxModelDef; NANO_FX_CATALOG_COUNT] = [
     NanoFxModelDef {
@@ -867,6 +915,41 @@ pub static NANO_FX_CATALOG: [NanoFxModelDef; NANO_FX_CATALOG_COUNT] = [
         id: [0xC0, 0x3E, 0x00],
         param_count: 5,
         param_names: PARAMS_52.as_ptr(),
+    },
+    NanoFxModelDef {
+        name: c"Poly Octaver".as_ptr(),
+        id_len: 3,
+        id: [0xD4, 0x8C, 0x01],
+        param_count: 3,
+        param_names: PARAMS_53.as_ptr(),
+    },
+    NanoFxModelDef {
+        name: c"Wham".as_ptr(),
+        id_len: 3,
+        id: [0xD6, 0x8C, 0x01],
+        param_count: 7,
+        param_names: PARAMS_54.as_ptr(),
+    },
+    NanoFxModelDef {
+        name: c"Chief OC2".as_ptr(),
+        id_len: 3,
+        id: [0xDE, 0x8C, 0x01],
+        param_count: 4,
+        param_names: PARAMS_55.as_ptr(),
+    },
+    NanoFxModelDef {
+        name: c"Blossom (ST)".as_ptr(),
+        id_len: 2,
+        id: [0xDE, 0x3E, 0x00],
+        param_count: 12,
+        param_names: PARAMS_56.as_ptr(),
+    },
+    NanoFxModelDef {
+        name: c"Shimmer".as_ptr(),
+        id_len: 2,
+        id: [0xCA, 0x3E, 0x00],
+        param_count: 11,
+        param_names: PARAMS_57.as_ptr(),
     },
 ];
 

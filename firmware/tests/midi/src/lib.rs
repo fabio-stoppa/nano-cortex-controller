@@ -1304,6 +1304,58 @@ mod tests {
     }
 
     #[test]
+    fn nanos_230_fx_knobs_send_every_parameter_to_its_wire_index() {
+        let _guard = LOCK.lock().unwrap();
+        reset();
+        for name in [
+            "Poly Octaver",
+            "Wham",
+            "Chief OC2",
+            "Blossom (ST)",
+            "Shimmer",
+        ] {
+            let model = fx::models::find_model_by_name(name).unwrap();
+            for block in 0..5 {
+                if !fx::models::is_model_allowed(block, model) {
+                    continue;
+                }
+                fx::SNAPSHOT.with(|state| {
+                    let mut state = state.borrow_mut();
+                    state.valid = true;
+                    state.blocks[block as usize].valid = true;
+                    state.blocks[block as usize].model = model;
+                    state.blocks[block as usize].param_count = model.param_count;
+                });
+                for wire in 0..usize::from(model.param_count) {
+                    let action = index(&format!(
+                        "{} knob {}",
+                        fx::models::block_label(block),
+                        wire + 1
+                    ));
+                    for value in [0, 64, 127] {
+                        let Some(link::Cmd::Param(parameter)) = midi::command(action, value, true)
+                        else {
+                            panic!("Missing {name} parameter {wire}");
+                        };
+                        assert_eq!(u32::from(parameter.block), block);
+                        assert_eq!(usize::from(parameter.wire), wire);
+                        assert_eq!(
+                            parameter.norm,
+                            fx::params::normalize_for_model(model, wire, f32::from(value) / 127.0)
+                        );
+                    }
+                }
+                let missing = index(&format!(
+                    "{} knob {}",
+                    fx::models::block_label(block),
+                    model.param_count + 1
+                ));
+                assert!(midi::command(missing, 127, true).is_none());
+            }
+        }
+    }
+
+    #[test]
     fn clear_all_cancels_learning_and_pending_midi_but_not_other_commands() {
         let _guard = LOCK.lock().unwrap();
         reset();

@@ -280,6 +280,46 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nanos_230_effects_validate_and_survive_scene_backup() {
+        for name in [
+            "Poly Octaver",
+            "Wham",
+            "Chief OC2",
+            "Blossom (ST)",
+            "Shimmer",
+        ] {
+            let model = crate::fx::models::find_model_by_name(name).unwrap();
+            let mut original = snapshot();
+            let block = if crate::fx::models::is_reverb_model(model) {
+                4
+            } else {
+                0
+            };
+            original.effects[block] = Effect {
+                model: model.id_bytes().to_vec(),
+                enabled: true,
+                parameters: alloc::vec![0.5; usize::from(model.param_count)],
+            };
+            original.validate().unwrap();
+            let json = serde_json::to_string(&original).unwrap();
+            let decoded: Snapshot = serde_json::from_str(&json).unwrap();
+            decoded.validate().unwrap();
+            assert_eq!(decoded.effects[block].model, model.id_bytes());
+            assert_eq!(
+                decoded.effects[block].parameters,
+                original.effects[block].parameters
+            );
+            assert!(decoded.effects[block]
+                .validate(if block == 0 { 4 } else { 0 })
+                .is_err());
+            let mut incomplete = decoded.effects[block].clone();
+            incomplete.parameters.pop();
+            assert!(incomplete.validate(block).is_err());
+        }
+    }
+
     fn snapshot() -> Snapshot {
         Snapshot {
             amp: [255; 5],

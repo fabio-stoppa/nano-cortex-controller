@@ -597,6 +597,69 @@ mod tests {
     }
 
     #[test]
+    fn nanos_230_scenes_restore_all_parameters_after_model_loading() {
+        for name in [
+            "Poly Octaver",
+            "Wham",
+            "Chief OC2",
+            "Blossom (ST)",
+            "Shimmer",
+        ] {
+            let model = crate::fx::models::find_model_by_name(name).unwrap();
+            let index = if crate::fx::models::is_reverb_model(model) {
+                4
+            } else {
+                0
+            };
+            let mut view = fixture();
+            let block = &mut view.effects.blocks[index];
+            block.model = model;
+            block.model_id_raw[..model.id_bytes().len()].copy_from_slice(model.id_bytes());
+            block.model_id_len = model.id_len;
+            block.param_count = model.param_count;
+            block.params_loaded = true;
+            for (wire, param) in block
+                .params
+                .iter_mut()
+                .take(usize::from(model.param_count))
+                .enumerate()
+            {
+                param.normalized = crate::fx::params::normalize_for_model(model, wire, 0.4);
+                param.valid = true;
+            }
+            let snapshot = Snapshot::capture(&view).unwrap();
+            let expected = snapshot.effects[index].parameters.clone();
+            let loaded = view.effects.blocks[index];
+            view.effects.blocks[index] = NanoFxBlock::zeroed();
+            let mut plan = Plan::scene(snapshot, &view, 0, false).unwrap();
+            assert!(matches!(
+                plan.poll(&view, 1),
+                Progress::Write(Cmd::FxModelId { block, id })
+                    if usize::from(block) == index && id == model.id_bytes()
+            ));
+            assert!(matches!(plan.poll(&view, 2), Progress::Waiting));
+            view.effects.blocks[index] = loaded;
+            let writes = writes_before_readback(&mut plan, &view);
+            let parameters: Vec<_> = writes
+                .iter()
+                .filter_map(|command| {
+                    if let Cmd::Param(parameter) = command {
+                        Some(parameter)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(parameters.len(), expected.len(), "{name}");
+            for (wire, parameter) in parameters.iter().enumerate() {
+                assert_eq!(usize::from(parameter.block), index);
+                assert_eq!(usize::from(parameter.wire), wire);
+                assert_eq!(parameter.norm, expected[wire]);
+            }
+        }
+    }
+
+    #[test]
     fn verification_needs_fresh_cab_but_not_another_preset_dump() {
         let mut view = fixture();
         loaded_cab(&mut view, 1, "Saved IR");

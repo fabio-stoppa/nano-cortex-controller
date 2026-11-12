@@ -160,6 +160,8 @@ pub fn is_reverb_model(model: &NanoFxModelDef) -> bool {
         || name.contains("Cave")
         || name.contains("Ambience")
         || name.contains("Modulated")
+        || name.contains("Blossom")
+        || name.contains("Shimmer")
 }
 
 pub fn is_delay_model(model: &NanoFxModelDef) -> bool {
@@ -199,7 +201,7 @@ fn category_from_catalog_index(idx: usize) -> u32 {
     if (23..=26).contains(&idx) || (29..=32).contains(&idx) {
         return NANO_FX_CAT_COMPRESSOR;
     }
-    if (27..=28).contains(&idx) {
+    if (27..=28).contains(&idx) || (53..=55).contains(&idx) {
         return NANO_FX_CAT_PITCH;
     }
     if (33..=40).contains(&idx) {
@@ -208,7 +210,7 @@ fn category_from_catalog_index(idx: usize) -> u32 {
     if (41..=46).contains(&idx) {
         return NANO_FX_CAT_DELAY;
     }
-    if (47..=52).contains(&idx) {
+    if (47..=52).contains(&idx) || (56..=57).contains(&idx) {
         return NANO_FX_CAT_REVERB;
     }
     NANO_FX_CAT_NONE
@@ -305,7 +307,7 @@ pub fn block_model_text(block: &NanoFxBlock) -> String {
 
 /* -------------------------------------------------------- chain acronym */
 
-const CHAIN_ABBR: [(&str, &str); 53] = [
+const CHAIN_ABBR: [(&str, &str); 58] = [
     ("Chief BD2", "BD2"),
     ("Chief OD1", "OD1"),
     ("Exotic", "EXOTIC"),
@@ -359,6 +361,11 @@ const CHAIN_ABBR: [(&str, &str); 53] = [
     ("Mind Hall", "MINDH"),
     ("Modulated", "MODREV"),
     ("Room", "ROOM"),
+    ("Poly Octaver", "POLYOCT"),
+    ("Wham", "WHAM"),
+    ("Chief OC2", "OC2"),
+    ("Blossom (ST)", "BLOSSOM"),
+    ("Shimmer", "SHIMMER"),
 ];
 
 const SKIP_CHAIN_WORDS: [&str; 12] = [
@@ -537,8 +544,11 @@ fn catalog_index_allowed(block: u32, idx: usize) -> bool {
     if (41..=46).contains(&idx) {
         return block == NANO_FX_POST2;
     }
-    if (47..=52).contains(&idx) {
+    if (47..=52).contains(&idx) || (56..=57).contains(&idx) {
         return block == NANO_FX_POST3;
+    }
+    if (53..=55).contains(&idx) {
+        return block <= NANO_FX_PRE2;
     }
 
     false
@@ -601,7 +611,7 @@ pub fn nano_fx_model_chain_acronym(block: &NanoFxBlock) -> String {
     }
 }
 
-/// Whether catalog entry may be loaded in this FX slot (NanOS 2.0 rules).
+/// Whether catalog entry may be loaded in this FX slot (through NanOS 2.3).
 pub fn nano_fx_is_model_allowed(block: u32, model: &NanoFxModelDef) -> bool {
     is_model_allowed(block, model)
 }
@@ -630,4 +640,75 @@ pub fn nano_fx_get_allowed_model(block: u32, index: usize) -> Option<&'static Na
 /// Extra export kept from the C port for callers that keyed models by id bytes.
 pub fn nano_fx_find_model(id: &[u8]) -> Option<&'static NanoFxModelDef> {
     find_model(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nanos_230_models_have_unique_ids_and_correct_slots() {
+        let cases: [(&str, &[u8], u8, &str, u32); 5] = [
+            (
+                "Poly Octaver",
+                &[0xD4, 0x8C, 0x01],
+                3,
+                "POLYOCT",
+                NANO_FX_CAT_PITCH,
+            ),
+            ("Wham", &[0xD6, 0x8C, 0x01], 7, "WHAM", NANO_FX_CAT_PITCH),
+            (
+                "Chief OC2",
+                &[0xDE, 0x8C, 0x01],
+                4,
+                "OC2",
+                NANO_FX_CAT_PITCH,
+            ),
+            (
+                "Blossom (ST)",
+                &[0xDE, 0x3E],
+                12,
+                "BLOSSOM",
+                NANO_FX_CAT_REVERB,
+            ),
+            ("Shimmer", &[0xCA, 0x3E], 11, "SHIMMER", NANO_FX_CAT_REVERB),
+        ];
+        assert_eq!(catalog().len(), 58);
+        assert_eq!(model_name(&catalog()[52]), "Room");
+        for (offset, (name, id, count, acronym, category)) in cases.iter().enumerate() {
+            let model = find_model(id).unwrap();
+            assert_eq!(model_name(model), *name);
+            assert_eq!(catalog_index(model), Some(53 + offset));
+            assert_eq!(model.param_count, *count);
+            assert_eq!(model_category(model), *category);
+            assert_eq!(is_reverb_model(model), *category == NANO_FX_CAT_REVERB);
+            assert_eq!(chain_abbr_from_name(name, 12).unwrap(), *acronym);
+            for block in 0..NANO_FX_BLOCK_COUNT as u32 {
+                let allowed = if *category == NANO_FX_CAT_PITCH {
+                    block <= NANO_FX_PRE2
+                } else {
+                    block == NANO_FX_POST3
+                };
+                assert_eq!(
+                    is_model_allowed(block, model),
+                    allowed,
+                    "{name}, block {block}"
+                );
+                let in_picker = (0..nano_fx_allowed_model_count(block))
+                    .filter_map(|index| nano_fx_get_allowed_model(block, index))
+                    .any(|entry| ptr::eq(entry, model));
+                assert_eq!(in_picker, allowed, "{name}, block {block}");
+            }
+            assert!(!is_model_allowed(NANO_FX_BLOCK_COUNT as u32, model));
+            for wire in 0..usize::from(*count) {
+                assert!(!param_name(model, wire).is_empty());
+                assert_eq!(param_wire_index(model, wire), wire);
+            }
+        }
+        for (index, model) in catalog().iter().enumerate() {
+            assert!(catalog()[..index]
+                .iter()
+                .all(|other| other.id_bytes() != model.id_bytes()));
+        }
+    }
 }

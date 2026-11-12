@@ -106,6 +106,7 @@ fn model_param_enum_options(model: &str, name: &str) -> Option<&'static [&'stati
         ("Circular Delay", "Tap Preset") => TAP_PRESET,
         ("Dual Reverse Delay", "Feedback Mode") => FEEDBACK_MODE,
         ("Ambience", "Size") => AMBIENCE_SIZE,
+        ("Blossom (ST)", "Extra E.R.") => ON_OFF,
         (
             _,
             "Growl" | "Midboost" | "1 Active" | "2 Active" | "3 Active" | "LFO Active" | "Sync"
@@ -293,6 +294,25 @@ fn param_range_for_model(model: &str, name: &str) -> Range {
     };
 
     match (model, name) {
+        ("Poly Octaver", "Dry" | "Oct" | "Sub")
+        | ("Chief OC2", "Dry" | "Oct 1" | "Oct 2")
+        | ("Wham", "Pedal")
+        | ("Blossom (ST)", "Modulation")
+        | ("Shimmer", "Brightness") => return make(0.0, 100.0, 0.1, "%"),
+        ("Wham", "Blend") | ("Blossom (ST)", "E.R. Length" | "Diffusion" | "Ducking") => {
+            return make(0.0, 100.0, 1.0, "%");
+        }
+        ("Wham", "Heel Pitch 1" | "Toe Pitch 1" | "Heel Pitch 2" | "Toe Pitch 2")
+        | ("Shimmer", "Pitch") => return make(-24.0, 24.0, 1.0, "Sem"),
+        ("Blossom (ST)", "Decay") => return make(0.5, 20.0, 0.01, "s"),
+        ("Blossom (ST)", "Pre Delay") => return make(0.0, 500.0, 1.0, "ms"),
+        ("Blossom (ST)", "High Pass") => return make(30.0, 800.0, 1.0, "Hz"),
+        ("Blossom (ST)", "Low Pass") => return make(1000.0, 20000.0, 1.0, "Hz"),
+        ("Blossom (ST)", "Bass" | "Treble") => return make(-18.0, 6.0, 0.1, "dB"),
+        ("Shimmer", "Decay") => return make(4.0, 20.0, 0.1, "s"),
+        ("Shimmer", "Pre Delay") => return make(1.0, 200.0, 1.0, "ms"),
+        ("Shimmer", "Rand Pitch") => return make(2.0, 33.0, 1.0, "Cent"),
+        ("Shimmer", "Mod Speed") => return make(0.1, 5.0, 0.01, "Hz"),
         ("Utility Gate" | "Envelope Filter" | "Love Meat", "Attack") => {
             return make(1.0, 1000.0, 1.0, "ms");
         }
@@ -441,6 +461,16 @@ fn param_range_for_model(model: &str, name: &str) -> Range {
 
 fn param_unit_for_model(model: &str, name: &str) -> &'static str {
     match (model, name) {
+        ("Wham", "Heel Pitch 1" | "Toe Pitch 1" | "Heel Pitch 2" | "Toe Pitch 2")
+        | ("Shimmer", "Pitch") => "Sem",
+        ("Blossom (ST)" | "Shimmer", "Decay") => "s",
+        ("Blossom (ST)", "Bass" | "Treble") => "dB",
+        ("Shimmer", "Rand Pitch") => "Cent",
+        ("Poly Octaver", "Dry" | "Oct" | "Sub")
+        | ("Chief OC2", "Dry" | "Oct 1" | "Oct 2")
+        | ("Wham", "Pedal" | "Blend")
+        | ("Blossom (ST)", "E.R. Length" | "Ducking" | "Modulation")
+        | ("Shimmer", "Brightness") => "%",
         (
             "Legendary 87 (M)"
             | "Legendary 87 (ST)"
@@ -488,6 +518,32 @@ fn param_unit_for_model(model: &str, name: &str) -> &'static str {
     }
 }
 
+fn param_skew_for_model(model: &str, name: &str) -> f32 {
+    match (model, name) {
+        ("Blossom (ST)", "Decay" | "Pre Delay" | "E.R. Length") => 0.4,
+        ("Blossom (ST)", "High Pass" | "Low Pass") => 0.5,
+        ("Blossom (ST)", "Bass" | "Treble") => 2.375,
+        ("Shimmer", "Decay" | "Pre Delay" | "High Pass" | "Mod Speed") => 0.6,
+        _ => 1.0,
+    }
+}
+
+fn unskew(normalized: f32, skew: f32) -> f32 {
+    if skew == 1.0 {
+        normalized
+    } else {
+        libm::powf(normalized, 1.0 / skew)
+    }
+}
+
+fn skew(normalized: f32, skew: f32) -> f32 {
+    if skew == 1.0 {
+        normalized
+    } else {
+        libm::powf(normalized, skew)
+    }
+}
+
 pub fn normalized_to_display_for_model(
     model: &NanoFxModelDef,
     param_index: usize,
@@ -496,7 +552,8 @@ pub fn normalized_to_display_for_model(
     let name = param_name(model, param_index);
     let range = param_range_for_model(model_name(model), name);
     let snapped = normalize_for_model(model, param_index, normalized);
-    range.min + snapped * (range.max - range.min)
+    let skew = param_skew_for_model(model_name(model), name);
+    range.min + unskew(snapped, skew) * (range.max - range.min)
 }
 
 pub fn normalize_for_model(model: &NanoFxModelDef, param_index: usize, normalized: f32) -> f32 {
@@ -516,10 +573,14 @@ pub fn normalize_for_model(model: &NanoFxModelDef, param_index: usize, normalize
     if range.step <= 0.0 || range.max <= range.min {
         return normalized;
     }
-    let display = range.min + normalized * (range.max - range.min);
+    let curve = param_skew_for_model(model_name, name);
+    let display = range.min + unskew(normalized, curve) * (range.max - range.min);
     let steps = ((display - range.min) / range.step + 0.5) as i32;
     let snapped = range.min + steps as f32 * range.step;
-    clampf((snapped - range.min) / (range.max - range.min), 0.0, 1.0)
+    skew(
+        clampf((snapped - range.min) / (range.max - range.min), 0.0, 1.0),
+        curve,
+    )
 }
 
 pub fn display_to_normalized_for_model(
@@ -532,7 +593,11 @@ pub fn display_to_normalized_for_model(
     if range.max <= range.min {
         return 0.0;
     }
-    let normalized = clampf((display - range.min) / (range.max - range.min), 0.0, 1.0);
+    let curve = param_skew_for_model(model_name(model), name);
+    let normalized = skew(
+        clampf((display - range.min) / (range.max - range.min), 0.0, 1.0),
+        curve,
+    );
     normalize_for_model(model, param_index, normalized)
 }
 
@@ -940,5 +1005,67 @@ mod tests {
         block.params[0].display = 800.0;
         block.params[0].valid = true;
         assert_eq!(format_param(&block, 0), "800 Hz");
+    }
+
+    #[test]
+    fn nanos_230_parameter_ranges_units_and_scaling_round_trip() {
+        use super::super::models::find_model_by_name;
+
+        for name in [
+            "Poly Octaver",
+            "Wham",
+            "Chief OC2",
+            "Blossom (ST)",
+            "Shimmer",
+        ] {
+            let model = find_model_by_name(name).unwrap();
+            for wire in 0..usize::from(model.param_count) {
+                for step in 0..=100 {
+                    let normalized = step as f32 / 100.0;
+                    let snapped = normalize_for_model(model, wire, normalized);
+                    let display = normalized_to_display_for_model(model, wire, normalized);
+                    let round_trip = display_to_normalized_for_model(model, wire, display);
+                    assert!(
+                        (snapped - round_trip).abs() < 0.00001,
+                        "{name}, wire {wire}, {normalized}: {snapped} != {round_trip}"
+                    );
+                    assert!((0.0..=1.0).contains(&snapped));
+                }
+            }
+        }
+
+        let blossom = find_model_by_name("Blossom (ST)").unwrap();
+        let high_pass = display_to_normalized_for_model(blossom, 3, 200.0);
+        assert!((high_pass - 0.46987).abs() < 0.0001);
+        assert!((normalized_to_display_for_model(blossom, 3, high_pass) - 200.0).abs() < 0.001);
+        assert_eq!(normalized_to_display_for_model(blossom, 8, 0.0), -18.0);
+        assert_eq!(normalized_to_display_for_model(blossom, 8, 1.0), 6.0);
+        assert_eq!(
+            model_param_enum_options("Blossom (ST)", "Extra E.R. (Off/On)"),
+            Some(ON_OFF)
+        );
+        assert_eq!(normalize_for_model(blossom, 5, 0.6), 1.0);
+        assert_eq!(normalize_for_model(blossom, 5, 0.4), 0.0);
+
+        let wham = find_model_by_name("Wham").unwrap();
+        for wire in 2..6 {
+            assert_eq!(normalized_to_display_for_model(wham, wire, 0.0), -24.0);
+            assert_eq!(normalized_to_display_for_model(wham, wire, 0.5), 0.0);
+            assert_eq!(normalized_to_display_for_model(wham, wire, 1.0), 24.0);
+        }
+        for (model, parameter, unit) in [
+            ("Poly Octaver", "Dry", "%"),
+            ("Wham", "Pedal", "%"),
+            ("Wham", "Heel Pitch 1", "Sem"),
+            ("Chief OC2", "Output", "dB"),
+            ("Blossom (ST)", "Decay", "s"),
+            ("Blossom (ST)", "Bass", "dB"),
+            ("Blossom (ST)", "Ducking", "%"),
+            ("Shimmer", "Rand Pitch", "Cent"),
+            ("Shimmer", "Pitch", "Sem"),
+            ("Shimmer", "Mod Speed", "Hz"),
+        ] {
+            assert_eq!(param_unit_for_model(model, parameter), unit);
+        }
     }
 }

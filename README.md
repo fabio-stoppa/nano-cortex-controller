@@ -65,6 +65,15 @@ Firmware for the **Waveshare ESP32-S3-Touch-LCD-4.3B**. The protocol and the con
   recovery. A write error warns that a destructive operation may already have
   applied; the controller does not automatically replay it.
 - **Preset, effects, and tuner** — the same behavior as the old ESP-IDF app, driven by Embassy deadlines (`firmware/src/state`, `firmware/src/fx`, `firmware/src/tuner`)
+- **NanOS 2.3.0 effects** — Poly Octaver, Wham, and Chief OC2 in Pre FX 1/2;
+  Blossom (ST) and Shimmer in Post FX 3, with parameter controls, MIDI CC editing,
+  and scene save/recall. These five models require NanOS 2.3.0 or later on the
+  Nano; firmware version is not detected, so they also appear in the picker on
+  older devices. Existing effects retain their IDs and behavior.
+  The new effects use model-specific ranges, units, and nonlinear parameter
+  scaling from the [community editor's NanOS 2.3 metadata](https://github.com/DrD85/nano-cortex-editor/blob/43c0db505db1b08cd5d89f8e9da68225ff92257e/index.html#L2446).
+  NanOS 2.3.0's built-in metronome is not controlled by this firmware: its
+  Bluetooth commands have not been confirmed. Use Cortex Cloud for that feature.
 - **800×480 LCD** — Slint UI drawn into the RGB panel (`firmware/src/ui.rs`)
 - **Category-colored FX tabs** — guitar OD orange, bass OD amber, compressor yellow, pitch magenta, filter lime, wah green, utility pink, modulation purple, delay cyan, and reverb blue. Colors match the saturation and brightness of the blue and amp-red accents in both orientations; bypassed FX retain black backgrounds with category-colored labels.
 - Popups (Settings, preset/model/capture/cab lists, rename keyboard) fill the screen with the main gray background, and the screen behind them is hidden instead of redrawn. Close them with their close button.
