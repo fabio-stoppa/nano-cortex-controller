@@ -304,13 +304,12 @@ export component Preview inherits AppWindow {
     tempo-tapped => { root.tap-mode = !root.tap-mode; }
     tools-opened => { root.popup = root.tools-section == 2 ? "midi" : root.tools-section == 1 ? "pedals" : "settings"; }
     eq-trim-enabled: true;
-    eq-trim-preset: 1;
     eq-trim-adjusted(index, delta) => {
-        root.autosave-status = "Preview only - EQ trims are not sent to the Nano.";
+        root.autosave-status = "";
     }
     autosave-toggled(enabled) => {
         root.autosave-enabled = enabled;
-        root.autosave-status = enabled ? "Preview only - no automatic saves are sent to the Nano." : "";
+        root.autosave-status = "";
     }
     midi-clear-all => {
         root.demo-midi-controls[0].assigned = "";

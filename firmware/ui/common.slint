@@ -45,6 +45,7 @@ export component ParamCell inherits Rectangle {
     in property <bool> value-first: true;
     in property <length> label-font-size: 17px;
     callback changed(float);
+    callback editing-finished();
     callback tapped();
     callback double-tapped();
     height: 100px;
@@ -135,6 +136,9 @@ export component ParamCell inherits Rectangle {
                 root.changed(clamp((self.mouse-x - 12px) / max(self.width - 24px, 1px), 0, 1));
             }
             if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                if event.kind == PointerEventKind.up && root.pressed {
+                    root.editing-finished();
+                }
                 root.pressed = false;
                 root.armed = false;
             }

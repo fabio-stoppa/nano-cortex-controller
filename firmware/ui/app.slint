@@ -46,8 +46,8 @@ export component AppWindow inherits Window {
     in-out property <bool> save-dirty: false;
     in-out property <bool> autosave-enabled: false;
     in-out property <[string]> eq-trim-values: ["+0.0", "+0.0", "+0.0"];
+    in-out property <[float]> eq-trim-amounts: [0.5, 0.5, 0.5];
     in-out property <bool> eq-trim-enabled: false;
-    in-out property <int> eq-trim-preset: 0;
     in-out property <string> autosave-status: "";
     callback autosave-toggled(bool);
     callback eq-trim-adjusted(int, int);
@@ -711,13 +711,9 @@ export component AppWindow inherits Window {
     if root.settings-open: ToolsPanel {
         autosave-enabled: root.autosave-enabled;
         remember-last-mode: root.remember-last-mode;
-        eq-trim-values: root.eq-trim-values;
-        eq-trim-enabled: root.eq-trim-enabled;
-        eq-trim-preset: root.eq-trim-preset;
         autosave-status: root.autosave-status;
         autosave-toggled(enabled) => { root.autosave-toggled(enabled); }
         remember-last-mode-toggled(enabled) => { root.remember-last-mode-toggled(enabled); }
-        eq-trim-adjusted(index, delta) => { root.eq-trim-adjusted(index, delta); }
         visible: !root.kbd-open;
         jack-mode: root.tools-jack-mode;
         jack-expression: root.tools-jack-expression;
@@ -866,6 +862,11 @@ export component AppWindow inherits Window {
         portrait: root.portrait;
         connected: !root.connecting;
         busy: root.scene-library-busy;
+        eq-trim-values: root.eq-trim-values;
+        eq-trim-amounts: root.eq-trim-amounts;
+        eq-trim-enabled: root.eq-trim-enabled;
+        eq-trim-notice: root.scene-library-notice;
+        eq-trim-adjusted(index, delta) => { root.eq-trim-adjusted(index, delta); }
         preset: root.preset;
         bpm-text: root.bpm-text;
         bpm-value: root.tempo-bpm-value;

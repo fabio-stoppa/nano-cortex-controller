@@ -27,6 +27,7 @@ struct State {
     load_error: Option<&'static str>,
     version: u32,
     notice: &'static str,
+    notice_is_error: bool,
     scene: Option<usize>,
     scene_dirty: bool,
     preset: u8,
@@ -45,6 +46,7 @@ static STATE: Store = Store(RefCell::new(State {
     load_error: None,
     version: 1,
     notice: "",
+    notice_is_error: false,
     scene: None,
     scene_dirty: false,
     preset: 0,
@@ -95,6 +97,7 @@ pub fn report(notice: &'static str) {
     log::warn!("Scenes: {notice}");
     with(|state| {
         state.notice = notice;
+        state.notice_is_error = true;
         state.version = state.version.wrapping_add(1);
     });
 }
@@ -110,6 +113,7 @@ fn install(config: Config) {
         state.autosave_edit = None;
         state.applied_eq = None;
         state.notice = "Scenes saved";
+        state.notice_is_error = false;
         state.version = state.version.wrapping_add(1);
     });
 }
@@ -143,6 +147,7 @@ fn edit(f: impl FnOnce(&mut Config) -> Result<(), &'static str>) -> Result<(), &
     with(|state| {
         state.config = Some(changed);
         state.notice = "Scenes saved";
+        state.notice_is_error = false;
         state.version = state.version.wrapping_add(1);
     });
     Ok(())
@@ -227,6 +232,7 @@ pub fn set_eq_trim(trim: [i16; 3]) -> Result<(), &'static str> {
             started_us,
         });
         state.notice = "Applying EQ trim and verifying...";
+        state.notice_is_error = false;
         state.version = state.version.wrapping_add(1);
     });
     crate::link::COMMAND_READY.signal(());
@@ -235,6 +241,15 @@ pub fn set_eq_trim(trim: [i16; 3]) -> Result<(), &'static str> {
 
 pub fn notice() -> &'static str {
     with(|state| state.notice)
+}
+pub fn error_notice() -> &'static str {
+    with(|state| {
+        if state.notice_is_error {
+            state.notice
+        } else {
+            ""
+        }
+    })
 }
 pub fn version() -> u32 {
     with(|state| state.version)
@@ -466,6 +481,7 @@ pub fn recall_scene(index: usize) -> Result<(), &'static str> {
         state.scene = None;
         state.scene_dirty = false;
         state.notice = "Recalling scene and verifying...";
+        state.notice_is_error = false;
         state.version = state.version.wrapping_add(1);
     });
     Ok(())
@@ -497,6 +513,7 @@ pub fn poll() -> Option<crate::link::Cmd> {
                 state.scene = pending.index;
                 state.scene_dirty = pending.dirty;
                 state.notice = "Recall verified";
+                state.notice_is_error = false;
                 state.version = state.version.wrapping_add(1);
             });
             None

@@ -255,9 +255,10 @@ bypass states. Capture and CAB/IR selections load before their saved controls.
 The saved CAB/IR name must identify a unique entry in the connected Nano library.
 Expression assignments, tempo and global USB/mute settings are not scene data.
 Master Level is always left untouched during scene recall; use each scene's capture
-volume to balance clean and high-gain sounds. **Settings → General → Preset EQ trim**
-provides shared Bass/Mid/Treble offsets for the current Nano preset, in 0.1 steps
-from -10 to +10. Each scene keeps its own EQ: recall adds the preset's offsets and
+volume to balance clean and high-gain sounds. **Gig view** keeps Bass/Mid/Treble trim
+controls always visible for the current Nano preset, with shared offsets in 0.1 steps
+from -10 to +10. These use the same sliders as Edit mode, centred at zero; changes
+apply on release. Double-tap a slider to zero it. Each scene keeps its own EQ: recall adds the preset's offsets and
 limits the result to the knob range. Reset clears all three offsets. Trims apply
 immediately, use verified readback, and are saved separately in `scenes.json`, including
 USB backups. Normal amp knobs still edit the scene, not its shared trims. Saving or

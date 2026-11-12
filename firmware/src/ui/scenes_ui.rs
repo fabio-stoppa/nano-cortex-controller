@@ -26,7 +26,7 @@ pub(super) fn refresh(app: &AppWindow, force: bool) {
     }
     SHOWN.store(version, Ordering::Relaxed);
     app.set_scene_library_notice(crate::scenes::notice().into());
-    app.set_autosave_status(crate::scenes::notice().into());
+    app.set_autosave_status(crate::scenes::error_notice().into());
     app.set_scene_library_busy(crate::scenes::busy());
     app.set_scene_dirty(crate::scenes::scene_dirty());
     let names = crate::state::nano_state_preset_names();
@@ -37,11 +37,18 @@ pub(super) fn refresh(app: &AppWindow, force: bool) {
         .map_or("", String::as_str);
     app.set_scene_title(format!("{scene_preset}: {name} scenes").into());
     let preset = crate::state::nano_state_preset_slot();
-    app.set_eq_trim_preset(i32::from(preset));
     app.set_eq_trim_enabled(
         crate::link::connected() && (1..=64).contains(&preset) && !crate::scenes::busy(),
     );
     let trim = crate::scenes::eq_trim(preset);
+    if let Some(model) = changed_model(
+        app.get_eq_trim_amounts(),
+        trim.iter()
+            .map(|value| (f32::from(*value) + 100.0) / 200.0)
+            .collect(),
+    ) {
+        app.set_eq_trim_amounts(model);
+    }
     if let Some(model) = changed_model(
         app.get_eq_trim_values(),
         trim.iter()

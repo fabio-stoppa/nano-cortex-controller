@@ -1,6 +1,6 @@
 import {
     Radius, Surface, MenuMetrics, ChainRail, HeaderButton, ScrollFade, VCenter,
-    PopupHeader, TempoReadout,
+    PopupHeader, TempoReadout, ParamCell,
 } from "common.slint";
 
 export component StatusLine inherits Rectangle {
@@ -225,6 +225,11 @@ export component GigPanel inherits Rectangle {
     in property <bool> portrait;
     in property <bool> connected;
     in property <bool> busy;
+    in property <[string]> eq-trim-values;
+    in property <[float]> eq-trim-amounts;
+    in property <bool> eq-trim-enabled;
+    in property <string> eq-trim-notice;
+    callback eq-trim-adjusted(int, int);
     in property <string> preset;
     in property <string> bpm-text;
     in property <int> bpm-value;
@@ -277,6 +282,42 @@ export component GigPanel inherits Rectangle {
                 enabled: root.connected && root.scene-assigned[index];
                 tapped => { root.scene-recall(index); }
             }
+        }
+        HorizontalLayout {
+            height: 100px;
+            spacing: 8px;
+            for label[index] in ["Bass trim", "Mid trim", "Treble trim"]: ParamCell {
+                property <float> saved-amount: root.eq-trim-amounts[index];
+                property <float> draft: self.saved-amount;
+                changed saved-amount => { self.draft = self.saved-amount; }
+                property <int> tenths: round(self.draft * 200 - 100);
+                slider: root.eq-trim-enabled;
+                name: label;
+                value: (self.tenths >= 0 ? "+" : "") + self.tenths / 10;
+                amount: self.draft;
+                changed(v) => { self.draft = v; }
+                editing-finished => {
+                    root.eq-trim-adjusted(index, self.tenths);
+                    self.draft = self.saved-amount;
+                }
+                double-tapped => { root.eq-trim-adjusted(index, 0); }
+            }
+            VCenter {
+                width: 72px;
+                horizontal-stretch: 0;
+                HeaderButton {
+                    label: "Reset";
+                    enabled: root.eq-trim-enabled;
+                    tapped => { root.eq-trim-adjusted(3, 0); }
+                }
+            }
+        }
+        Text {
+            height: 20px;
+            text: root.eq-trim-notice;
+            color: #e0e0e0;
+            font-size: 16px;
+            overflow: elide;
         }
         ChainRail {
             height: root.portrait ? 88px : 60px;

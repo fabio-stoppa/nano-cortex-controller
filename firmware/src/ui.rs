@@ -174,15 +174,14 @@ fn ensure() {
     });
     app.on_eq_trim_adjusted({
         let weak = app.as_weak();
-        move |index, delta| {
+        move |index, value| {
             let Some(app) = weak.upgrade() else {
                 return;
             };
             let mut trim = crate::scenes::eq_trim(crate::state::nano_state_preset_slot());
             match index {
-                0..=2 if delta == -1 || delta == 1 => {
-                    let value = &mut trim[index as usize];
-                    *value = (*value + delta as i16).clamp(-100, 100);
+                0..=2 if (-100..=100).contains(&value) => {
+                    trim[index as usize] = value as i16;
                 }
                 3 => trim = [0; 3],
                 _ => {
@@ -1188,7 +1187,8 @@ pub fn refresh_midi() {
     }
     if let Some(ui) = state().as_ref() {
         if ui.app.get_autosave_enabled() {
-            ui.app.set_autosave_status(crate::scenes::notice().into());
+            ui.app
+                .set_autosave_status(crate::scenes::error_notice().into());
         }
     }
     crate::midi::persist();
