@@ -148,6 +148,7 @@ fn ensure() {
     crate::scenes::load();
     let autosave = crate::settings::load_autosave();
     app.set_autosave_enabled(autosave);
+    app.set_autosave_preset_enabled(crate::settings::load_autosave_preset());
     crate::scenes::set_autosave(autosave);
     app.on_remember_last_mode_toggled({
         let weak = app.as_weak();
@@ -214,6 +215,18 @@ fn ensure() {
             }
         }
     });
+    app.on_autosave_preset_toggled({
+        let weak = app.as_weak();
+        move |enabled| {
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
+            match crate::settings::save_autosave_preset(enabled) {
+                Ok(()) => app.set_autosave_preset_enabled(enabled),
+                Err(error) => crate::scenes::report(error),
+            }
+        }
+    });
     scenes_ui::register(&app);
     let weak = app.as_weak();
     app.on_chain_tapped({
@@ -235,6 +248,9 @@ fn ensure() {
                     paint_fx_page(ui);
                     ui.window.request_redraw();
                 }
+            }
+            if let Some(ui) = state().as_mut() {
+                publish_expression(ui);
             }
         }
     });
@@ -393,6 +409,7 @@ fn ensure() {
                 Ok(()) => {
                     app.set_layout_mode(0);
                     app.set_autosave_enabled(false);
+                    app.set_autosave_preset_enabled(false);
                     app.set_remember_last_mode(false);
                     app.set_gig_open(false);
                     crate::scenes::set_autosave(false);
@@ -665,23 +682,22 @@ fn ensure() {
     app.on_retry_now(move || crate::ble::retry_now());
     app.on_library_tapped(move || crate::link::push_cmd(Cmd::Library));
     app.on_param_changed(move |cell, amount| send_fx_param(cell, amount));
-    app.on_param_reset(move |cell| {
-        let amount = state().as_ref().and_then(|ui| {
-            let block = ui.fx.blocks.get(fx_block_for_chain(ui.app.get_chain())?)?;
-            if !ui.fx_valid || cell < 0 || cell as usize >= usize::from(block.param_count) {
-                return None;
+    app.on_param_double_tapped(reset_fx_param);
+    app.on_param_expression_tapped(move |cell| {
+        let target = match fx_block_for_chain(state().as_ref().map_or(-1, |ui| ui.app.get_chain())) {
+            Some(0) => ExpRangeTarget::Pre1Amount,
+            Some(1) => ExpRangeTarget::Pre2Amount,
+            Some(2) => ExpRangeTarget::Post1Amount,
+            Some(3) => ExpRangeTarget::Post2Amount,
+            Some(4) => ExpRangeTarget::Post3Amount,
+            _ => {
+                crate::scenes::report("Select an effect before assigning the pedal");
+                return;
             }
-            let model = unsafe { block.model.as_ref() }?;
-            let wire = crate::fx::nano_fx_param_wire_index(model, cell as usize);
-            (wire < usize::from(block.param_count))
-                .then(|| crate::fx::params::neutral_for_model(model, wire))
-        });
-        if let Some(amount) = amount {
-            send_fx_param(cell, amount);
-        } else {
-            crate::scenes::report("Wait for the FX parameter to load before resetting");
-        }
+        };
+        open_expression_menu(target, cell, true);
     });
+    app.on_param_reset(reset_fx_param);
     app.on_layout_tapped({
         let weak = weak.clone();
         move |mode| {
@@ -693,6 +709,29 @@ fn ensure() {
     });
     app.on_slider_moved(move |id, amount| {
         send_slider(id, amount);
+    });
+    app.on_slider_double_tapped(move |id| {
+        let amount = match id {
+            6 => 0.0,
+            0 | 2..=5 => 0.5,
+            _ => return,
+        };
+        send_slider(id, amount);
+    });
+    app.on_slider_expression_tapped(move |id| {
+        let target = match id {
+            0 => ExpRangeTarget::Gain,
+            2 => ExpRangeTarget::Bass,
+            3 => ExpRangeTarget::Mid,
+            4 => ExpRangeTarget::Treble,
+            5 => ExpRangeTarget::CaptureVolume,
+            6 => ExpRangeTarget::Gate,
+            _ => return,
+        };
+        open_expression_menu(target, id, false);
+    });
+    app.on_expression_assignment_destination(move |destination| {
+        assign_expression_range(destination);
     });
     app.on_cab_slider_moved(move |id, amount| {
         let Some(which) = (match id {
@@ -1178,10 +1217,11 @@ pub fn usb_storage_status(message: &str, finished: bool) {
 
 pub fn export_preferences_json() -> Result<alloc::string::String, &'static str> {
     let ui = state().as_ref().ok_or("Controller UI is not initialized")?;
-    crate::settings::preferences::Preferences::new_with_remember_mode(
+    crate::settings::preferences::Preferences::new_with_preferences(
         ui.app.get_layout_mode(),
         ui.app.get_autosave_enabled(),
         ui.app.get_remember_last_mode(),
+        ui.app.get_autosave_preset_enabled(),
     )?
     .encode()
 }
@@ -1719,6 +1759,47 @@ fn publish_expression(ui: &mut State) {
         (ExpBypassTarget::Post3, "Post FX 3"),
         (ExpBypassTarget::Gate, "Gate"),
     ];
+    let assigned = |target| {
+        ui.expression
+            .ranges
+            .iter()
+            .any(|(candidate, _)| *candidate == target)
+    };
+    ui.app.set_amp_expression_assigned(
+        slint::ModelRc::new(slint::VecModel::from(alloc::vec![
+            assigned(ExpRangeTarget::Gain),
+            false,
+            assigned(ExpRangeTarget::Bass),
+            assigned(ExpRangeTarget::Mid),
+            assigned(ExpRangeTarget::Treble),
+            assigned(ExpRangeTarget::CaptureVolume),
+            assigned(ExpRangeTarget::Gate),
+        ])),
+    );
+    let block_assigned = match fx_block_for_chain(ui.app.get_chain()) {
+        Some(0) => assigned(ExpRangeTarget::Pre1Amount),
+        Some(1) => assigned(ExpRangeTarget::Pre2Amount),
+        Some(2) => assigned(ExpRangeTarget::Post1Amount),
+        Some(3) => assigned(ExpRangeTarget::Post2Amount),
+        Some(4) => assigned(ExpRangeTarget::Post3Amount),
+        _ => false,
+    };
+    let mut fx_cells = alloc::vec![false; crate::fx::types::NANO_FX_MAX_PARAMS];
+    if block_assigned {
+        if let Some(index) = fx_amount_cell(ui) {
+            fx_cells[index] = true;
+        }
+    }
+    ui.app.set_fx_expression_assigned(
+        slint::ModelRc::new(slint::VecModel::from(fx_cells)),
+    );
+    let mut eligible = alloc::vec![false; crate::fx::types::NANO_FX_MAX_PARAMS];
+    if let Some(index) = fx_amount_cell(ui) {
+        eligible[index] = true;
+    }
+    ui.app.set_fx_expression_eligible(
+        slint::ModelRc::new(slint::VecModel::from(eligible)),
+    );
     let ranges = RANGES
         .iter()
         .map(|(target, name)| {
@@ -1827,6 +1908,7 @@ fn edit_expression_range(target: i32, action: i32, delta: i32) {
     if ui.expression_slot == 0 {
         return;
     }
+
     let ranges = &mut ui.expression.ranges;
     if action == 0 {
         if let Some(index) = ranges
@@ -1857,6 +1939,163 @@ fn edit_expression_range(target: i32, action: i32, delta: i32) {
     }
     publish_expression(ui);
     ui.window.request_redraw();
+}
+
+fn open_expression_menu(target: ExpRangeTarget, control: i32, fx: bool) {
+    let Some(ui) = state().as_mut() else {
+        return;
+    };
+    if ui.expression_slot == 0 {
+        crate::scenes::report("Wait for expression assignments to load");
+        return;
+    }
+
+    ui.app.set_expression_menu_target(target as i32);
+    ui.app.set_expression_menu_control(control);
+    ui.app.set_expression_menu_fx(fx);
+    let preset_assigned = ui
+        .expression
+        .ranges
+        .iter()
+        .any(|(candidate, _)| *candidate == target);
+    ui.app.set_expression_menu_scene_action(
+        if crate::scenes::selected_expression_has(target) {
+            "Remove from Scene".into()
+        } else {
+            "Add to Scene".into()
+        },
+    );
+    ui.app.set_expression_menu_preset_action(
+        if preset_assigned {
+            "Remove from Preset".into()
+        } else {
+            "Add to Preset".into()
+        },
+    );
+    ui.app
+        .set_expression_menu_name(alloc::format!("Expression: {}", expression_range_name(target)).into());
+    ui.app.set_expression_menu_open(true);
+}
+
+fn fx_amount_cell(ui: &State) -> Option<usize> {
+    let block = ui.fx.blocks.get(fx_block_for_chain(ui.app.get_chain())?)?;
+    let model = unsafe { block.model.as_ref() }?;
+    (0..usize::from(block.param_count)).find(|&display| {
+        let wire = crate::fx::nano_fx_param_wire_index(model, display);
+        wire < usize::from(block.param_count)
+            && matches!(crate::fx::models::param_name(model, wire), "Mix" | "Amount")
+    })
+}
+
+fn expression_range_name(target: ExpRangeTarget) -> &'static str {
+    match target {
+        ExpRangeTarget::Gain => "Gain",
+        ExpRangeTarget::Bass => "Bass",
+        ExpRangeTarget::Mid => "Mid",
+        ExpRangeTarget::Treble => "Treble",
+        ExpRangeTarget::Pre1Amount => "Pre FX 1 Amount",
+        ExpRangeTarget::Pre2Amount => "Pre FX 2 Amount",
+        ExpRangeTarget::Post1Amount => "Post FX 1 Amount",
+        ExpRangeTarget::Post2Amount => "Post FX 2 Amount",
+        ExpRangeTarget::Post3Amount => "Post FX 3 Amount",
+        ExpRangeTarget::CaptureVolume => "Capture Level",
+        ExpRangeTarget::Gate => "Gate Amount",
+    }
+}
+
+fn assign_expression_range(destination: i32) {
+    let Some((control, fx)) = state().as_ref().map(|ui| (
+        ui.app.get_expression_menu_control(),
+        ui.app.get_expression_menu_fx(),
+    )) else {
+        return;
+    };
+    if destination == 2 {
+        if fx {
+            reset_fx_param(control);
+        } else {
+            let amount = match control {
+                6 => 0.0,
+                0 | 2..=5 => 0.5,
+                _ => return,
+            };
+            send_slider(control, amount);
+        }
+        return;
+    }
+    if fx && state().as_ref().and_then(fx_amount_cell) != Some(control as usize) {
+        crate::scenes::report("This FX block can only assign its Mix/Amount parameter");
+        return;
+    }
+    let Some((target, slot, mut assignments)) = state().as_ref().and_then(|ui| {
+        let target = range_target(ui.app.get_expression_menu_target())?;
+        (ui.expression_slot != 0).then(|| (target, ui.expression_slot, ui.expression.clone()))
+    }) else {
+        crate::scenes::report("Wait for expression assignments to load");
+        return;
+    };
+    if destination == 0 && crate::scenes::selected_expression_has(target) {
+        if let Err(error) = crate::scenes::remove_selected_expression(target) {
+            crate::scenes::report(error);
+        }
+        return;
+    }
+    let preset_assigned = assignments
+        .ranges
+        .iter()
+        .any(|(candidate, _)| *candidate == target);
+    if destination == 1 && preset_assigned {
+        assignments.ranges.retain(|(candidate, _)| *candidate != target);
+    } else if !assignments
+        .ranges
+        .iter()
+        .any(|(candidate, _)| *candidate == target)
+    {
+        assignments.ranges.push((
+            target,
+            ExpRange {
+                inverted: false,
+                min: 0,
+                max: u8::MAX,
+            },
+        ));
+    }
+    if destination == 0 {
+        if let Err(error) = crate::scenes::save_selected_expression(&assignments) {
+            crate::scenes::report(error);
+            return;
+        }
+    } else if destination != 1 {
+        return;
+    }
+
+    if let Some(ui) = state().as_mut() {
+        ui.expression = assignments.clone();
+        publish_expression(ui);
+    }
+    crate::state::nano_state_preview_expression_assignments(slot, assignments.clone());
+    crate::link::push_cmd(Cmd::ExpressionSave { slot, assignments });
+    if destination == 1 {
+        crate::scenes::sound_edited();
+    }
+}
+
+fn reset_fx_param(cell: i32) {
+    let amount = state().as_ref().and_then(|ui| {
+        let block = ui.fx.blocks.get(fx_block_for_chain(ui.app.get_chain())?)?;
+        if !ui.fx_valid || cell < 0 || cell as usize >= usize::from(block.param_count) {
+            return None;
+        }
+        let model = unsafe { block.model.as_ref() }?;
+        let wire = crate::fx::nano_fx_param_wire_index(model, cell as usize);
+        (wire < usize::from(block.param_count))
+            .then(|| crate::fx::params::neutral_for_model(model, wire))
+    });
+    if let Some(amount) = amount {
+        send_fx_param(cell, amount);
+    } else {
+        crate::scenes::report("Wait for the FX parameter to load before resetting");
+    }
 }
 
 fn bypass_target(value: i32) -> Option<ExpBypassTarget> {

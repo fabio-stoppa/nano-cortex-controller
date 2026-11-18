@@ -12,7 +12,8 @@ use super::parse::{
 };
 use super::refresh::{
     block_model_write_recent, block_needs_refresh, clear_model_write_trust, ensure_refresh_timers,
-    maybe_complete_refresh_from_live, prioritize_param_refresh, schedule_amount_ui,
+    enqueue_param_refresh, maybe_complete_refresh_from_live, prioritize_param_refresh,
+    schedule_amount_ui,
     trusted_model_for,
 };
 use super::state::{
@@ -468,6 +469,32 @@ pub fn nano_fx_on_amount_knob(raw: u8, model_slot: Option<u8>) {
     s.amount_log_block = s.pedal_fx_focus;
     s.amount_log_pending = true;
     schedule_amount_ui();
+}
+
+pub fn nano_fx_refresh_expression_target(
+    assignments: &nano_wire::editor::ExpressionAssignments,
+) {
+    let block = {
+        let s = fx();
+        if !(0..NANO_FX_BLOCK_COUNT as i8).contains(&s.pedal_fx_focus) {
+            return;
+        }
+        s.pedal_fx_focus as usize
+    };
+    let target = [
+        nano_wire::editor::ExpRangeTarget::Pre1Amount,
+        nano_wire::editor::ExpRangeTarget::Pre2Amount,
+        nano_wire::editor::ExpRangeTarget::Post1Amount,
+        nano_wire::editor::ExpRangeTarget::Post2Amount,
+        nano_wire::editor::ExpRangeTarget::Post3Amount,
+    ][block];
+    if assignments
+        .ranges
+        .iter()
+        .any(|(candidate, _)| *candidate == target)
+    {
+        enqueue_param_refresh(block as u32);
+    }
 }
 
 /// Feed C305; returns true if consumed (FX param refresh response).

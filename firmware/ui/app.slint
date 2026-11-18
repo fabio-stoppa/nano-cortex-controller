@@ -45,6 +45,7 @@ export component AppWindow inherits Window {
     in-out property <bool> tuner-muted: false;
     in-out property <bool> save-dirty: false;
     in-out property <bool> autosave-enabled: false;
+    in-out property <bool> autosave-preset-enabled: false;
     in-out property <[string]> eq-trim-values: ["+0.0", "+0.0", "+0.0"];
     in-out property <[float]> eq-trim-amounts: [0.5, 0.5, 0.5];
     in-out property <bool> eq-trim-enabled: false;
@@ -59,6 +60,7 @@ export component AppWindow inherits Window {
         triggered => { root.error-toast = ""; self.stop(); }
     }
     callback autosave-toggled(bool);
+    callback autosave-preset-toggled(bool);
     callback eq-trim-adjusted(int, int);
     in-out property <bool> ble-on: false;
     in-out property <bool> bt-busy: false;
@@ -216,6 +218,23 @@ export component AppWindow inherits Window {
     in-out property <float> tools-meter-input-amount: 0;
     in-out property <float> tools-meter-output-amount: 0;
     in-out property <float> tools-meter-expression-amount: 0;
+    in-out property <[bool]> amp-expression-assigned: [false, false, false, false, false, false, false];
+    in-out property <[bool]> fx-expression-assigned: [
+        false, false, false, false, false, false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false, false, false, false, false,
+    ];
+    in-out property <[bool]> fx-expression-eligible: [
+        false, false, false, false, false, false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false, false, false, false, false,
+    ];
+    in-out property <bool> expression-edit: false;
+    in-out property <bool> expression-menu-open: false;
+    in-out property <int> expression-menu-target: 0;
+    in-out property <string> expression-menu-name: "";
+    in-out property <string> expression-menu-scene-action: "Add to Scene";
+    in-out property <string> expression-menu-preset-action: "Add to Preset";
+    in-out property <int> expression-menu-control: -1;
+    in-out property <bool> expression-menu-fx: false;
 
     callback chain-tapped(int);
     callback chain-held(int);
@@ -226,10 +245,15 @@ export component AppWindow inherits Window {
     callback tempo-tapped();
     callback layout-tapped(int);
     callback slider-moved(int, float);
+    callback slider-double-tapped(int);
+    callback slider-expression-tapped(int);
     callback cab-slider-moved(int, float);
     callback gate-tapped();
     callback param-changed(int, float);
     callback param-reset(int);
+    callback param-double-tapped(int);
+    callback param-expression-tapped(int);
+    callback expression-assignment-destination(int);
     callback preset-list-tapped();
     callback capture-stepped(int);
     callback model-stepped(int);
@@ -399,6 +423,8 @@ export component AppWindow inherits Window {
                 tempo-global: root.tempo-global;
                 bpm-value: root.tempo-bpm-value;
                 animate-beat: !root.main-covered;
+                expression-edit: root.expression-edit;
+                expression-edit-toggled => { root.expression-edit = !root.expression-edit; }
                 tempo-tapped => { root.tempo-tapped(); }
                 preset-list-tapped => { root.preset-list-tapped(); }
                 settings-tapped => {
@@ -483,7 +509,11 @@ export component AppWindow inherits Window {
                         cab-high-pass-amount: root.cab-high-pass-amount;
                         cab-low-pass-text: root.cab-low-pass-text;
                         cab-low-pass-amount: root.cab-low-pass-amount;
+                        expression-assigned: root.amp-expression-assigned;
+                        expression-edit: root.expression-edit;
                         slider-moved(id, amount) => { root.slider-moved(id, amount); }
+                        slider-double-tapped(id) => { root.slider-double-tapped(id); }
+                        slider-expression-tapped(id) => { root.slider-expression-tapped(id); }
                         cab-slider-moved(id, amount) => { root.cab-slider-moved(id, amount); }
                         gate-tapped => { root.gate-tapped(); }
                     }
@@ -519,6 +549,11 @@ export component AppWindow inherits Window {
                         n23: root.fx-n23; v23: root.fx-v23; a23: root.fx-a23;
                         param-changed(cell, amount) => { root.param-changed(cell, amount); }
                         param-reset(cell) => { root.param-reset(cell); }
+                        param-double-tapped(cell) => { root.param-double-tapped(cell); }
+                        param-expression-tapped(cell) => { root.param-expression-tapped(cell); }
+                        expression-assigned: root.fx-expression-assigned;
+                        expression-eligible: root.fx-expression-eligible;
+                        expression-edit: root.expression-edit;
                     }
                 }
             }
@@ -566,7 +601,11 @@ export component AppWindow inherits Window {
                         cab-high-pass-amount: root.cab-high-pass-amount;
                         cab-low-pass-text: root.cab-low-pass-text;
                         cab-low-pass-amount: root.cab-low-pass-amount;
+                        expression-assigned: root.amp-expression-assigned;
+                        expression-edit: root.expression-edit;
                         slider-moved(id, amount) => { root.slider-moved(id, amount); }
+                        slider-double-tapped(id) => { root.slider-double-tapped(id); }
+                        slider-expression-tapped(id) => { root.slider-expression-tapped(id); }
                         cab-slider-moved(id, amount) => { root.cab-slider-moved(id, amount); }
                         gate-tapped => { root.gate-tapped(); }
                     }
@@ -602,6 +641,11 @@ export component AppWindow inherits Window {
                         n23: root.fx-n23; v23: root.fx-v23; a23: root.fx-a23;
                         param-changed(cell, amount) => { root.param-changed(cell, amount); }
                         param-reset(cell) => { root.param-reset(cell); }
+                        param-double-tapped(cell) => { root.param-double-tapped(cell); }
+                        param-expression-tapped(cell) => { root.param-expression-tapped(cell); }
+                        expression-assigned: root.fx-expression-assigned;
+                        expression-eligible: root.fx-expression-eligible;
+                        expression-edit: root.expression-edit;
                     }
                 }
                 ChainRail {
@@ -667,6 +711,55 @@ export component AppWindow inherits Window {
         }
     }
 
+    if root.expression-menu-open && !root.main-covered: Rectangle {
+        width: root.width;
+        height: root.height;
+        TouchArea { clicked => { root.expression-menu-open = false; } }
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: MenuMetrics.width;
+            height: 3 * MenuMetrics.row-height + 44px;
+            background: #303030;
+            border-radius: Radius.default;
+            Text {
+                x: 20px;
+                y: 0px;
+                width: parent.width - 40px;
+                height: 44px;
+                text: root.expression-menu-name;
+                color: #9fa6ac;
+                font-size: 18px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+            for label[index] in [
+                root.expression-menu-scene-action,
+                root.expression-menu-preset-action,
+                "Reset to default"
+            ]: Rectangle {
+                x: 4px;
+                y: 44px + index * MenuMetrics.row-height;
+                width: parent.width - 8px;
+                height: MenuMetrics.row-height;
+                Text {
+                    x: 20px;
+                    text: label;
+                    color: #f0f0f0;
+                    font-size: MenuMetrics.text-size;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                TouchArea {
+                    clicked => {
+                        root.expression-menu-open = false;
+                        root.expression-assignment-destination(index);
+                    }
+                }
+            }
+        }
+    }
+
     if root.header-menu-open && !root.main-covered: Rectangle {
         width: root.width;
         height: root.height;
@@ -722,8 +815,10 @@ export component AppWindow inherits Window {
 
     if root.settings-open: ToolsPanel {
         autosave-enabled: root.autosave-enabled;
+        autosave-preset-enabled: root.autosave-preset-enabled;
         remember-last-mode: root.remember-last-mode;
         autosave-toggled(enabled) => { root.autosave-toggled(enabled); }
+        autosave-preset-toggled(enabled) => { root.autosave-preset-toggled(enabled); }
         remember-last-mode-toggled(enabled) => { root.remember-last-mode-toggled(enabled); }
         visible: !root.kbd-open;
         jack-mode: root.tools-jack-mode;

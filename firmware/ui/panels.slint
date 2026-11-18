@@ -101,7 +101,11 @@ export component AmpPanel inherits Rectangle {
     in property <float> cab-high-pass-amount;
     in property <string> cab-low-pass-text;
     in property <float> cab-low-pass-amount;
+    in property <[bool]> expression-assigned: [false, false, false, false, false, false, false];
+    in property <bool> expression-edit: false;
     callback slider-moved(int, float);
+    callback slider-double-tapped(int);
+    callback slider-expression-tapped(int);
     callback cab-slider-moved(int, float);
     callback gate-tapped();
     callback capture-tapped();
@@ -158,8 +162,12 @@ export component AmpPanel inherits Rectangle {
                 name: "Gate Amnt";
                 value: gate-amnt-text;
                 amount: gate-amnt-amount;
+                expression-assigned: root.expression-assigned[6];
+                expression-edit: root.expression-edit;
+                expression-eligible: true;
+                expression-tapped => { root.slider-expression-tapped(6); }
                 changed(v) => { root.slider-moved(6, v); }
-                double-tapped => { root.slider-moved(6, 0); }
+                double-tapped => { root.slider-double-tapped(6); }
             }
             ParamCell {
                 height: root.row-h;
@@ -168,8 +176,12 @@ export component AmpPanel inherits Rectangle {
                 name: "Gain";
                 value: gain-text;
                 amount: gain-amount;
+                expression-assigned: root.expression-assigned[0];
+                expression-edit: root.expression-edit;
+                expression-eligible: true;
+                expression-tapped => { root.slider-expression-tapped(0); }
                 changed(v) => { root.slider-moved(0, v); }
-                double-tapped => { root.slider-moved(0, 0.5); }
+                double-tapped => { root.slider-double-tapped(0); }
             }
             ParamCell {
                 height: root.row-h;
@@ -178,8 +190,12 @@ export component AmpPanel inherits Rectangle {
                 name: "Capture Lv";
                 value: cap-text;
                 amount: cap-amount;
+                expression-assigned: root.expression-assigned[5];
+                expression-edit: root.expression-edit;
+                expression-eligible: true;
+                expression-tapped => { root.slider-expression-tapped(5); }
                 changed(v) => { root.slider-moved(5, v); }
-                double-tapped => { root.slider-moved(5, 0.5); }
+                double-tapped => { root.slider-double-tapped(5); }
             }
         }
         if !root.portrait: HorizontalLayout {
@@ -203,8 +219,12 @@ export component AmpPanel inherits Rectangle {
                 name: "Bass";
                 value: bass-text;
                 amount: bass-amount;
+                expression-assigned: root.expression-assigned[2];
+                expression-edit: root.expression-edit;
+                expression-eligible: true;
+                expression-tapped => { root.slider-expression-tapped(2); }
                 changed(v) => { root.slider-moved(2, v); }
-                double-tapped => { root.slider-moved(2, 0.5); }
+                double-tapped => { root.slider-double-tapped(2); }
             }
             ParamCell {
                 height: root.row-h;
@@ -213,8 +233,12 @@ export component AmpPanel inherits Rectangle {
                 name: "Mid";
                 value: mid-text;
                 amount: mid-amount;
+                expression-assigned: root.expression-assigned[3];
+                expression-edit: root.expression-edit;
+                expression-eligible: true;
+                expression-tapped => { root.slider-expression-tapped(3); }
                 changed(v) => { root.slider-moved(3, v); }
-                double-tapped => { root.slider-moved(3, 0.5); }
+                double-tapped => { root.slider-double-tapped(3); }
             }
             ParamCell {
                 height: root.row-h;
@@ -223,8 +247,12 @@ export component AmpPanel inherits Rectangle {
                 name: "Treble";
                 value: treble-text;
                 amount: treble-amount;
+                expression-assigned: root.expression-assigned[4];
+                expression-edit: root.expression-edit;
+                expression-eligible: true;
+                expression-tapped => { root.slider-expression-tapped(4); }
                 changed(v) => { root.slider-moved(4, v); }
-                double-tapped => { root.slider-moved(4, 0.5); }
+                double-tapped => { root.slider-double-tapped(4); }
             }
         }
         if root.portrait: HorizontalLayout {
@@ -246,8 +274,12 @@ export component AmpPanel inherits Rectangle {
                 name: "Gate Amnt";
                 value: gate-amnt-text;
                 amount: gate-amnt-amount;
+                expression-assigned: root.expression-assigned[6];
+                expression-edit: root.expression-edit;
+                expression-eligible: true;
+                expression-tapped => { root.slider-expression-tapped(6); }
                 changed(v) => { root.slider-moved(6, v); }
-                double-tapped => { root.slider-moved(6, 0); }
+                double-tapped => { root.slider-double-tapped(6); }
             }
         }
         if root.portrait: HorizontalLayout {
@@ -261,8 +293,12 @@ export component AmpPanel inherits Rectangle {
                 name: "Capture Lv";
                 value: cap-text;
                 amount: cap-amount;
+                expression-assigned: root.expression-assigned[5];
+                expression-edit: root.expression-edit;
+                expression-eligible: true;
+                expression-tapped => { root.slider-expression-tapped(5); }
                 changed(v) => { root.slider-moved(5, v); }
-                double-tapped => { root.slider-moved(5, 0.5); }
+                double-tapped => { root.slider-double-tapped(5); }
             }
             ParamCell {
                 height: root.row-h;
@@ -281,8 +317,12 @@ export component AmpPanel inherits Rectangle {
                 name: "Gain";
                 value: gain-text;
                 amount: gain-amount;
+                expression-assigned: root.expression-assigned[0];
+                expression-edit: root.expression-edit;
+                expression-eligible: true;
+                expression-tapped => { root.slider-expression-tapped(0); }
                 changed(v) => { root.slider-moved(0, v); }
-                double-tapped => { root.slider-moved(0, 0.5); }
+                double-tapped => { root.slider-double-tapped(0); }
             }
         }
         if root.portrait: HorizontalLayout {
@@ -296,8 +336,12 @@ export component AmpPanel inherits Rectangle {
                 name: "Bass";
                 value: bass-text;
                 amount: bass-amount;
+                expression-assigned: root.expression-assigned[2];
+                expression-edit: root.expression-edit;
+                expression-eligible: true;
+                expression-tapped => { root.slider-expression-tapped(2); }
                 changed(v) => { root.slider-moved(2, v); }
-                double-tapped => { root.slider-moved(2, 0.5); }
+                double-tapped => { root.slider-double-tapped(2); }
             }
             ParamCell {
                 height: root.row-h;
@@ -306,8 +350,12 @@ export component AmpPanel inherits Rectangle {
                 name: "Mid";
                 value: mid-text;
                 amount: mid-amount;
+                expression-assigned: root.expression-assigned[3];
+                expression-edit: root.expression-edit;
+                expression-eligible: true;
+                expression-tapped => { root.slider-expression-tapped(3); }
                 changed(v) => { root.slider-moved(3, v); }
-                double-tapped => { root.slider-moved(3, 0.5); }
+                double-tapped => { root.slider-double-tapped(3); }
             }
             ParamCell {
                 height: root.row-h;
@@ -316,8 +364,12 @@ export component AmpPanel inherits Rectangle {
                 name: "Treble";
                 value: treble-text;
                 amount: treble-amount;
+                expression-assigned: root.expression-assigned[4];
+                expression-edit: root.expression-edit;
+                expression-eligible: true;
+                expression-tapped => { root.slider-expression-tapped(4); }
                 changed(v) => { root.slider-moved(4, v); }
-                double-tapped => { root.slider-moved(4, 0.5); }
+                double-tapped => { root.slider-double-tapped(4); }
             }
         }
         HorizontalLayout {
@@ -329,6 +381,8 @@ export component AmpPanel inherits Rectangle {
                 horizontal-stretch: 1;
                 slider: root.cab-active;
                 name: "Cab Output";
+                expression-edit: root.expression-edit;
+                expression-eligible: false;
                 value: root.cab-output-text;
                 amount: root.cab-output-amount;
                 changed(v) => { root.cab-slider-moved(0, v); }
@@ -339,6 +393,8 @@ export component AmpPanel inherits Rectangle {
                 horizontal-stretch: 1;
                 slider: root.cab-active;
                 name: "High Pass";
+                expression-edit: root.expression-edit;
+                expression-eligible: false;
                 value: root.cab-high-pass-text;
                 amount: root.cab-high-pass-amount;
                 changed(v) => { root.cab-slider-moved(1, v); }
@@ -349,6 +405,8 @@ export component AmpPanel inherits Rectangle {
                 horizontal-stretch: 1;
                 slider: root.cab-active;
                 name: "Low Pass";
+                expression-edit: root.expression-edit;
+                expression-eligible: false;
                 value: root.cab-low-pass-text;
                 amount: root.cab-low-pass-amount;
                 changed(v) => { root.cab-slider-moved(2, v); }
@@ -441,12 +499,22 @@ export component FxPanel inherits Rectangle {
     in property <string> n23;
     in property <string> v23;
     in property <float> a23;
+    in property <[bool]> expression-assigned: [false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false, false, false, false, false,
+        false, false, false, false, false];
+        in property <[bool]> expression-eligible: [
+            false, false, false, false, false, false, false, false, false, false, false, false,
+            false, false, false, false, false, false, false, false, false, false, false, false,
+        ];
+        in property <bool> expression-edit: false;
     in property <string> model-name: "-";
     in property <bool> model-enabled: false;
     callback model-list-tapped();
     callback model-stepped(int);
     callback param-changed(int, float);
     callback param-reset(int);
+    callback param-double-tapped(int);
+    callback param-expression-tapped(int);
     property <int> columns: root.portrait ? 3 : 4;
     property <[string]> names: [root.n0, root.n1, root.n2, root.n3, root.n4, root.n5,
         root.n6, root.n7, root.n8, root.n9, root.n10, root.n11, root.n12, root.n13,
@@ -492,8 +560,12 @@ export component FxPanel inherits Rectangle {
                     name: root.names[self.index];
                     value: root.values[self.index];
                     amount: root.amounts[self.index];
+                    expression-assigned: root.expression-assigned[self.index];
+                    expression-edit: root.expression-edit;
+                    expression-eligible: root.expression-eligible[self.index];
+                    expression-tapped => { root.param-expression-tapped(self.index); }
                     changed(v) => { root.param-changed(self.index, v); }
-                    double-tapped => { root.param-reset(self.index); }
+                    double-tapped => { root.param-double-tapped(self.index); }
                 }
             }
         }
@@ -791,8 +863,10 @@ export component SwitchToggle inherits Rectangle {
 
 export component ToolsPanel inherits Rectangle {
     in property <bool> autosave-enabled;
+    in property <bool> autosave-preset-enabled;
     in property <bool> remember-last-mode;
     callback autosave-toggled(bool);
+    callback autosave-preset-toggled(bool);
     callback remember-last-mode-toggled(bool);
     in property <string> jack-mode;
     in property <bool> jack-expression;
@@ -967,6 +1041,15 @@ export component ToolsPanel inherits Rectangle {
                                         animate x { duration: 120ms; }
                                     }
                                     TouchArea { clicked => { root.autosave-toggled(!root.autosave-enabled); } }
+                                }
+                            }
+                            OptionRow {
+                                label: "Autosave preset too";
+                                VCenter {
+                                    SwitchToggle {
+                                        on: root.autosave-preset-enabled;
+                                        toggled(enabled) => { root.autosave-preset-toggled(enabled); }
+                                    }
                                 }
                             }
                         }

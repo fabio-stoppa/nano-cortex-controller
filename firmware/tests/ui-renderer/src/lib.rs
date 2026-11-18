@@ -1804,6 +1804,56 @@ mod tests {
     }
 
     #[test]
+    fn double_tap_gain_emits_expression_menu_callback() {
+        let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+        let time = Rc::new(std::cell::Cell::new(std::time::Duration::ZERO));
+        slint::platform::set_platform(Box::new(Platform {
+            window: window.clone(),
+            time: time.clone(),
+        }))
+        .unwrap();
+        let app = AppWindow::new().unwrap();
+        let tapped = Rc::new(std::cell::Cell::new(None));
+        app.on_slider_double_tapped({
+            let tapped = tapped.clone();
+            let weak = app.as_weak();
+            move |id| {
+                tapped.set(Some(id));
+                if let Some(app) = weak.upgrade() {
+                    app.set_expression_menu_open(true);
+                }
+            }
+        });
+        app.set_connecting(false);
+        app.set_page(0);
+        app.set_portrait(false);
+        app.show().unwrap();
+        window.set_size(PhysicalSize::new(800, 480));
+        let mut pixels = vec![Rgb565Pixel(0); 800 * 480];
+        window.request_redraw();
+        render(&window, &mut pixels, RenderingRotation::NoRotation, true);
+        for _ in 0..2 {
+            let position = LogicalPosition::new(540.0, 195.0);
+            window.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            window.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+            time.set(time.get() + std::time::Duration::from_millis(50));
+            slint::platform::update_timers_and_animations();
+        }
+        assert_eq!(tapped.get(), Some(0), "double-tap did not reach Gain");
+        assert!(
+            app.get_expression_menu_open(),
+            "double-tap did not make the expression menu visible"
+        );
+        app.hide().unwrap();
+    }
+
+    #[test]
     fn flipped_partial_spans_preserve_pixel_order_and_untouched_pixels() {
         use crate::bounce::{HEIGHT, WIDTH};
         let mut pixels: Vec<_> = (0..WIDTH * HEIGHT)

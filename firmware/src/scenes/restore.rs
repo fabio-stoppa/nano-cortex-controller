@@ -3,6 +3,7 @@ use crate::fx::types::{NanoFxBlock, NanoFxState};
 use crate::link::{Cmd, ParamWrite};
 use alloc::{collections::VecDeque, vec::Vec};
 use nano_wire::types::{CabSettings, NanoAmpC};
+use nano_wire::editor::ExpressionAssignments;
 
 pub struct View {
     pub amp: NanoAmpC,
@@ -13,6 +14,8 @@ pub struct View {
     pub cab_generation: u32,
     pub idle: bool,
     pub preset: u8,
+    pub expression_slot: u8,
+    pub expression: ExpressionAssignments,
 }
 
 impl Effect {
@@ -143,6 +146,9 @@ impl Snapshot {
                 .reduction_valid
                 .then_some(view.effects.gate.reduction_pct),
             effects: effects?.try_into().map_err(|_| "Invalid FX block count")?,
+            expression: (view.expression_slot == view.preset).then(|| {
+                super::data::ExpressionSnapshot::capture(&view.expression)
+            }),
         };
         if !view.effects.gate.on_known {
             return Err("Wait for gate bypass state");
@@ -191,6 +197,12 @@ impl Snapshot {
                 .iter()
                 .zip(&view.effects.blocks)
                 .all(|(expected, actual)| expected.matches(actual))
+            && self.expression.as_ref().is_none_or(|expected| {
+                view.expression_slot == view.preset
+                    && expected
+                        .decode()
+                        .is_ok_and(|expected| expected == view.expression)
+            })
     }
 }
 
@@ -207,6 +219,9 @@ enum Step {
     ModelReady {
         block: usize,
         effect: Effect,
+    },
+    ExpressionReady {
+        assignments: ExpressionAssignments,
     },
 }
 
@@ -380,6 +395,16 @@ impl Plan {
         {
             steps.push_back(Step::Write(Cmd::Gate(snapshot.gate_on)));
         }
+        if let Some(expression) = &snapshot.expression {
+            let assignments = expression.decode()?;
+            if current.expression_slot != current.preset || current.expression != assignments {
+                steps.push_back(Step::Write(Cmd::ExpressionSave {
+                    slot: current.preset,
+                    assignments: assignments.clone(),
+                }));
+                steps.push_back(Step::ExpressionReady { assignments });
+            }
+        }
         Ok(Self {
             steps,
             target: snapshot,
@@ -422,6 +447,11 @@ impl Plan {
                 {
                     return Progress::Waiting
                 }
+                Some(Step::ExpressionReady { assignments })
+                if view.expression_slot != view.preset || view.expression != *assignments =>
+                {
+                return Progress::Waiting
+                }
                 Some(Step::Write(Cmd::FxModelId { block, id }))
                     if view.effects.valid
                         && view.effects.blocks[usize::from(*block)].valid
@@ -458,7 +488,10 @@ impl Plan {
                         return Progress::Write(command);
                     }
                     Some(
-                        Step::ModelReady { .. } | Step::CaptureReady { .. } | Step::CabReady { .. },
+                        Step::ModelReady { .. }
+                        | Step::CaptureReady { .. }
+                        | Step::CabReady { .. }
+                        | Step::ExpressionReady { .. },
                     ) => continue,
                     None => unreachable!(),
                 },
@@ -500,6 +533,8 @@ mod tests {
             cab_generation: 1,
             preset: 1,
             idle: true,
+            expression_slot: 1,
+            expression: ExpressionAssignments::default(),
         };
         view.amp.valid = true;
         view.amp.have_capture_volume = true;
@@ -582,6 +617,36 @@ mod tests {
             Progress::Write(Cmd::SceneFxRefresh)
         ));
         assert!(matches!(plan.poll(&view, 4), Progress::Complete));
+    }
+
+    #[test]
+    fn changed_expression_assignments_are_written_and_verified() {
+        let view = fixture();
+        let mut snapshot = Snapshot::capture(&view).unwrap();
+        let assignments = ExpressionAssignments {
+            ranges: alloc::vec![(
+                nano_wire::editor::ExpRangeTarget::Gain,
+                nano_wire::editor::ExpRange {
+                    inverted: false,
+                    min: 32,
+                    max: 223,
+                },
+            )],
+            bypasses: Vec::new(),
+        };
+        snapshot.expression = Some(crate::scenes::data::ExpressionSnapshot::capture(&assignments));
+        let mut plan = Plan::scene(snapshot, &view, 0).unwrap();
+        assert!(matches!(
+            plan.poll(&view, 1),
+            Progress::Write(Cmd::ExpressionSave {
+                slot: 1,
+                assignments: written
+            }) if written == assignments
+        ));
+        assert!(matches!(plan.poll(&view, 2), Progress::Waiting));
+        let mut verified = view;
+        verified.expression = assignments;
+        assert!(writes_before_readback(&mut plan, &verified).is_empty());
     }
 
     #[test]

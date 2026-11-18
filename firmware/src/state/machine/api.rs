@@ -110,6 +110,18 @@ pub fn nano_state_expression_assignments_snapshot() -> (u8, nano_wire::editor::E
     (s.expression_slot, s.expression_assignments.clone())
 }
 
+pub fn nano_state_preview_expression_assignments(
+    slot: u8,
+    assignments: nano_wire::editor::ExpressionAssignments,
+) {
+    if !(1..=64).contains(&slot) {
+        return;
+    }
+    let s = st();
+    s.expression_slot = slot;
+    s.expression_assignments = assignments;
+}
+
 pub fn nano_state_calibration_snapshot() -> (bool, Option<u8>, Option<u8>) {
     let s = st();
     (
@@ -228,6 +240,9 @@ fn handle_editor_message(data: &[u8]) -> bool {
                         Some(s.calibration_min),
                         Some(s.calibration_max),
                     );
+                }
+                if meter.kind == MeteringKind::ExpressionPedal {
+                    crate::fx::nano_fx_refresh_expression_target(&s.expression_assignments);
                 }
                 crate::screen::nano_ui_set_metering(meter);
             } else {

@@ -58,7 +58,12 @@ pub(super) fn note_preset_selected(slot: u8) {
         return;
     }
     let s = st();
+    let preset_changed = s.preset_slot != slot;
     s.preset_slot = slot;
+    if preset_changed {
+        s.expression_slot = 0;
+        s.expression_assignments = nano_wire::editor::ExpressionAssignments::default();
+    }
     let name = if s.preset_catalog.valid {
         super::ctx::c_bytes_to_string(&s.preset_catalog.names[usize::from(slot - 1)])
     } else {
@@ -73,6 +78,9 @@ pub(super) fn note_preset_selected(slot: u8) {
     }
     if !name.is_empty() {
         crate::screen::nano_ui_set_preset_name(&name);
+    }
+    if preset_changed {
+        let _ = nano_state_read_expression(slot);
     }
 }
 
@@ -599,11 +607,19 @@ pub(super) fn note_preset_dirty(dirty: bool) {
 
 pub(super) fn note_loaded_preset(name: &str, slot: u8, foot: [i16; 4]) {
     let s = st();
+    let preset_changed = (1..=64).contains(&slot) && s.preset_slot != slot;
     if slot >= 1 && slot <= 64 {
         s.preset_slot = slot;
+        if preset_changed {
+            s.expression_slot = 0;
+            s.expression_assignments = nano_wire::editor::ExpressionAssignments::default();
+        }
     }
     if !name.is_empty() && name != "-" {
         s.preset_name = name.to_string();
     }
     s.foot_slots = foot;
+    if preset_changed {
+        let _ = nano_state_read_expression(slot);
+    }
 }

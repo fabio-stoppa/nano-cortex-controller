@@ -1,4 +1,7 @@
 use alloc::{string::String, vec::Vec};
+use nano_wire::editor::{
+    ExpBypass, ExpBypassTarget, ExpRange, ExpRangeTarget, ExpressionAssignments,
+};
 use serde::{Deserialize, Serialize};
 
 pub const SCENES: usize = 6;
@@ -108,6 +111,149 @@ pub struct Snapshot {
     pub gate_on: bool,
     pub gate_amount: Option<u8>,
     pub effects: [Effect; 5],
+    #[serde(default)]
+    pub expression: Option<ExpressionSnapshot>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ExpressionSnapshot {
+    #[serde(default)]
+    pub ranges: Vec<ExpressionRangeSnapshot>,
+    #[serde(default)]
+    pub bypasses: Vec<ExpressionBypassSnapshot>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ExpressionRangeSnapshot {
+    pub target: u8,
+    pub inverted: bool,
+    pub min: u8,
+    pub max: u8,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ExpressionBypassSnapshot {
+    pub target: u8,
+    pub inverted: bool,
+    pub mode: u8,
+    pub latch: bool,
+    pub delay_ms: u16,
+}
+
+fn range_target(value: u8) -> Option<ExpRangeTarget> {
+    Some(match value {
+        4 => ExpRangeTarget::Gain,
+        5 => ExpRangeTarget::Bass,
+        6 => ExpRangeTarget::Mid,
+        7 => ExpRangeTarget::Treble,
+        8 => ExpRangeTarget::Pre1Amount,
+        9 => ExpRangeTarget::Pre2Amount,
+        10 => ExpRangeTarget::Post1Amount,
+        11 => ExpRangeTarget::Post2Amount,
+        12 => ExpRangeTarget::Post3Amount,
+        13 => ExpRangeTarget::CaptureVolume,
+        21 => ExpRangeTarget::Gate,
+        _ => return None,
+    })
+}
+
+fn bypass_target(value: u8) -> Option<ExpBypassTarget> {
+    Some(match value {
+        14 => ExpBypassTarget::Capture,
+        15 => ExpBypassTarget::Cab,
+        16 => ExpBypassTarget::Pre1,
+        17 => ExpBypassTarget::Pre2,
+        18 => ExpBypassTarget::Post1,
+        19 => ExpBypassTarget::Post2,
+        20 => ExpBypassTarget::Post3,
+        22 => ExpBypassTarget::Gate,
+        _ => return None,
+    })
+}
+
+impl ExpressionSnapshot {
+    pub fn capture(assignments: &ExpressionAssignments) -> Self {
+        Self {
+            ranges: assignments
+                .ranges
+                .iter()
+                .map(|(target, range)| ExpressionRangeSnapshot {
+                    target: *target as u8,
+                    inverted: range.inverted,
+                    min: range.min,
+                    max: range.max,
+                })
+                .collect(),
+            bypasses: assignments
+                .bypasses
+                .iter()
+                .map(|(target, bypass)| {
+                    let (inverted, mode, latch, delay_ms) = match *bypass {
+                        ExpBypass::HeelToe { inverted, delay_ms } => {
+                            (inverted, 0, false, delay_ms)
+                        }
+                        ExpBypass::Switch { inverted, latch } => (inverted, 1, latch, 0),
+                        ExpBypass::Stop { delay_ms } => (false, 2, false, delay_ms),
+                    };
+                    ExpressionBypassSnapshot {
+                        target: *target as u8,
+                        inverted,
+                        mode,
+                        latch,
+                        delay_ms,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    pub fn decode(&self) -> Result<ExpressionAssignments, &'static str> {
+        let mut ranges = Vec::with_capacity(self.ranges.len());
+        let mut bypasses = Vec::with_capacity(self.bypasses.len());
+        for range in &self.ranges {
+            let target = range_target(range.target).ok_or("Invalid saved expression target")?;
+            if ranges.iter().any(|(old, _)| *old == target) {
+                return Err("Duplicate saved expression range target");
+            }
+            ranges.push((
+                target,
+                ExpRange {
+                    inverted: range.inverted,
+                    min: range.min,
+                    max: range.max,
+                },
+            ));
+        }
+        for bypass in &self.bypasses {
+            let target = bypass_target(bypass.target).ok_or("Invalid saved expression bypass target")?;
+            if bypasses.iter().any(|(old, _)| *old == target) {
+                return Err("Duplicate saved expression bypass target");
+            }
+            let value = match bypass.mode {
+                0 => ExpBypass::HeelToe {
+                    inverted: bypass.inverted,
+                    delay_ms: bypass.delay_ms,
+                },
+                1 => ExpBypass::Switch {
+                    inverted: bypass.inverted,
+                    latch: bypass.latch,
+                },
+                2 if !bypass.inverted && !bypass.latch => ExpBypass::Stop {
+                    delay_ms: bypass.delay_ms,
+                },
+                _ => return Err("Invalid saved expression bypass mode"),
+            };
+            bypasses.push((target, value));
+        }
+        Ok(ExpressionAssignments { ranges, bypasses })
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        self.decode().map(|_| ())
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -196,6 +342,9 @@ impl Snapshot {
         }
         for (block, effect) in self.effects.iter().enumerate() {
             effect.validate(block)?;
+        }
+        if let Some(expression) = &self.expression {
+            expression.validate()?;
         }
         Ok(())
     }
@@ -426,6 +575,15 @@ mod tests {
                     parameters: alloc::vec![0.12345679; usize::from(model.param_count)],
                 }
             }),
+            expression: Some(ExpressionSnapshot {
+                ranges: alloc::vec![ExpressionRangeSnapshot {
+                    target: ExpRangeTarget::Gain as u8,
+                    inverted: false,
+                    min: 0,
+                    max: 255,
+                }],
+                bypasses: Vec::new(),
+            }),
         }
     }
 
@@ -437,6 +595,39 @@ mod tests {
         assert!(!name_error(" leading").is_empty());
         assert!(!name_error("trailing ").is_empty());
         assert!(!name_error("Caf\u{e9}").is_empty());
+    }
+
+    #[test]
+    fn expression_assignments_round_trip_and_reject_unknown_targets() {
+        let assignments = ExpressionAssignments {
+            ranges: alloc::vec![(
+                ExpRangeTarget::Post2Amount,
+                ExpRange {
+                    inverted: true,
+                    min: 17,
+                    max: 231,
+                },
+            )],
+            bypasses: alloc::vec![(
+                ExpBypassTarget::Pre1,
+                ExpBypass::HeelToe {
+                    inverted: false,
+                    delay_ms: 250,
+                },
+            )],
+        };
+        let stored = ExpressionSnapshot::capture(&assignments);
+        assert_eq!(stored.decode().unwrap(), assignments);
+        let invalid = ExpressionSnapshot {
+            ranges: alloc::vec![ExpressionRangeSnapshot {
+                target: 99,
+                inverted: false,
+                min: 0,
+                max: 255,
+            }],
+            bypasses: Vec::new(),
+        };
+        assert!(invalid.validate().is_err());
     }
 
     #[test]

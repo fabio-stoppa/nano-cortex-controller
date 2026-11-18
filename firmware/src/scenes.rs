@@ -269,6 +269,8 @@ pub fn view() -> View {
     if amp.active_cab_slot() != Some(cab_slot) {
         cab = Default::default();
     }
+    let (expression_slot, expression) =
+        crate::state::nano_state_expression_assignments_snapshot();
     View {
         amp,
         verified_amp: crate::state::nano_state_verified_amp(),
@@ -278,6 +280,8 @@ pub fn view() -> View {
         cab_generation: crate::state::cab_generation(),
         preset: crate::state::nano_state_preset_slot(),
         idle: crate::state::nano_rx_mode_get() == 0,
+        expression_slot,
+        expression,
     }
 }
 
@@ -341,6 +345,9 @@ pub fn capture_scene(preset: u8, index: usize, name: &str) -> Result<(), &'stati
     let current = view();
     if !(1..=64).contains(&preset) || current.preset != preset {
         return Err("Nano preset changed; reopen the scene selector before saving");
+    }
+    if current.expression_slot != preset {
+        return Err("Wait for expression assignments to load before saving a scene");
     }
     let mut snapshot = data::Snapshot::capture(&current)?;
     untrim_snapshot(&mut snapshot, preset);
@@ -423,6 +430,82 @@ pub fn rename_scene(preset: usize, index: usize, name: &str) -> Result<(), &'sta
         scene.name = name.into();
         Ok(())
     })
+}
+
+pub fn save_selected_expression(
+    assignments: &nano_wire::editor::ExpressionAssignments,
+) -> Result<(), &'static str> {
+    let preset = crate::state::nano_state_preset_slot();
+    let index = scene().ok_or("Select a saved scene before adding a pedal assignment")?;
+    let expression = data::ExpressionSnapshot::capture(assignments);
+    edit(|config| {
+        let scene = config
+            .preset_scenes
+            .iter_mut()
+            .find(|collection| collection.preset == preset)
+            .and_then(|collection| collection.scenes.get_mut(index))
+            .and_then(Option::as_mut)
+            .ok_or("The selected scene is not saved")?;
+        scene.snapshot.expression = Some(expression);
+        scene.snapshot.validate()?;
+        Ok(())
+    })?;
+    with(|state| {
+        state.scene_dirty = false;
+        state.version = state.version.wrapping_add(1);
+    });
+    Ok(())
+}
+
+pub fn selected_expression_has(target: nano_wire::editor::ExpRangeTarget) -> bool {
+    with(|state| {
+        let Some(index) = state.scene else {
+            return false;
+        };
+        let preset = state.preset;
+        state
+            .config()
+            .preset_scenes
+            .iter()
+            .find(|collection| collection.preset == preset)
+            .and_then(|collection| collection.scenes.get(index))
+            .and_then(Option::as_ref)
+            .and_then(|scene| scene.snapshot.expression.as_ref())
+            .is_some_and(|expression| {
+                expression
+                    .ranges
+                    .iter()
+                    .any(|range| range.target == target as u8)
+            })
+    })
+}
+
+pub fn remove_selected_expression(
+    target: nano_wire::editor::ExpRangeTarget,
+) -> Result<(), &'static str> {
+    let Some(index) = scene() else {
+        return Ok(());
+    };
+    let preset = crate::state::nano_state_preset_slot();
+    edit(|config| {
+        let scene = config
+            .preset_scenes
+            .iter_mut()
+            .find(|collection| collection.preset == preset)
+            .and_then(|collection| collection.scenes.get_mut(index))
+            .and_then(Option::as_mut)
+            .ok_or("The selected scene is not saved")?;
+        if let Some(expression) = &mut scene.snapshot.expression {
+            expression.ranges.retain(|range| range.target != target as u8);
+        }
+        scene.snapshot.validate()?;
+        Ok(())
+    })?;
+    with(|state| {
+        state.scene_dirty = false;
+        state.version = state.version.wrapping_add(1);
+    });
+    Ok(())
 }
 
 pub fn recall_scene(index: usize) -> Result<(), &'static str> {

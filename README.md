@@ -250,10 +250,18 @@ New scene names are limited to **16 ASCII characters** (letters,
 numbers, spaces, `-`, `_`, no outer spaces), unique within their collection.
 
 Scenes restore the capture slot, CAB/IR selection, amp Gain/Bass/Mid/Treble, capture volume
-when available, active cab EQ/level, gate, and all five FX models, parameters and
-bypass states. Capture and CAB/IR selections load before their saved controls.
+when available, active cab EQ/level, gate, all five FX models, parameters and
+bypass states, and the Nano preset's expression-pedal range and switch assignments.
+Capture and CAB/IR selections load before their saved controls.
 The saved CAB/IR name must identify a unique entry in the connected Nano library.
-Expression assignments, tempo and global USB/mute settings are not scene data.
+Tempo and global USB/mute settings are not scene data.
+In Edit mode, enable **EXP** in the header to reveal pedal buttons on supported controls
+(Gain, Bass, Mid, Treble, Capture Level, Gate Amount, and FX Mix/Amount). Tap a
+pedal button to choose **Add to Scene**, **Add to
+Preset**, **Remove assignment**, or **Reset to default**. Removal updates the
+current preset and a selected saved scene. Assigned sliders are shown in blue.
+Double-tap still resets a parameter normally. An effect assigns only the current
+block's Mix/Amount target.
 Master Level is always left untouched during scene recall; use each scene's capture
 volume to balance clean and high-gain sounds. **Gig view** keeps Bass/Mid/Treble trim
 controls stacked vertically beside the scenes, matching the Edit-mode EQ slider

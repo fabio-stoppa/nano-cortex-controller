@@ -40,6 +40,9 @@ export component ParamCell inherits Rectangle {
     in property <string> name;
     in property <string> value: "-";
     in property <float> amount: 0;
+    in property <bool> expression-assigned: false;
+    in property <bool> expression-edit: false;
+    in property <bool> expression-eligible: false;
     in property <bool> slider: false;
     in property <bool> bare: false;
     in property <bool> value-first: true;
@@ -48,9 +51,11 @@ export component ParamCell inherits Rectangle {
     callback editing-finished();
     callback tapped();
     callback double-tapped();
+    callback expression-tapped();
     height: 100px;
     min-width: 0px;
     preferred-width: 0px;
+    opacity: root.expression-edit && !root.expression-eligible ? 0.38 : 1;
     horizontal-stretch: 1;
     vertical-stretch: 0;
     background: root.bare ? transparent : #262626;
@@ -83,15 +88,15 @@ export component ParamCell inherits Rectangle {
             padding-right: 4px;
             Rectangle {
             height: 18px;
-            background: #1e1e1e;
-            border-color: #707070;
+            background: root.expression-assigned ? #173b66 : #1e1e1e;
+            border-color: root.expression-assigned ? #2f80ed : #707070;
             border-width: 1px;
             border-radius: 3px;
             Rectangle {
                 x: 0px;
                 width: parent.width * amount;
                 height: 100%;
-                background: #b8c0c8;
+                background: root.expression-assigned ? #2f80ed : #b8c0c8;
                 border-radius: 2px;
             }
         }
@@ -117,9 +122,15 @@ export component ParamCell inherits Rectangle {
     if root.slider: TouchArea {
         double-clicked => {
             root.double-tap-reset = true;
-            root.double-tapped();
+            if !root.expression-edit {
+                root.double-tapped();
+            }
         }
         pointer-event(event) => {
+            if event.kind == PointerEventKind.down && root.expression-edit && root.expression-eligible {
+                root.expression-tapped();
+                return;
+            }
             if (event.kind == PointerEventKind.down) {
                 root.pressed = true;
                 root.armed = false;
@@ -1220,6 +1231,8 @@ export component HeaderBar inherits Rectangle {
     in property <bool> tempo-global: true;
     in property <int> bpm-value: 0;
     in property <bool> animate-beat: true;
+    in property <bool> expression-edit: false;
+    callback expression-edit-toggled();
     callback tempo-tapped();
     callback preset-list-tapped();
     callback settings-tapped();
@@ -1234,7 +1247,7 @@ export component HeaderBar inherits Rectangle {
         Rectangle {
             x: 2px;
             y: 0px;
-            width: max(0px, parent.width - 132px);
+            width: max(0px, parent.width - 184px);
             height: parent.height;
             HeaderButton {
                 x: 0px;
@@ -1280,6 +1293,21 @@ export component HeaderBar inherits Rectangle {
             right-aligned: true;
             stacked: true;
             tapped => { root.tempo-tapped(); }
+        }
+        VCenter {
+            x: parent.width - 176px;
+            y: 4px;
+            width: 48px;
+            height: 40px;
+            HeaderButton {
+                width: 48px;
+                height: 40px;
+                label: "EXP";
+                text-size: 15px;
+                choice: true;
+                hot: root.expression-edit;
+                tapped => { root.expression-edit-toggled(); }
+            }
         }
         MenuButton {
             x: parent.width - self.width;
@@ -1338,7 +1366,16 @@ export component HeaderBar inherits Rectangle {
         HorizontalLayout {
             alignment: end;
             spacing: portrait ? 8px : 14px;
-            width: portrait ? 154px : 214px;
+            width: portrait ? 154px : 274px;
+            VCenter { HeaderButton {
+                width: 48px;
+                label: "EXP";
+                text-size: 16px;
+                choice: true;
+                hot: root.expression-edit;
+                height: 40px;
+                tapped => { root.expression-edit-toggled(); }
+            } }
             VCenter { HeaderButton {
                 background: transparent;
                 label: root.scene-label;

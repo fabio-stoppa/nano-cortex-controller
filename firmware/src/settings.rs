@@ -34,10 +34,14 @@ fn record(
     selected_nano: Option<[u8; 7]>,
     remember_mode: bool,
     gig_mode: bool,
+    autosave_preset: bool,
 ) -> [u8; 16] {
     let mut r = [0u8; 16];
     r[..4].copy_from_slice(&MAGIC.to_le_bytes());
-    r[4] = mode | (u8::from(remember_mode) << 2) | (u8::from(gig_mode) << 3);
+    r[4] = mode
+        | (u8::from(remember_mode) << 2)
+        | (u8::from(gig_mode) << 3)
+        | (u8::from(autosave_preset) << 4);
     r[5] = !r[4];
     r[6] = u8::from(autosave);
     r[7] = !r[6];
@@ -48,13 +52,19 @@ fn record(
 fn valid_preferences_record(record: &[u8; 16]) -> bool {
     u32::from_le_bytes(record[..4].try_into().unwrap()) == MAGIC
         && record[5] == !record[4]
-        && record[4] & !0x0f == 0
+        && record[4] & !0x1f == 0
         && record[6] <= 1
         && record[7] == !record[6]
 }
 
 fn remembered_mode(record: &[u8; 16]) -> (bool, bool) {
     (record[4] & 0x04 != 0, record[4] & 0x08 != 0)
+}
+
+pub fn load_autosave_preset() -> bool {
+    read_preferences_record()
+        .filter(valid_preferences_record)
+        .is_some_and(|record| record[4] & 0x10 != 0)
 }
 
 fn selected_nano_from_record(record: &[u8; 16]) -> Option<[u8; 7]> {
@@ -138,6 +148,22 @@ pub fn save_autosave(enabled: bool) -> Result<(), &'static str> {
     save_preferences(load_layout().unwrap_or(0) as u8, enabled)
 }
 
+pub fn save_autosave_preset(enabled: bool) -> Result<(), &'static str> {
+    let current = read_preferences_record().filter(valid_preferences_record);
+    let (remember_mode, gig_mode) = current
+        .as_ref()
+        .map(remembered_mode)
+        .unwrap_or((false, false));
+    save_preferences_with_selection(
+        load_layout().unwrap_or(0) as u8,
+        load_autosave(),
+        load_selected_nano(),
+        remember_mode,
+        gig_mode,
+        enabled,
+    )
+}
+
 pub fn save_remember_mode(enabled: bool, gig_mode: bool) -> Result<(), &'static str> {
     save_preferences_with_selection(
         load_layout().unwrap_or(0) as u8,
@@ -145,6 +171,7 @@ pub fn save_remember_mode(enabled: bool, gig_mode: bool) -> Result<(), &'static 
         load_selected_nano(),
         enabled,
         gig_mode,
+        load_autosave_preset(),
     )
 }
 
@@ -162,7 +189,16 @@ fn save_preferences(mode: u8, autosave: bool) -> Result<(), &'static str> {
         .as_ref()
         .map(remembered_mode)
         .unwrap_or((false, false));
-    save_preferences_with_selection(mode, autosave, selected_nano, remember_mode, gig_mode)
+    save_preferences_with_selection(
+        mode,
+        autosave,
+        selected_nano,
+        remember_mode,
+        gig_mode,
+        current
+            .as_ref()
+            .is_some_and(|record| record[4] & 0x10 != 0),
+    )
 }
 
 fn save_preferences_with_selection(
@@ -171,9 +207,17 @@ fn save_preferences_with_selection(
     selected_nano: Option<[u8; 7]>,
     remember_mode: bool,
     gig_mode: bool,
+    autosave_preset: bool,
 ) -> Result<(), &'static str> {
     let _pause = crate::bounce::FlashPause::begin()?;
-    let expected = record(mode, autosave, selected_nano, remember_mode, gig_mode);
+    let expected = record(
+        mode,
+        autosave,
+        selected_nano,
+        remember_mode,
+        gig_mode,
+        autosave_preset,
+    );
     let saved = with_region(|region| {
         let mut current = [0u8; 16];
         region
@@ -222,6 +266,7 @@ pub fn save_selected_nano(address: Option<[u8; 7]>) -> Result<(), &'static str> 
         address,
         remember_mode,
         gig_mode,
+        load_autosave_preset(),
     )
 }
 
@@ -238,6 +283,7 @@ pub fn import_preferences(preferences: &preferences::Preferences) -> Result<(), 
         load_selected_nano(),
         preferences.remember_mode,
         false,
+        preferences.autosave_preset,
     )
 }
 

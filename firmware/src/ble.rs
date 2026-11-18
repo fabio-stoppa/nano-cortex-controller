@@ -1074,14 +1074,12 @@ async fn nano_commands<C: Controller, P: PacketPool>(
             match result {
                 Err(error) => crate::scenes::report(error),
                 Ok(()) => {
-                    if crate::state::nano_state_preset_dirty() {
-                        if crate::state::nano_state_save_preset() {
-                            crate::scenes::report("Autosave sent to Nano");
-                        } else {
+                    if crate::settings::load_autosave_preset()
+                        && crate::state::nano_state_preset_dirty()
+                    {
+                        if !crate::state::nano_state_save_preset() {
                             crate::scenes::report("Autosave failed: Nano preset save was refused");
                         }
-                    } else {
-                        crate::scenes::report("Autosave complete");
                     }
                 }
             }
@@ -1154,6 +1152,12 @@ fn apply_cmd(cmd: crate::link::Cmd) {
         }
         crate::link::Cmd::SceneFxRefresh => {
             crate::fx::nano_fx_refresh_all();
+            let preset = crate::state::nano_state_preset_slot();
+            if !crate::state::nano_state_read_expression(preset) {
+                crate::scenes::cancel(
+                    "Expression readback request failed; scene may lack pedal assignments",
+                );
+            }
             if let Some(slot) = crate::scenes::view().amp.active_cab_slot() {
                 if !crate::state::nano_state_read_cab_settings(slot) {
                     crate::scenes::cancel(
@@ -1348,8 +1352,18 @@ fn apply_cmd(cmd: crate::link::Cmd) {
                 &assignments.bypasses,
             ) {
                 log::warn!("Expression assignment write failed");
+                if crate::scenes::busy() {
+                    crate::scenes::cancel("Expression assignment save failed");
+                } else {
+                    crate::scenes::report("Expression assignment save failed");
+                }
             } else if !crate::state::nano_state_read_expression(slot) {
                 log::warn!("Expression assignment verification request failed");
+                if crate::scenes::busy() {
+                    crate::scenes::cancel("Expression assignment verification failed");
+                } else {
+                    crate::scenes::report("Expression assignment verification failed");
+                }
             }
         }
         crate::link::Cmd::ToolsOpen => {

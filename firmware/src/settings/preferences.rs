@@ -41,24 +41,28 @@ pub struct Preferences {
     pub orientation: Orientation,
     pub autosave: bool,
     #[serde(default)]
+    pub autosave_preset: bool,
+    #[serde(default)]
     pub remember_mode: bool,
 }
 
 impl Preferences {
     pub fn new(mode: i32, autosave: bool) -> Result<Self, &'static str> {
-        Self::new_with_remember_mode(mode, autosave, false)
+        Self::new_with_preferences(mode, autosave, false, false)
     }
 
-    pub fn new_with_remember_mode(
+    pub fn new_with_preferences(
         mode: i32,
         autosave: bool,
         remember_mode: bool,
+        autosave_preset: bool,
     ) -> Result<Self, &'static str> {
         Ok(Self {
             format: String::from("nano-controller-preferences"),
             version: 1,
             orientation: Orientation::from_layout(mode)?,
             autosave,
+            autosave_preset,
             remember_mode,
         })
     }
@@ -88,16 +92,19 @@ mod tests {
     fn every_orientation_and_autosave_value_round_trips() {
         for mode in 0..4 {
             for autosave in [false, true] {
-                for remember_mode in [false, true] {
-                    let preferences =
-                        Preferences::new_with_remember_mode(mode, autosave, remember_mode).unwrap();
-                    let json = preferences.encode().unwrap();
-                    assert!(json.len() < MAX_JSON);
-                    let decoded = Preferences::decode(&json).unwrap();
-                    assert_eq!(decoded, preferences);
-                    assert_eq!(i32::from(decoded.orientation.layout()), mode);
-                    assert_eq!(decoded.autosave, autosave);
-                    assert_eq!(decoded.remember_mode, remember_mode);
+                for autosave_preset in [false, true] {
+                    for remember_mode in [false, true] {
+                        let preferences =
+                            Preferences::new_with_preferences(mode, autosave, remember_mode, autosave_preset).unwrap();
+                        let json = preferences.encode().unwrap();
+                        assert!(json.len() < MAX_JSON);
+                        let decoded = Preferences::decode(&json).unwrap();
+                        assert_eq!(decoded, preferences);
+                        assert_eq!(i32::from(decoded.orientation.layout()), mode);
+                        assert_eq!(decoded.autosave, autosave);
+                        assert_eq!(decoded.autosave_preset, autosave_preset);
+                        assert_eq!(decoded.remember_mode, remember_mode);
+                    }
                 }
             }
         }
@@ -113,6 +120,7 @@ mod tests {
             String::from("{}"),
             json.replace("\"autosave\": false", "\"autosave\": \"false\""),
             json.replace("\"remember_mode\": false", "\"remember_mode\": \"false\""),
+            json.replace("\"autosave_preset\": false", "\"autosave_preset\": \"false\""),
             json.replace("\"orientation\": \"landscape\",", ""),
             json.replace("\"autosave\": false", "\"unrecognized\": false"),
             json.replace("\"landscape\"", "\"sideways\""),
@@ -139,5 +147,6 @@ mod tests {
         let decoded = Preferences::decode(&json).unwrap();
         assert!(decoded.autosave);
         assert!(!decoded.remember_mode);
+        assert!(!decoded.autosave_preset);
     }
 }

@@ -108,6 +108,11 @@ mod state {
     pub fn nano_state_cab_settings_snapshot() -> (u8, CabSettings) {
         (0, CabSettings::default())
     }
+    pub fn nano_state_expression_assignments_snapshot()
+        -> (u8, nano_wire::editor::ExpressionAssignments)
+    {
+        (PRESET.load(Ordering::Relaxed), Default::default())
+    }
     pub fn snapshot_generation() -> u32 {
         GENERATION.load(Ordering::Relaxed)
     }
